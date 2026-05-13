@@ -1,0 +1,35 @@
+# Build outputs that we want generated fresh inside the image.
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/.mypy_cache
+backend/build
+backend/dist
+build
+dist
+frontend/dist        # rebuilt in the Dockerfile stage 1
+*.egg-info
+
+# IDE / OS junk
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Local test artefacts
+*.log
+*.png
+*.pdf
+*.fits
+lc_clean.npz
+search.npz
+
+# Bundle outputs that should not ship to the cloud build context.
+tess-vetting-studio
+tess-vetting-studio.exe
+*.spec.bak
+
+# Git metadata
+.git
+.gitignore.bak

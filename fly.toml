@@ -1,0 +1,40 @@
+# Fly.io app config — https://fly.io/docs/reference/configuration/
+# After `fly launch --no-deploy` you can edit this, then `fly deploy`.
+
+app = "tess-vetting-studio"            # change to a unique name when you launch
+primary_region = "sin"                 # Singapore — closest to Manila. Pick yours.
+kill_signal = "SIGINT"
+kill_timeout = "10s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHONUNBUFFERED = "1"
+  ALLOWED_ORIGINS = "*"
+  # Tell uvicorn what port to bind. Fly will route public 80/443 traffic here.
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # auto_stop_machines = "stop" makes the VM hibernate when idle (saves free
+  # allowance hours). "off" keeps it always-on. Pick based on your usage:
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0             # set to 1 to disable cold starts entirely
+
+  # Long-running analyses need a generous timeout.
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    timeout = "5s"
+    path = "/api/health"
+
+# Single small machine: plenty for one or two concurrent users.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

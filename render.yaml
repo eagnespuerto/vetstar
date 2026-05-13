@@ -1,0 +1,19 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Push this repo to GitHub, then in Render: New → Blueprint → connect the
+# repo. Render reads this file and provisions the service automatically.
+
+services:
+  - type: web
+    name: tess-vetting-studio
+    runtime: docker
+    plan: free                      # 512 MB RAM, sleeps after 15 min idle
+    region: oregon                  # change if you prefer
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true                # deploy on every push to the default branch
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: ALLOWED_ORIGINS
+        value: "*"                  # the app serves its own frontend, so this is fine
