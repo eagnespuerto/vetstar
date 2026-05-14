@@ -1,0 +1,90 @@
+name: CI + Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend deps
+        run: pip install -r backend/requirements.txt
+
+      - name: Import-check backend
+        run: |
+          cd backend
+          python -c "
+          from app.main import app
+          from app.pipeline import run_full_vetting
+          from app.parsers import parse_upload
+          from app.report import build_pdf
+          from app.mast_fetch import fetch_spoc_lightcurve, list_available_sectors
+          print('All backend modules import OK')
+          "
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          test -f dist/index.html
+
+  deploy-fly:
+    name: Deploy to Fly.io
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    concurrency: deploy-fly
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy (only if FLY_API_TOKEN is configured)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::notice::FLY_API_TOKEN not set; skipping Fly deploy."
+            echo "To enable: fly tokens create deploy -x 999999h, then add as FLY_API_TOKEN secret."
+            exit 0
+          fi
+          flyctl deploy --remote-only
+
+  deploy-render:
+    name: Trigger Render deploy
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    concurrency: deploy-render
+    steps:
+      - name: Ping Render deploy hook (only if RENDER_DEPLOY_HOOK is configured)
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::notice::RENDER_DEPLOY_HOOK not set; skipping Render deploy."
+            echo "Render auto-deploys via render.yaml anyway; this is only needed if you turned that off."
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK"
+          echo "Render deploy triggered."

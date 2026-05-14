@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+numpy>=1.26
+scipy>=1.13
+astropy>=6.0
+astroquery>=0.4.7
+matplotlib>=3.8
+reportlab>=4.2
+pydantic>=2.0

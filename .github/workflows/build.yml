@@ -1,0 +1,43 @@
+name: Build executables
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:    # manual trigger from the GitHub UI
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: tess-vetting-studio-windows.exe
+            binary: dist/tess-vetting-studio.exe
+          - os: macos-latest
+            artifact: tess-vetting-studio-macos
+            binary: dist/tess-vetting-studio
+          - os: ubuntu-latest
+            artifact: tess-vetting-studio-linux
+            binary: dist/tess-vetting-studio
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build executable
+        run: python build_exe.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
