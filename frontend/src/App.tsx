@@ -6,11 +6,14 @@ import {
   mastReport,
   mastSectors,
   type SectorInfo,
+  type DetectParams,
 } from "./api";
 import type { VettingResult } from "./types";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
 type Mode = "upload" | "mast";
+
+const REPO_URL = "https://github.com/eagnespuerto/vetstar";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("upload");
@@ -19,6 +22,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VettingResult | null>(null);
   const [drag, setDrag] = useState(false);
+
+  // Detection sensitivity (shared across both modes).
+  const [params, setParams] = useState<DetectParams>({ threshold: 0.997, minSnr: 4.0 });
 
   // MAST mode state
   const [ticInput, setTicInput] = useState<string>("");
@@ -44,7 +50,7 @@ export default function App() {
     setStatus("analyzing");
     setError(null);
     try {
-      const r = await analyze(file);
+      const r = await analyze(file, params);
       setResult(r);
       setStatus("done");
     } catch (e: any) {
@@ -56,7 +62,7 @@ export default function App() {
   const runReport = async () => {
     if (!file) return;
     try {
-      const blob = await downloadReport(file);
+      const blob = await downloadReport(file, params);
       triggerDownload(blob, `vetting_TIC${result?.star.tic_id || "report"}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
@@ -94,7 +100,7 @@ export default function App() {
     setError(null);
     setResult(null);
     try {
-      const r = await mastAnalyze(tic, sec);
+      const r = await mastAnalyze(tic, sec, params);
       setResult(r);
       setStatus("done");
     } catch (e: any) {
@@ -108,7 +114,7 @@ export default function App() {
     const sec = parseInt(sectorInput);
     if (!tic || !sec) return;
     try {
-      const blob = await mastReport(tic, sec);
+      const blob = await mastReport(tic, sec, params);
       triggerDownload(blob, `vetting_TIC${tic}_S${String(sec).padStart(3, "0")}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
@@ -118,13 +124,31 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white py-4 px-6 shadow">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold">TESS / Kepler Vetting Studio</h1>
+            <h1 className="text-xl font-bold">Vetstar: TESS Vetting Studio Alpha</h1>
             <p className="text-sm text-slate-300">
               Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector
             </p>
           </div>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 inline-flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-sm font-medium transition"
+            title="View on GitHub, report a bug, or contribute"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+            </svg>
+            Report an Issue or Contribute
+          </a>
         </div>
       </header>
 
@@ -138,6 +162,9 @@ export default function App() {
             Fetch from MAST
           </TabButton>
         </div>
+
+        {/* Detection sensitivity (collapsed by default) */}
+        <SensitivityPanel params={params} setParams={setParams} />
 
         {/* Upload mode */}
         {mode === "upload" && (
@@ -306,6 +333,117 @@ export default function App() {
     </div>
   );
 }
+
+function SensitivityPanel({
+  params,
+  setParams,
+}: {
+  params: DetectParams;
+  setParams: (p: DetectParams) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const isDefault = params.threshold === 0.997 && params.minSnr === 4.0;
+
+  return (
+    <section className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-50 transition"
+      >
+        <span className="font-medium text-slate-700">
+          ⚙️ Detection sensitivity{" "}
+          <span className="text-xs text-slate-500 ml-1">
+            {isDefault ? "(defaults)" : `(threshold=${params.threshold}, SNR=${params.minSnr})`}
+          </span>
+        </span>
+        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="px-4 py-4 border-t border-slate-200 space-y-4 text-sm">
+          <p className="text-xs text-slate-600">
+            Tune how aggressively the pipeline flags dips in the light curve.
+            Defaults work well for typical 2-min cadence stars. Loosen for shallow
+            transits on quiet stars; tighten for noisy targets.
+          </p>
+
+          <div>
+            <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+              <span>
+                Depth threshold:{" "}
+                <span className="font-mono">{params.threshold.toFixed(4)}</span>
+                <span className="text-slate-400 ml-1">
+                  (flag dips deeper than {((1 - params.threshold) * 100).toFixed(2)}%)
+                </span>
+              </span>
+              <button
+                onClick={() => setParams({ ...params, threshold: 0.997 })}
+                className="text-blue-600 hover:underline"
+              >
+                reset
+              </button>
+            </label>
+            <input
+              type="range"
+              min={0.95}
+              max={0.999}
+              step={0.001}
+              value={params.threshold}
+              onChange={(e) =>
+                setParams({ ...params, threshold: parseFloat(e.target.value) })
+              }
+              className="w-full"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+              <span>0.95 (very loose)</span>
+              <span>0.997 default</span>
+              <span>0.999 (very strict)</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+              <span>
+                Minimum SNR:{" "}
+                <span className="font-mono">{params.minSnr.toFixed(1)}σ</span>
+                <span className="text-slate-400 ml-1">
+                  (dips must exceed this × local scatter)
+                </span>
+              </span>
+              <button
+                onClick={() => setParams({ ...params, minSnr: 4.0 })}
+                className="text-blue-600 hover:underline"
+              >
+                reset
+              </button>
+            </label>
+            <input
+              type="range"
+              min={1.0}
+              max={10.0}
+              step={0.5}
+              value={params.minSnr}
+              onChange={(e) =>
+                setParams({ ...params, minSnr: parseFloat(e.target.value) })
+              }
+              className="w-full"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+              <span>1σ (max sensitivity)</span>
+              <span>4σ default</span>
+              <span>10σ (very strict)</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-500 italic">
+            Tip: if real shallow transits are being missed, lower SNR first. If
+            noise spikes are being flagged as events, raise SNR.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 
 function TabButton({
   active,
