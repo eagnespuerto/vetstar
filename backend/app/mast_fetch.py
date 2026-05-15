@@ -105,19 +105,24 @@ def _resolve_tic_to_coords(tic_id: int) -> Optional[Tuple[float, float]]:
 
 
 def _find_observations(tic_id: int, sector: Optional[int]):
-    """Find observations using TIC name."""
     from astroquery.mast import Observations
 
-    obs = Observations.query_criteria(
-        objectname=f"TIC {tic_id}",
-        obs_collection="TESS"
-    )
+    def query():
+        return Observations.query_criteria(
+            objectname=f"TIC {tic_id}",
+            obs_collection="TESS"
+        )
+
+    obs = retry(query, name="MAST query")
 
     if sector is not None:
-        obs = [o for o in obs if int(_row_get(o, "sequence_number", -1)) == int(sector)]
+        obs = [
+            o for o in obs
+            if int(_row_get(o, "sequence_number", -1)) == int(sector)
+        ]
 
     return obs
-
+`` 
 
 # -------------------------------------------------
 # Public API
