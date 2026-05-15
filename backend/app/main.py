@@ -48,24 +48,29 @@ def health():
 # -------------------------------------------------
 
 def run_pipeline_from_data(data):
-    """Handles both object-like and dict-like parser outputs."""
+    """Handles both object-like, dict-like, and uppercase FITS fields."""
 
-    def get(key):
-        if hasattr(data, key):
-            return getattr(data, key)
-        elif isinstance(data, dict):
-            return data[key]
-        else:
-            raise RuntimeError(f"Missing field: {key}")
+    def get(*names):
+        for name in names:
+            # attribute access
+            if hasattr(data, name):
+                return getattr(data, name)
 
+            # dict access
+            if isinstance(data, dict) and name in data:
+                return data[name]
+
+        raise RuntimeError(f"Missing field: {names}")
+
+    # spport lowercase + uppercase keys
     return run_full_vetting(
-        get("time"),
-        get("flux"),
-        get("flux_err"),
-        get("quality"),
-        get("mom_x"),
-        get("mom_y"),
-        get("star"),
+        get("time", "TIME"),
+        get("flux", "FLUX"),
+        get("flux_err", "FLUX_ERR"),
+        get("quality", "QUALITY"),
+        get("mom_x", "MOM_CENTR1", "centroid_col"),
+        get("mom_y", "MOM_CENTR2", "centroid_row"),
+        get("star", "STAR"),
     )
 
 
