@@ -202,6 +202,6 @@ DIST = next((p for p in CANDIDATES if p and p.is_dir()), None)
 
 if DIST:
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
-``
+
 
 
