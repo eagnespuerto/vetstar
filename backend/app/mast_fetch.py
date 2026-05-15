@@ -84,14 +84,16 @@ def _row_get(row, key, default=None):
 
 
 def _resolve_tic_to_coords(tic_id: int) -> Optional[Tuple[float, float]]:
-    """Look up RA/Dec for a TIC ID using MAST TIC catalog."""
     try:
         from astroquery.mast import Catalogs
     except ImportError:
         return None
 
+    def query():
+        return Catalogs.query_criteria(catalog="TIC", ID=int(tic_id))
+
     try:
-        result = Catalogs.query_criteria(catalog="TIC", ID=int(tic_id))
+        result = retry(query, name="TIC lookup")
     except Exception:
         return None
 
@@ -102,8 +104,7 @@ def _resolve_tic_to_coords(tic_id: int) -> Optional[Tuple[float, float]]:
         return float(result["ra"][0]), float(result["dec"][0])
     except Exception:
         return None
-
-
+      
 def _find_observations(tic_id: int, sector: Optional[int]):
     from astroquery.mast import Observations
 
@@ -134,24 +135,21 @@ def fetch_spoc_lightcurve(
     out_dir: Optional[str] = None,
     authors: Optional[List[tuple]] = None,
 ) -> dict:
-    """
-    Fetch a SPOC light curve FITS from MAST.
-    Returns metadata + local file path.
-    """
 
-    try:
-        from astroquery.mast import Observations
-    except ImportError as e:
-        raise RuntimeError("astroquery is required") from e
+    from astroquery.mast import Observations
 
     log.info(f"Fetching TIC {tic_id}, sector {sector}")
 
     obs = _find_observations(tic_id, sector)
 
     if not obs:
-        raise RuntimeError(f"No observations found for TIC {tic_id} sector {sector}")
+        raise RuntimeError(f"No observations found")
 
-    products = Observations.get_product_list(obs)
+    # Retry getting product list
+    def get_products():
+        return Observations.get_product_list(obs)
+
+    products = retry(get_products, name="get_product_list")
 
     products = Observations.filter_products(
         products,
@@ -162,10 +160,15 @@ def fetch_spoc_lightcurve(
     if len(products) == 0:
         raise RuntimeError("No SPOC light curve products found")
 
-    # Download first match
-    manifest = Observations.download_products(products[:1])
+    # Retry download
+    def download():
+        return Observations.download_products(products[:1])
+
+    manifest = retry(download, name="download_products")
 
     file_path = manifest["Local Path"][0]
+
+    log.info(f"Downloaded file: {file_path}")
 
     return {
         "filename": file_path,
@@ -174,6 +177,7 @@ def fetch_spoc_lightcurve(
         "author": _row_get(products[0], "provenance_name"),
         "exptime": _row_get(products[0], "t_exptime"),
     }
+
 
 
 def list_available_sectors(tic_id: int) -> list:
