@@ -51,16 +51,17 @@ def health():
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)):
     try:
-        # ✅ UploadFile works directly
-        data = parse_upload(file.file, filename=file.filename)
+        # UploadFile works directly
+        data = parse_upload(f,def get(x):
+            return getattr(data, x) if hasattr(data, x) else data[x]
         result = run_full_vetting(
-            getattr(d, "time", d["time"]),
-            getattr(d, "flux", d["flux"]),
-            getattr(d, "flux_err", d["flux_err"]),
-            getattr(d, "quality", d["quality"]),
-            getattr(d, "mom_x", d["mom_x"]),
-            getattr(d, "mom_y", d["mom_y"]),
-            getattr(d, "star", d["star"]),
+            get("time"),
+            get("flux"),
+            get("flux_err"),
+            get("quality"),
+            get("mom_x"),
+            get("mom_y"),
+            get("star"),
             )
 
         return result.to_dict()
@@ -72,17 +73,17 @@ async def analyze(file: UploadFile = File(...)):
 @app.post("/api/report")
 async def report(file: UploadFile = File(...)):
     try:
-        data = parse_upload(file.file, filename=file.filename)
+        data = parse_upload(f,def get(x):
+            return getattr(data, x) if hasattr(data, x) else data[x]
         result = run_full_vetting(
-            getattr(d, "time", d["time"]),
-            getattr(d, "flux", d["flux"]),
-            getattr(d, "flux_err", d["flux_err"]),
-            getattr(d, "quality", d["quality"]),
-            getattr(d, "mom_x", d["mom_x"]),
-            getattr(d, "mom_y", d["mom_y"]),
-            getattr(d, "star", d["star"]),
+            get("time"),
+            get("flux"),
+            get("flux_err"),
+            get("quality"),
+            get("mom_x"),
+            get("mom_y"),
+            get("star"),
             )
-
 
         pdf = build_pdf(result)
         fname = f"vetting_{uuid.uuid4().hex[:6]}.pdf"
@@ -126,16 +127,16 @@ async def mast_analyze(query: MastQuery):
 
         # ✅ FIX: parse correctly using file + filename
         with open(file_path, "rb") as f:
-            data = parse_upload(f, filename=file_path)
-
-        result =  run_full_vetting(
-            getattr(d, "time", d["time"]),
-            getattr(d, "flux", d["flux"]),
-            getattr(d, "flux_err", d["flux_err"]),
-            getattr(d, "quality", d["quality"]),
-            getattr(d, "mom_x", d["mom_x"]),
-            getattr(d, "mom_y", d["mom_y"]),
-            getattr(d, "star", d["star"]),
+         data = parse_upload(f,def get(x):
+                return getattr(data, x) if hasattr(data, x) else data[x]
+            result = run_full_vetting(
+            get("time"),
+            get("flux"),
+            get("flux_err"),
+            get("quality"),
+            get("mom_x"),
+            get("mom_y"),
+            get("star"),
             )
 
         out = result.to_dict()
@@ -155,17 +156,17 @@ async def mast_report(query: MastQuery):
         file_path = info["filename"]
 
         with open(file_path, "rb") as f:
-            data = parse_upload(f, filename=file_path)
-
-        result =  run_full_vetting(
-            getattr(d, "time", d["time"]),
-            getattr(d, "flux", d["flux"]),
-            getattr(d, "flux_err", d["flux_err"]),
-            getattr(d, "quality", d["quality"]),
-            getattr(d, "mom_x", d["mom_x"]),
-            getattr(d, "mom_y", d["mom_y"]),
-            getattr(d, "star", d["star"]),
-            )
+            data = parse_upload(f,def get(x):
+                return getattr(data, x) if hasattr(data, x) else data[x]
+            result = run_full_vetting(
+                get("time"),
+                get("flux"),
+                get("flux_err"),
+                get("quality"),
+                get("mom_x"),
+                get("mom_y"),
+                get("star"),
+                )
 
         pdf = build_pdf(result)
 
