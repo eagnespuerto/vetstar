@@ -10,6 +10,7 @@ import random
 from typing import Optional
 
 log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 # -------------------------------------------------
@@ -22,7 +23,7 @@ def retry(func, retries=3, name="operation"):
             return func()
         except Exception as e:
             if attempt == retries:
-                raise RuntimeError(f"{name} failed after {retries} attempts: {e}") from e
+                raise RuntimeError(f"{name} failed after {retries} attempts: {e}")
 
             delay = 1.5 * (2 ** (attempt - 1)) + random.random()
             log.warning(f"{name} failed (attempt {attempt}/{retries}): {e}")
@@ -30,7 +31,7 @@ def retry(func, retries=3, name="operation"):
 
 
 # -------------------------------------------------
-# Safe helpers
+# Helpers
 # -------------------------------------------------
 
 def safe_get(row, key, default=None):
@@ -45,11 +46,9 @@ def safe_get(row, key, default=None):
 # -------------------------------------------------
 
 def find_observations(tic_id: int):
-    """Try multiple strategies to find observations."""
+    from astroquery.mast import Observations, Catalogs
 
-    from astroquery.mast import Observations
-
-    # 1. Try TIC name
+    # ---- Try TIC name ----
     def q1():
         return Observations.query_criteria(
             objectname=f"TIC {tic_id}",
@@ -58,20 +57,36 @@ def find_observations(tic_id: int):
 
     obs = retry(q1, name="query by TIC name")
 
-    # Fallback if empty
-    if len(obs) == 0:
-        log.warning("No results via TIC name, trying generic query")
+    if len(obs) > 0:
+        log.info(f"Found {len(obs)} observations via TIC name")
+        return obs
 
-        def q2():
-            return Observations.query_criteria(obs_collection="TESS")
+    # ---- Fallback: TIC → RA/Dec ----
+    log.warning("TIC name lookup failed, trying coordinates")
 
-        obs = retry(q2, name="fallback query")
+    def q2():
+        return Catalogs.query_criteria(catalog="TIC", ID=int(tic_id))
+
+    cat = retry(q2, name="TIC catalog lookup")
+
+    if len(cat) == 0:
+        raise RuntimeError(f"TIC {tic_id} not found in catalog")
+
+    ra = float(cat["ra"][0])
+    dec = float(cat["dec"][0])
+
+    def q3():
+        return Observations.query_region(f"{ra} {dec}", radius=0.01)
+
+    obs = retry(q3, name="cone search")
+
+    log.info(f"Found {len(obs)} observations via cone search")
 
     return obs
 
 
 # -------------------------------------------------
-# Main fetch
+# Fetch light curve
 # -------------------------------------------------
 
 def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
@@ -82,9 +97,9 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
     obs = find_observations(tic_id)
 
     if len(obs) == 0:
-        raise RuntimeError(f"No observations found for TIC {tic_id}")
+        raise RuntimeError("No observations found")
 
-    # Filter by sector safely
+    # ---- Filter by sector ----
     filtered = []
     for o in obs:
         seq = safe_get(o, "sequence_number")
@@ -94,57 +109,61 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
         except Exception:
             continue
 
+    log.info(f"{len(filtered)} observations match sector {sector}")
+
     if len(filtered) == 0:
         raise RuntimeError(f"No observations found for sector {sector}")
 
-    # Get products
+    # ---- Get products ----
     def get_products():
         return Observations.get_product_list(filtered)
 
-    products = retry(get_products, name="get products")
+    products = retry(get_products, name="get product list")
 
     if len(products) == 0:
         raise RuntimeError("No products returned")
 
-    # Filter light curves
-    products = Observations.filter_products(
+    # ---- Prefer light curves ----
+    lc_products = Observations.filter_products(
         products,
         productSubGroupDescription="LC",
         extension="fits"
     )
 
-    if len(products) == 0:
-        raise RuntimeError("No SPOC light curves found")
+    if len(lc_products) == 0:
+        log.warning("No LC products found — falling back to any FITS")
+        lc_products = Observations.filter_products(products, extension="fits")
 
-    # Download
+    if len(lc_products) == 0:
+        raise RuntimeError("No FITS products available")
+
+    # ---- Download ----
     def download():
-        return Observations.download_products(products[:1])
+        return Observations.download_products(lc_products[:1])
 
     manifest = retry(download, name="download")
 
-    if "Local Path" not in manifest.colnames or len(manifest) == 0:
-        raise RuntimeError("Download failed (no file returned)")
+    if len(manifest) == 0 or "Local Path" not in manifest.colnames:
+        raise RuntimeError("Download failed — empty manifest")
 
     file_path = manifest["Local Path"][0]
 
-    log.info(f"Downloaded: {file_path}")
+    log.info(f"Downloaded file: {file_path}")
 
     return {
         "filename": file_path,
-        "obs_id": str(safe_get(products[0], "obsID")),
-        "matched": len(products),
-        "author": safe_get(products[0], "provenance_name"),
+        "obs_id": str(safe_get(lc_products[0], "obsID")),
+        "matched": len(lc_products),
+        "author": safe_get(lc_products[0], "provenance_name"),
         "sector": sector,
     }
 
 
 # -------------------------------------------------
-# Sector listing
+# List sectors
 # -------------------------------------------------
 
 def list_available_sectors(tic_id: int):
-    from astroquery.mast import Observations
-
     obs = find_observations(tic_id)
 
     if len(obs) == 0:
