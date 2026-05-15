@@ -148,31 +148,64 @@ class MastQuery(BaseModel):
 def _fetch_and_analyze(tic_id: int, sector: int,
                        detect_threshold: float = 0.997,
                        detect_min_snr: float = 4.0):
+    import logging, traceback
+    log = logging.getLogger("vetting")
+
     try:
         info = fetch_spoc_lightcurve(tic_id, sector)
     except RuntimeError as e:
+        # Expected: MAST returned nothing useful. Return clean 502.
         raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        # Unexpected: log the full traceback to stderr (visible in Render
+        # logs) and return a useful error message to the user.
+        tb = traceback.format_exc()
+        log.error("fetch_spoc_lightcurve crashed for TIC %s S%s:\n%s", tic_id, sector, tb)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"MAST fetch crashed for TIC {tic_id} sector {sector}: "
+                f"{type(e).__name__}: {e}. Check Render logs for traceback."
+            ),
+        )
 
     try:
         parsed = parse_upload(info["path"], info["filename"])
     except Exception as e:
+        tb = traceback.format_exc()
+        log.error("parse_upload crashed for %s:\n%s", info.get("filename"), tb)
         raise HTTPException(
             status_code=500,
-            detail=f"Downloaded the FITS but failed to parse it: {e}",
+            detail=(
+                f"Downloaded the FITS ({info.get('filename')}) but failed to "
+                f"parse it: {type(e).__name__}: {e}"
+            ),
         )
 
     th, snr = _detect_params(detect_threshold, detect_min_snr)
-    result = run_full_vetting(
-        t=parsed["t"],
-        flux=parsed["flux"],
-        flux_err=parsed["flux_err"],
-        quality=parsed["quality"],
-        mom_x=parsed["mom_x"],
-        mom_y=parsed["mom_y"],
-        star=parsed["star"],
-        detect_threshold=th,
-        detect_min_snr=snr,
-    )
+    try:
+        result = run_full_vetting(
+            t=parsed["t"],
+            flux=parsed["flux"],
+            flux_err=parsed["flux_err"],
+            quality=parsed["quality"],
+            mom_x=parsed["mom_x"],
+            mom_y=parsed["mom_y"],
+            star=parsed["star"],
+            detect_threshold=th,
+            detect_min_snr=snr,
+        )
+    except Exception as e:
+        tb = traceback.format_exc()
+        log.error("run_full_vetting crashed for TIC %s S%s:\n%s", tic_id, sector, tb)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Vetting pipeline crashed for TIC {tic_id} sector {sector}: "
+                f"{type(e).__name__}: {e}. Try different sensitivity settings "
+                f"or check Render logs."
+            ),
+        )
     return result, info
 
 
@@ -259,4 +292,5 @@ else:
                 "or set FRONTEND_DIST to a built dist directory."
             ),
         }
+
 
