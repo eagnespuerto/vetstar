@@ -45,6 +45,9 @@ CONE_RADIUS_DEG = 30 / 3600.0  # 30 arcsec
 import time
 import random
 
+import time
+import random
+
 def retry(operation, retries=3, base_delay=1.5, jitter=0.5, exceptions=(Exception,), name="operation"):
     """
     Generic retry helper with exponential backoff.
@@ -60,6 +63,16 @@ def retry(operation, retries=3, base_delay=1.5, jitter=0.5, exceptions=(Exceptio
 
         except exceptions as e:
             if attempt == retries:
+                raise RuntimeError(f"{name} failed after {retries} attempts: {e}") from e
+
+            delay = base_delay * (2 ** (attempt - 1))
+            delay += random.uniform(0, jitter)
+
+            log.warning(f"{name} failed (attempt {attempt}/{retries}): {e}")
+            log.info(f"Retrying in {delay:.2f}s...")
+
+            time.sleep(delay)
+``
 
 
 def _row_get(row, key, default=None):
