@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 FastAPI server.
 
@@ -16,7 +18,6 @@ the project root serves the whole app on a single port.
 FastAPI backend for TESS vetting app.
 """
 
-from __future__ import annotations
 
 import os
 import pathlib
