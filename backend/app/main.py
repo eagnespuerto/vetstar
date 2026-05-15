@@ -23,9 +23,9 @@ from .report import build_pdf
 app = FastAPI()
 
 
-# ------------------------------
+# -------------------------------------------------
 # CORS
-# ------------------------------
+# -------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,45 +35,53 @@ app.add_middleware(
 )
 
 
-# ------------------------------
+# -------------------------------------------------
 # Health
-# ------------------------------
+# -------------------------------------------------
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
 
-# ------------------------------
-# Upload
-# ------------------------------
+# -------------------------------------------------
+# Upload endpoints
+# -------------------------------------------------
 
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)):
-    data = parse_upload(file)
-    result = run_full_vetting(data)
-    return result.to_dict()
+    try:
+        data = parse_upload(file)
+        result = run_full_vetting(data)
+        return result.to_dict()
+
+    except Exception as e:
+        raise HTTPException(500, f"Analyze failed: {str(e)}")
 
 
 @app.post("/api/report")
 async def report(file: UploadFile = File(...)):
-    data = parse_upload(file)
-    result = run_full_vetting(data)
+    try:
+        data = parse_upload(file)
+        result = run_full_vetting(data)
 
-    pdf = build_pdf(result)
+        pdf = build_pdf(result)
 
-    fname = f"vetting_{uuid.uuid4().hex[:6]}.pdf"
+        fname = f"vetting_{uuid.uuid4().hex[:6]}.pdf"
 
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    except Exception as e:
+        raise HTTPException(500, f"Report failed: {str(e)}")
 
 
-# ------------------------------
-# MAST
-# ------------------------------
+# -------------------------------------------------
+# MAST endpoints
+# -------------------------------------------------
 
 class MastQuery(BaseModel):
     tic_id: int
@@ -84,47 +92,54 @@ class MastQuery(BaseModel):
 async def mast_sectors(tic_id: int):
     try:
         sectors = list_available_sectors(tic_id)
-    except Exception as e:
-        raise HTTPException(502, str(e))
+        return {"tic_id": tic_id, "sectors": sectors}
 
-    return {"tic_id": tic_id, "sectors": sectors}
+    except Exception as e:
+        raise HTTPException(500, f"MAST sectors failed: {str(e)}")
 
 
 @app.post("/api/mast/analyze")
 async def mast_analyze(query: MastQuery):
-    info = fetch_spoc_lightcurve(query.tic_id, query.sector)
+    try:
+        info = fetch_spoc_lightcurve(query.tic_id, query.sector)
 
-    data = parse_upload(info["filename"])
-    result = run_full_vetting(data)
+        data = parse_upload(info["filename"])
+        result = run_full_vetting(data)
 
-    out = result.to_dict()
-    out["mast"] = info
+        out = result.to_dict()
+        out["mast"] = info
 
-    return out
+        return out
+
+    except Exception as e:
+        raise HTTPException(500, f"MAST analyze failed: {str(e)}")
 
 
 @app.post("/api/mast/report")
 async def mast_report(query: MastQuery):
-    info = fetch_spoc_lightcurve(query.tic_id, query.sector)
+    try:
+        info = fetch_spoc_lightcurve(query.tic_id, query.sector)
 
-    data = parse_upload(info["filename"])
-    result = run_full_vetting(data)
+        data = parse_upload(info["filename"])
+        result = run_full_vetting(data)
 
-    pdf = build_pdf(result)
+        pdf = build_pdf(result)
 
-    fname = f"vetting_TIC{query.tic_id}_S{query.sector}.pdf"
+        fname = f"vetting_TIC{query.tic_id}_S{query.sector}.pdf"
 
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    except Exception as e:
+        raise HTTPException(500, f"MAST report failed: {str(e)}")
 
 
-
-# ------------------------------
-# Static frontend (FULL FIX)
-# ------------------------------
+# -------------------------------------------------
+# Static frontend
+# -------------------------------------------------
 
 HERE = pathlib.Path(__file__).resolve().parent
 DIST = HERE.parent.parent / "frontend" / "dist"
@@ -136,5 +151,5 @@ else:
     def no_frontend():
         return {
             "status": "API running",
-            "message": "Frontend not built. Run: cd frontend && npm install && npm run build"
+            "message": "Frontend not built"
         }
