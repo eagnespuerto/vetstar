@@ -157,9 +157,29 @@ def run_bls(
     }
 
 
-def detect_events(t, f, threshold=0.995, min_pts=10) -> list:
-    """Direct event detection — finds discrete dips regardless of period."""
+def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
+    """Direct event detection — finds discrete dips regardless of period.
+
+    Two filters keep this sensitive to real dips while rejecting noise:
+    - ``threshold``: smoothed flux must drop below this fraction of baseline
+      (0.997 = 0.3% deep). Going lower than ~0.998 starts catching noise.
+    - ``min_snr``: the dip depth must exceed ``min_snr`` × local photometric
+      scatter (MAD-based). For typical 2-min cadence stars, scatter is
+      ~0.001-0.002, so a 4σ filter catches dips ≳0.4-0.8% but rejects
+      single-cadence noise excursions.
+    """
     fs = median_filter(f, size=21)
+    # Local scatter: MAD of the *un*-smoothed flux, but only of points that
+    # are NOT in a dip (so the scatter estimate isn't pulled down by the
+    # event itself). Use a rough first-pass to estimate.
+    rough_mask = fs >= 0.99
+    if rough_mask.sum() > 100:
+        scatter = float(1.4826 * np.nanmedian(np.abs(f[rough_mask] - np.nanmedian(f[rough_mask]))))
+    else:
+        scatter = float(1.4826 * np.nanmedian(np.abs(f - np.nanmedian(f))))
+    if scatter <= 0:
+        scatter = 1e-4   # numerical floor
+
     in_dip = fs < threshold
     events = []
     i = 0
@@ -171,16 +191,21 @@ def detect_events(t, f, threshold=0.995, min_pts=10) -> list:
             end = i
             if end - start >= min_pts:
                 seg_min = float(fs[start:end].min())
-                events.append(
-                    {
-                        "t_start": float(t[start]),
-                        "t_end": float(t[end - 1]),
-                        "duration_d": float(t[end - 1] - t[start]),
-                        "min_flux": seg_min,
-                        "depth": float(1.0 - seg_min),
-                        "n_points": int(end - start),
-                    }
-                )
+                depth = float(1.0 - seg_min)
+                # SNR filter: depth must beat min_snr × scatter.
+                snr = depth / scatter if scatter > 0 else 0.0
+                if snr >= min_snr:
+                    events.append(
+                        {
+                            "t_start": float(t[start]),
+                            "t_end": float(t[end - 1]),
+                            "duration_d": float(t[end - 1] - t[start]),
+                            "min_flux": seg_min,
+                            "depth": depth,
+                            "depth_snr": float(snr),
+                            "n_points": int(end - start),
+                        }
+                    )
         else:
             i += 1
     return events
@@ -472,52 +497,108 @@ def make_verdict(
 # ----------------------------------------------------------------------
 # Plot generation
 # ----------------------------------------------------------------------
-def make_plots(t, f, fe, mom_x, mom_y, event, bls_periodogram, ls_periodogram) -> dict:
-    plots = {}
+def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, ls_periodogram) -> dict:
+    """Generate diagnostic plots.
 
-    # 1. Full LC
+    ``events`` is the full list from detect_events (may be empty). ``primary_event``
+    is the one chosen for centroid/shape analysis (typically the deepest).
+    The full-LC plot shades EVERY event; the zoom plot shows up to 6 events
+    in a grid, with the primary one highlighted.
+    """
+    plots = {}
+    events = events or []
+
+    # 1. Full LC with all events shaded.
     fig, ax = plt.subplots(figsize=(10, 3))
     ax.plot(t, f, "k.", ms=1, alpha=0.4)
-    if event is not None:
-        ax.axvspan(event["t_start"], event["t_end"], color="red", alpha=0.2)
+    # Set y-limits explicitly so we can place labels just inside the top edge.
+    ymin, ymax = float(np.nanpercentile(f, 0.3)), float(np.nanpercentile(f, 99.7))
+    y_pad = 0.05 * (ymax - ymin)
+    ax.set_ylim(ymin - y_pad, ymax + y_pad)
+    label_y = ymax + 0.3 * y_pad  # just below the top
+    for i, ev in enumerate(events):
+        is_primary = primary_event is not None and ev["t_start"] == primary_event["t_start"]
+        ax.axvspan(
+            ev["t_start"], ev["t_end"],
+            color="red" if is_primary else "orange",
+            alpha=0.30 if is_primary else 0.18,
+        )
+        mid = 0.5 * (ev["t_start"] + ev["t_end"])
+        ax.text(
+            mid, label_y,
+            f"#{i+1}",
+            ha="center", va="bottom", fontsize=8,
+            color="darkred" if is_primary else "saddlebrown",
+            fontweight="bold" if is_primary else "normal",
+        )
     ax.set_xlabel("Time (BTJD or similar)")
     ax.set_ylabel("Normalised flux")
-    ax.set_title("Detrended light curve")
+    title = "Detrended light curve"
+    if events:
+        title += f" — {len(events)} dip event{'s' if len(events) != 1 else ''} detected"
+    ax.set_title(title)
     plots["lightcurve"] = _fig_to_b64(fig)
 
-    # 2. Event zoom
-    if event is not None:
-        pad = (event["t_end"] - event["t_start"]) * 1.5
-        m = (t > event["t_start"] - pad) & (t < event["t_end"] + pad)
-        if m.sum() > 10:
-            fig, ax = plt.subplots(figsize=(10, 3.5))
-            ax.errorbar(t[m], f[m], yerr=fe[m], fmt="k.", ms=2, alpha=0.5)
+    # 2. Zoom: grid of up to 6 events. Primary highlighted.
+    if events:
+        n_show = min(len(events), 6)
+        ncols = 1 if n_show == 1 else (2 if n_show <= 4 else 3)
+        nrows = int(np.ceil(n_show / ncols))
+        fig, axes = plt.subplots(
+            nrows, ncols,
+            figsize=(10 if ncols > 1 else 10, 3.0 * nrows),
+            squeeze=False,
+        )
+        # Show DEEPEST events first.
+        shown = sorted(events, key=lambda e: -e["depth"])[:n_show]
+        for idx, ev in enumerate(shown):
+            r, c = divmod(idx, ncols)
+            ax = axes[r][c]
+            pad = (ev["t_end"] - ev["t_start"]) * 1.5
+            m = (t > ev["t_start"] - pad) & (t < ev["t_end"] + pad)
+            if m.sum() <= 10:
+                ax.text(0.5, 0.5, "(too few points)", ha="center", va="center",
+                        transform=ax.transAxes)
+                continue
+            ax.errorbar(t[m], f[m], yerr=fe[m] if fe is not None else None,
+                        fmt="k.", ms=2, alpha=0.5)
             ax.axhline(1.0, color="gray", ls=":", alpha=0.5)
-            ax.axhline(
-                event["min_flux"],
-                color="red",
-                ls=":",
-                alpha=0.6,
-                label=f"min = {(1-event['min_flux'])*100:.2f}% deep",
+            ax.axhline(ev["min_flux"], color="red", ls=":", alpha=0.6)
+            is_primary = primary_event is not None and ev["t_start"] == primary_event["t_start"]
+            border = "red" if is_primary else "gray"
+            for spine in ax.spines.values():
+                spine.set_edgecolor(border)
+                spine.set_linewidth(1.5 if is_primary else 0.8)
+            tag = " (primary)" if is_primary else ""
+            snr_tag = f"  SNR={ev.get('depth_snr', 0):.1f}σ" if ev.get('depth_snr') else ""
+            ax.set_title(
+                f"Event at t≈{0.5*(ev['t_start']+ev['t_end']):.3f}{tag}\n"
+                f"depth={ev['depth']*100:.2f}%, dur={ev['duration_d']*24:.1f}h{snr_tag}",
+                fontsize=9,
             )
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Flux")
-            ax.set_title(f"Event at t ≈ {0.5*(event['t_start']+event['t_end']):.3f}")
-            ax.legend()
-            plots["event_zoom"] = _fig_to_b64(fig)
+            ax.tick_params(labelsize=8)
+        # Hide unused panels.
+        for idx in range(n_show, nrows * ncols):
+            r, c = divmod(idx, ncols)
+            axes[r][c].set_visible(False)
+        fig.supxlabel("Time", fontsize=9)
+        fig.supylabel("Flux", fontsize=9)
+        fig.tight_layout()
+        plots["event_zoom"] = _fig_to_b64(fig)
 
-    # 3. Centroid
-    if event is not None and mom_x is not None and mom_y is not None:
-        pad = (event["t_end"] - event["t_start"]) * 2
-        m = (t > event["t_start"] - pad) & (t < event["t_end"] + pad)
+    # 3. Centroid (anchored on the primary event only — that's where the
+    # blend test is most meaningful)
+    if primary_event is not None and mom_x is not None and mom_y is not None:
+        pad = (primary_event["t_end"] - primary_event["t_start"]) * 2
+        m = (t > primary_event["t_start"] - pad) & (t < primary_event["t_end"] + pad)
         if m.sum() > 20:
             fig, ax = plt.subplots(figsize=(10, 3))
             ax.plot(t[m], mom_x[m] - np.median(mom_x[m]), "b.", ms=2, alpha=0.5, label="col (x)")
             ax.plot(t[m], mom_y[m] - np.median(mom_y[m]), "g.", ms=2, alpha=0.5, label="row (y)")
-            ax.axvspan(event["t_start"], event["t_end"], color="red", alpha=0.15)
+            ax.axvspan(primary_event["t_start"], primary_event["t_end"], color="red", alpha=0.15)
             ax.set_xlabel("Time")
             ax.set_ylabel("Centroid offset (px)")
-            ax.set_title("Centroid behaviour during event")
+            ax.set_title("Centroid behaviour during primary event")
             ax.legend()
             plots["centroid"] = _fig_to_b64(fig)
 
@@ -559,6 +640,8 @@ def run_full_vetting(
     mom_x: Optional[np.ndarray],
     mom_y: Optional[np.ndarray],
     star: StarInfo,
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
 ) -> VettingResult:
     # Clean
     t_c, f_c, fe_c = clean_lightcurve(t, flux, flux_err, quality)
@@ -576,8 +659,13 @@ def run_full_vetting(
     # BLS
     bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
 
-    # Direct event detection
-    events = detect_events(t_c, f_c, threshold=0.995, min_pts=10)
+    # Direct event detection (user-tunable sensitivity).
+    events = detect_events(
+        t_c, f_c,
+        threshold=detect_threshold,
+        min_pts=10,
+        min_snr=detect_min_snr,
+    )
 
     # If exactly one in-sector event, anchor centroid/shape on it.
     primary_event = events[0] if len(events) == 1 else None
@@ -617,6 +705,36 @@ def run_full_vetting(
     )
 
     # Plots
+    plots = make_plots(
+        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event, bls.get("_periodogram"), ls
+    )
+
+    summary = {
+        "n_points": int(len(t_c)),
+        "time_span_d": span,
+        "median_cadence_min": float(np.median(np.diff(t_c)) * 1440),
+        "n_events_detected": len(events),
+        "scatter_mad": float(1.4826 * np.nanmedian(np.abs(f_c - 1))),
+    }
+
+    # Strip heavy _periodogram before returning to user (keep only down-sampled)
+    bls.pop("_periodogram", None)
+
+    return VettingResult(
+        star=star,
+        summary=summary,
+        bls=bls,
+        lomb_scargle=ls,
+        events=events,
+        centroid=centroid,
+        odd_even=odd_even,
+        secondary=secondary,
+        shape=shape,
+        physics=physics,
+        verdict=verdict,
+        plots=plots,
+    )
+
     plots = make_plots(
         t_c, f_c, fe_c, mom_x, mom_y, primary_event, bls.get("_periodogram"), ls
     )
