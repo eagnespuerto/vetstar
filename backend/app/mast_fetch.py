@@ -72,7 +72,6 @@ def retry(operation, retries=3, base_delay=1.5, jitter=0.5, exceptions=(Exceptio
             log.info(f"Retrying in {delay:.2f}s...")
 
             time.sleep(delay)
-``
 
 
 def _row_get(row, key, default=None):
@@ -123,7 +122,7 @@ def _find_observations(tic_id: int, sector: Optional[int]):
         ]
 
     return obs
-`` 
+
 
 # -------------------------------------------------
 # Public API
@@ -211,4 +210,4 @@ def list_available_sectors(tic_id: int) -> list:
         {"sector": s, "providers": sorted(p)}
         for s, p in sorted(by_sector.items())
     ]
-``
+
