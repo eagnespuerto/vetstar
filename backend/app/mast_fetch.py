@@ -1,3 +1,4 @@
+
 """
 MAST fetcher: given TIC + sector, locate and download a TESS light curve
 FITS from the public MAST archive.
@@ -40,6 +41,26 @@ CONE_RADIUS_DEG = 30 / 3600.0  # 30 arcsec
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
+
+import time
+import random
+
+def retry(operation, retries=3, base_delay=1.5, jitter=0.5, exceptions=(Exception,), name="operation"):
+    """
+    Generic retry helper with exponential backoff.
+
+    retries: number of attempts
+    base_delay: starting delay in seconds
+    jitter: random jitter added to delay
+    """
+
+    for attempt in range(1, retries + 1):
+        try:
+            return operation()
+
+        except exceptions as e:
+            if attempt == retries:
+
 
 def _row_get(row, key, default=None):
     """Safely read a field from either an astropy Table row or a dict."""
