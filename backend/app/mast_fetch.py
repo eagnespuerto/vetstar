@@ -88,7 +88,6 @@ def find_observations(tic_id: int):
 # -------------------------------------------------
 # Fetch light curve
 # -------------------------------------------------
-
 def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
     from astroquery.mast import Observations
 
@@ -99,22 +98,22 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
     if len(obs) == 0:
         raise RuntimeError("No observations found")
 
-    # ---- Filter by sector ----
-    filtered = []
-    for o in obs:
-        seq = safe_get(o, "sequence_number")
-        try:
-            if seq is not None and int(seq) == int(sector):
-                filtered.append(o)
-        except Exception:
-            continue
+    # FIXED FILTERING (keeps Astropy table)
+    try:
+        mask = [
+            int(safe_get(o, "sequence_number", -1)) == int(sector)
+            for o in obs
+        ]
+        filtered = obs[mask]
+    except Exception as e:
+        raise RuntimeError(f"Sector filtering failed: {e}")
 
     log.info(f"{len(filtered)} observations match sector {sector}")
 
     if len(filtered) == 0:
         raise RuntimeError(f"No observations found for sector {sector}")
 
-    # ---- Get products ----
+    # Retry-safe product fetch
     def get_products():
         return Observations.get_product_list(filtered)
 
@@ -123,7 +122,7 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
     if len(products) == 0:
         raise RuntimeError("No products returned")
 
-    # ---- Prefer light curves ----
+    # Prefer light curves
     lc_products = Observations.filter_products(
         products,
         productSubGroupDescription="LC",
@@ -137,7 +136,7 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
     if len(lc_products) == 0:
         raise RuntimeError("No FITS products available")
 
-    # ---- Download ----
+    # Download safely
     def download():
         return Observations.download_products(lc_products[:1])
 
@@ -154,11 +153,8 @@ def fetch_spoc_lightcurve(tic_id: int, sector: int) -> dict:
         "filename": file_path,
         "obs_id": str(safe_get(lc_products[0], "obsID")),
         "matched": len(lc_products),
-        "author": safe_get(lc_products[0], "provenance_name"),
         "sector": sector,
     }
-
-
 # -------------------------------------------------
 # List sectors
 # -------------------------------------------------
