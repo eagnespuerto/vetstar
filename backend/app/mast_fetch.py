@@ -24,9 +24,13 @@ Tries multiple data providers in order:
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+import traceback
 from typing import Optional, List, Tuple
+
+log = logging.getLogger(__name__)
 
 
 DEFAULT_AUTHORS = [
@@ -40,6 +44,30 @@ DEFAULT_AUTHORS = [
 # pixel scale is 21"/px; a 30" radius safely catches any product associated
 # with the same star without dragging in neighbours.
 CONE_RADIUS_DEG = 30 / 3600.0   # 30 arcsec
+
+
+def _row_get(row, key, default=None):
+    """Safely read a field from either an astropy Table row or a dict.
+
+    Astropy `Table` rows support `row[key]` but NOT `row.get(key, default)` —
+    a missing key raises `KeyError`. They also return masked values for
+    missing entries, which need extra handling. This helper papers over
+    both behaviours so callers don't crash.
+    """
+    try:
+        v = row[key]
+    except (KeyError, IndexError, ValueError):
+        return default
+    # Astropy masked entries: treat as missing
+    try:
+        import numpy as _np
+        if _np.ma.is_masked(v):
+            return default
+    except Exception:
+        pass
+    if v is None:
+        return default
+    return v
 
 
 def _resolve_tic_to_coords(tic_id: int) -> Optional[Tuple[float, float]]:
@@ -100,29 +128,43 @@ def _find_observations(tic_id: int, sector: Optional[int],
             pass
 
     # Strategy 3: object name (some products are filed under aliases that
-    # MAST's name resolver can find).
+    # MAST's name resolver can find). `query_object` takes radius in
+    # arcseconds with a units suffix, but astroquery is permissive — pass
+    # degrees directly.
     try:
-        r = Observations.query_object(f"TIC {tic_id}", radius=CONE_RADIUS_DEG * 3600 * 0.000277778)
-        # Apply the rest of the filters in Python since query_object doesn't
-        # accept them.
+        r = Observations.query_object(f"TIC {tic_id}", radius=CONE_RADIUS_DEG)
         if len(r) > 0:
             keep = [True] * len(r)
             for i, row in enumerate(r):
-                if str(row.get("obs_collection", "")) != "TESS":
-                    keep[i] = False; continue
-                if sector is not None and int(row.get("sequence_number", -1)) != sector:
-                    keep[i] = False; continue
-                if author is not None and str(row.get("provenance_name", "")) != author:
-                    keep[i] = False; continue
+                if str(_row_get(row, "obs_collection", "")) != "TESS":
+                    keep[i] = False
+                    continue
+                if sector is not None:
+                    sn = _row_get(row, "sequence_number")
+                    try:
+                        if sn is None or int(sn) != sector:
+                            keep[i] = False
+                            continue
+                    except (TypeError, ValueError):
+                        keep[i] = False
+                        continue
+                if author is not None and str(_row_get(row, "provenance_name", "")) != author:
+                    keep[i] = False
+                    continue
                 if exptime is not None:
-                    et = row.get("t_exptime", 0)
+                    et = _row_get(row, "t_exptime", 0)
+                    try:
+                        et = float(et) if et is not None else 0.0
+                    except (TypeError, ValueError):
+                        et = 0.0
                     if et and (et < exptime - 1 or et > exptime + 1):
-                        keep[i] = False; continue
+                        keep[i] = False
+                        continue
             r = r[keep]
             if len(r) > 0:
                 return r, "query_object resolver"
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("query_object strategy failed: %s", e)
 
     return None, None
 
@@ -165,8 +207,8 @@ def fetch_spoc_lightcurve(
         result, via = _find_observations(tic_id, sector, None, None)
         if result is not None and len(result) > 0:
             obs = result
-            chosen_author = str(result[0].get("provenance_name", "unknown"))
-            chosen_exptime = float(result[0].get("t_exptime", 0) or 0)
+            chosen_author = str(_row_get(result[0], "provenance_name", "unknown"))
+            chosen_exptime = float(_row_get(result[0], "t_exptime", 0) or 0)
             matched_via = via
             tried.append(f"any provenance in sector {sector} [matched {chosen_author} via {via}]")
 
@@ -237,9 +279,9 @@ def fetch_spoc_lightcurve(
     if out_dir is None:
         out_dir = tempfile.mkdtemp(prefix="mast_")
     manifest = Observations.download_products(products, download_dir=out_dir, mrp_only=False)
-    ok = [row for row in manifest if str(row.get("Status", "")).upper() == "COMPLETE"]
+    ok = [row for row in manifest if str(_row_get(row, "Status", "")).upper() == "COMPLETE"]
     if not ok:
-        msgs = "; ".join(str(row.get("Message", "")) for row in manifest)
+        msgs = "; ".join(str(_row_get(row, "Message", "")) for row in manifest)
         raise RuntimeError(f"MAST download did not complete cleanly. {msgs}")
 
     local_path = str(ok[0]["Local Path"])
@@ -247,7 +289,7 @@ def fetch_spoc_lightcurve(
     return {
         "path": local_path,
         "filename": os.path.basename(local_path),
-        "obs_id": str(obs[0].get("obs_id", "")),
+        "obs_id": str(_row_get(obs[0], "obs_id", "")),
         "author": chosen_author,
         "exptime": float(chosen_exptime or 0),
         "matched": int(len(obs)),
@@ -270,11 +312,14 @@ def list_available_sectors(tic_id: int) -> list:
         return []
     by_sector: dict = {}
     for row in rows:
-        s = row.get("sequence_number")
+        s = _row_get(row, "sequence_number")
         if s is None:
             continue
-        s = int(s)
-        prov = str(row.get("provenance_name", "unknown"))
+        try:
+            s = int(s)
+        except (TypeError, ValueError):
+            continue
+        prov = str(_row_get(row, "provenance_name", "unknown"))
         by_sector.setdefault(s, set()).add(prov)
     return [
         {"sector": s, "providers": sorted(p)}
