@@ -52,7 +52,8 @@ def health():
     return {"status": "ok"}
 
 
-def _process_upload(file: UploadFile):
+def _process_upload(file: UploadFile, detect_threshold: float = 0.997,
+                    detect_min_snr: float = 4.0):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -88,19 +89,43 @@ def _process_upload(file: UploadFile):
         mom_x=parsed["mom_x"],
         mom_y=parsed["mom_y"],
         star=parsed["star"],
+        detect_threshold=detect_threshold,
+        detect_min_snr=detect_min_snr,
     )
     return result
 
 
+# Sensitivity params shared by all analyze endpoints. As query params so
+# they work cleanly with multipart uploads.
+def _detect_params(
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
+):
+    # Clamp to safe ranges so the UI can't pass nonsense.
+    detect_threshold = max(0.95, min(0.999, float(detect_threshold)))
+    detect_min_snr = max(1.0, min(20.0, float(detect_min_snr)))
+    return detect_threshold, detect_min_snr
+
+
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...)):
-    result = _process_upload(file)
+async def analyze(
+    file: UploadFile = File(...),
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
+):
+    th, snr = _detect_params(detect_threshold, detect_min_snr)
+    result = _process_upload(file, th, snr)
     return result.to_dict()
 
 
 @app.post("/api/report")
-async def report(file: UploadFile = File(...)):
-    result = _process_upload(file)
+async def report(
+    file: UploadFile = File(...),
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
+):
+    th, snr = _detect_params(detect_threshold, detect_min_snr)
+    result = _process_upload(file, th, snr)
     pdf_bytes = build_pdf(result)
     fname = f"vetting_TIC{result.star.tic_id or uuid.uuid4().hex[:8]}.pdf"
     return Response(
@@ -116,9 +141,13 @@ async def report(file: UploadFile = File(...)):
 class MastQuery(BaseModel):
     tic_id: int
     sector: int
+    detect_threshold: float = 0.997
+    detect_min_snr: float = 4.0
 
 
-def _fetch_and_analyze(tic_id: int, sector: int):
+def _fetch_and_analyze(tic_id: int, sector: int,
+                       detect_threshold: float = 0.997,
+                       detect_min_snr: float = 4.0):
     try:
         info = fetch_spoc_lightcurve(tic_id, sector)
     except RuntimeError as e:
@@ -132,6 +161,7 @@ def _fetch_and_analyze(tic_id: int, sector: int):
             detail=f"Downloaded the FITS but failed to parse it: {e}",
         )
 
+    th, snr = _detect_params(detect_threshold, detect_min_snr)
     result = run_full_vetting(
         t=parsed["t"],
         flux=parsed["flux"],
@@ -140,6 +170,8 @@ def _fetch_and_analyze(tic_id: int, sector: int):
         mom_x=parsed["mom_x"],
         mom_y=parsed["mom_y"],
         star=parsed["star"],
+        detect_threshold=th,
+        detect_min_snr=snr,
     )
     return result, info
 
@@ -157,7 +189,10 @@ async def mast_sectors(tic_id: int):
 @app.post("/api/mast/analyze")
 async def mast_analyze(query: MastQuery):
     """Fetch SPOC light curve from MAST by TIC + sector, then run vetting."""
-    result, info = _fetch_and_analyze(query.tic_id, query.sector)
+    result, info = _fetch_and_analyze(
+        query.tic_id, query.sector,
+        query.detect_threshold, query.detect_min_snr,
+    )
     out = result.to_dict()
     out["mast"] = {
         "filename": info["filename"],
@@ -174,7 +209,10 @@ async def mast_analyze(query: MastQuery):
 @app.post("/api/mast/report")
 async def mast_report(query: MastQuery):
     """Fetch from MAST + analyze + return PDF."""
-    result, info = _fetch_and_analyze(query.tic_id, query.sector)
+    result, info = _fetch_and_analyze(
+        query.tic_id, query.sector,
+        query.detect_threshold, query.detect_min_snr,
+    )
     pdf_bytes = build_pdf(result)
     fname = f"vetting_TIC{query.tic_id}_S{query.sector:03d}.pdf"
     return Response(
@@ -221,3 +259,4 @@ else:
                 "or set FRONTEND_DIST to a built dist directory."
             ),
         }
+
