@@ -1,41 +1,21 @@
-# TESS / Kepler Vetting Studio
+# Vetstar: TESS Vetting Studio Alpha
 
-Self-hostable web app for full transit / eclipse vetting of TESS or Kepler
-light curves. Upload a SPOC FITS file (or pull one from MAST by TIC + sector)
-and receive a complete vetting report with PDF export.
+A web app for full transit / eclipse vetting of TESS or Kepler light curves.
+Upload a SPOC FITS file (or pull one from MAST by TIC + sector) and receive
+a complete vetting report with PDF export — no install required.
 
-## Run it (one command)
+## Use it now
 
-```bash
-python app.py
-```
+**Live at <https://vetstar.onrender.com>**
 
-That's it. The launcher:
-
-1. Installs backend Python deps if missing (`fastapi`, `astropy`, `astroquery`, etc).
-2. Builds the React frontend bundle into `frontend/dist/` if it's missing.
-3. Starts a single Uvicorn process on `http://127.0.0.1:8000` that serves
-   **both** the web UI and the API on the same port.
-
-Requirements: **Python ≥ 3.10** and **Node.js ≥ 18** (only needed the first
-time, to build the frontend). After the first run, the bundle is cached.
-
-Flags:
-
-```bash
-python app.py --port 9000          # custom port
-python app.py --host 0.0.0.0       # listen on all interfaces
-python app.py --reload             # auto-reload on backend changes (dev)
-python app.py --skip-build         # don't rebuild the frontend
-python app.py --api-only           # don't try to serve the SPA
-```
-
-Open <http://localhost:8000> in a browser.
+Open the link in any modern browser. The first visit after the service has
+been idle may take ~30 seconds to wake up (free-tier cold start); after
+that, it runs normally.
 
 ## What it does
 
 - **Period searches** — Box Least Squares (BLS) + Lomb-Scargle
-- **Discrete dip event detection** (handles single-transit cases)
+- **Discrete dip event detection** with adjustable sensitivity (see below)
 - **Centroid offset test** — distinguishes on-target events from background blends
 - **Odd / even transit depth comparison** — eclipsing-binary indicator
 - **Secondary eclipse search** at phase 0.5
@@ -44,27 +24,64 @@ Open <http://localhost:8000> in a browser.
 - **Automated verdict**: planet candidate / EB candidate / blend / ambiguous
 - **PDF report** for archiving (centered layout, multi-page)
 
-Two input modes:
+## How to use the app
 
-- **Upload** a `.fits`, `.fits.gz`, `.json`, or `.customization` file
-- **Fetch from MAST** — enter a TIC ID and sector; the backend pulls the
-  matching SPOC light curve via `astroquery.mast.Observations` and analyses
-  it. Click "List sectors" to see all SPOC sectors available for a TIC.
+### Step 1 — choose how to load a light curve
 
-## API endpoints
+The page has two tabs near the top:
 
-```
-POST /api/analyze              multipart file=@lc.fits          → JSON
-POST /api/report               multipart file=@lc.fits          → PDF
-GET  /api/mast/sectors/{tic}                                    → [100, 101, ...]
-POST /api/mast/analyze         {"tic_id": ..., "sector": ...}   → JSON
-POST /api/mast/report          {"tic_id": ..., "sector": ...}   → PDF
-GET  /api/health                                                → {"status":"ok"}
-GET  /docs                                                      → Swagger UI
-```
+- **Upload file** — drag and drop, or pick a file. Accepts `.fits`,
+  `.fits.gz`, `.json`, or `.customization`.
+- **Fetch from MAST** — type a TIC ID and sector. Click "List sectors" first
+  to see which TESS sectors have data for that TIC; click a sector chip to
+  fill it in.
 
-The JSON response matches the `VettingResult` shape in
-`backend/app/pipeline.py` and includes base64-encoded PNG diagnostic plots.
+### Step 2 — optional: adjust detection sensitivity
+
+Below the tabs there's a collapsed panel labeled **⚙️ Detection
+sensitivity**. Click it to expand. Two sliders:
+
+- **Depth threshold** (default `0.997`, range `0.95`–`0.999`) — controls
+  how shallow a dip must be to count as an event. The label updates in real
+  time to show the equivalent percent depth ("flag dips deeper than 0.30%").
+  Lower it to catch shallower transits; raise it to be stricter.
+- **Minimum SNR** (default `4σ`, range `1σ`–`10σ`) — dip depth must exceed
+  this multiple of the local photometric scatter. Lower SNR for maximum
+  sensitivity at the cost of some noise events; raise SNR if you're seeing
+  false-positive wiggles.
+
+The defaults work well for typical 2-min cadence TESS data. Each slider has
+a small **reset** link to snap back to default. The panel header shows
+either `(defaults)` or the current values so you can tell at a glance.
+
+**Rule of thumb:**
+
+- Missing a real shallow transit you can see by eye? → lower SNR (try 2–3σ)
+- Lots of fake "events" flagged on a noisy star? → raise SNR (try 5–6σ)
+- Need to flag a dip ≲0.2% deep? → push threshold up to 0.998 *and* lower
+  SNR — the two filters work together
+
+### Step 3 — run vetting
+
+Click **Run vetting** (Upload tab) or **Fetch & vet** (MAST tab). Analysis
+takes 10–30 seconds for a typical 2-min cadence sector. You'll see:
+
+- A **verdict banner** with category (planet candidate / EB candidate /
+  blend / ambiguous) and confidence
+- **Stellar parameters** and a **light curve summary**
+- **Diagnostic plots**: full detrended light curve with all detected events
+  shaded (primary in red, others in orange), zoom panels for each event
+  with depth/duration/SNR, centroid behavior, BLS and Lomb-Scargle
+  periodograms
+- **Test tables**: BLS, Lomb-Scargle, centroid, odd/even, secondary
+  eclipse, shape, physical interpretation
+- **Event table** listing every dip with its timing and depth
+
+### Step 4 — optional: download PDF
+
+Click **Download PDF report** (or **Fetch & download PDF** in MAST mode).
+You get a centered multi-page PDF with verdict, all the tables, and the
+diagnostic plots. Useful for archiving and sharing.
 
 ## Verdict logic
 
@@ -74,12 +91,102 @@ The JSON response matches the `VettingResult` shape in
 4. Otherwise, if a planet-sized companion is implied → **planet candidate**.
 5. Else → **ambiguous** or **no signal** based on BLS SDE.
 
-Any candidate should still go through manual review and ground-based follow-up.
+Any candidate should still go through manual review and ground-based
+follow-up.
 
-## Project layout
+## MAST fallback behavior
+
+The MAST fetch tab tries data providers in this order until one returns a
+light curve:
+
+1. **SPOC 2-min** (best — includes quality flags, centroid columns, CROWDSAP)
+2. **SPOC 20-s**
+3. **TESS-SPOC FFI** (10-min from full-frame images; near-complete coverage)
+4. **QLP** (Quick Look Pipeline FFI light curves)
+
+When the app has to fall back past SPOC 2-min, the results page shows an
+amber banner telling you which provider/cadence was used. FFI products
+don't include centroid columns, so the centroid test will report
+`available=false` for those — that's expected, not a bug.
+
+## Report bugs or contribute
+
+Click **Report an Issue or Contribute** in the page header, or go directly
+to <https://github.com/eagnespuerto/vetstar>. If reporting a bug, please
+include:
+
+- The TIC and sector you were analyzing (or attach the FITS file if it's
+  one you uploaded)
+- The exact error message
+- Whether you'd adjusted the sensitivity sliders
+
+## Limitations and disclaimers
+
+- This is an **alpha** release. The pipeline is meaningfully useful but is
+  not a substitute for full vetting tools like DAVE, VESPA, or the
+  TESS-SPOC Data Validation Report.
+- Always cross-check candidates with **ExoFOP**, **Gaia DR3** (especially
+  RUWE for binarity), and **high-resolution imaging** before drawing strong
+  conclusions or publishing.
+- Free-tier hosting (Render) sleeps after ~15 min idle and takes ~30 s to
+  cold-start the next visit. Analysis itself is fast once the service is
+  warm.
+
+---
+
+## Developer info
+
+The rest of this document is for people who want to run, modify, or
+self-host Vetstar.
+
+### Run locally (one command)
+
+```bash
+python app.py
+```
+
+The launcher installs backend Python deps if missing, builds the React
+frontend if `frontend/dist/` is missing, and starts a single Uvicorn
+process on `http://127.0.0.1:8000` serving both the API and the SPA on the
+same port.
+
+Requirements: Python ≥ 3.10 and Node.js ≥ 18 (only needed the first time,
+to build the frontend; the bundle is cached afterward).
+
+Flags:
+
+```bash
+python app.py --port 9000          # custom port
+python app.py --host 0.0.0.0       # listen on all interfaces
+python app.py --reload             # auto-reload on backend changes
+python app.py --skip-build         # don't rebuild the frontend
+python app.py --api-only           # don't try to serve the SPA
+```
+
+### API endpoints
 
 ```
-vetting-app/
+POST /api/analyze              multipart file=@lc.fits          → JSON
+POST /api/report               multipart file=@lc.fits          → PDF
+GET  /api/mast/sectors/{tic}                                    → list
+POST /api/mast/analyze         {"tic_id": ..., "sector": ...}   → JSON
+POST /api/mast/report          {"tic_id": ..., "sector": ...}   → PDF
+GET  /api/health                                                → {"status":"ok"}
+GET  /docs                                                      → Swagger UI
+```
+
+All `analyze` and `report` endpoints accept optional query / body params
+`detect_threshold` (0.95–0.999) and `detect_min_snr` (1.0–20.0). For
+MAST endpoints, put them in the JSON body. For upload endpoints, use
+URL query params.
+
+The JSON response matches the `VettingResult` shape in
+`backend/app/pipeline.py` and includes base64-encoded PNG diagnostic plots.
+
+### Project layout
+
+```
+vetstar/
 ├── app.py                  ← single-command launcher
 ├── backend/
 │   ├── app/
@@ -92,161 +199,56 @@ vetting-app/
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx         Upload + MAST tabs, results dashboard
-│   │   ├── api.ts
-│   │   └── types.ts
+│   │   ├── api.ts          API client
+│   │   └── types.ts        Shared types
+│   ├── index.html
 │   └── package.json
-├── Dockerfile.backend      ← optional, for two-container deployments
-├── Dockerfile.frontend
-└── docker-compose.yml
+├── Dockerfile              Multi-stage build (frontend + backend)
+├── render.yaml             Render Blueprint
+├── fly.toml                Fly.io app config
+├── docker-compose.yml      Local Docker dev
+└── README.md               This file
 ```
 
-## Optional: Docker
+### Deploy your own copy
 
-If you prefer Docker:
+The current live deployment runs on Render. To deploy your own fork:
 
-```bash
-docker compose up --build
-# → frontend on http://localhost:8080, API on http://localhost:8000
-```
+**Render** — push to GitHub, sign up at <https://render.com>, **New** →
+**Blueprint** → connect your repo. Render reads `render.yaml` and
+provisions automatically. Free tier sleeps after 15 min idle.
 
-But the `python app.py` single-process path is simpler and runs everything on
-one port.
+**Fly.io** — `fly auth login` then `fly launch --no-deploy --copy-config`
+then `fly deploy`. The included `fly.toml` provisions a single
+shared-cpu-1x machine with 1 GB RAM (within the free allowance). No idle
+sleep on Fly's free tier, but requires a credit card on file.
 
-## License & disclaimer
+Either way, every push to `main` triggers an automatic redeploy (Render
+via `autoDeploy: true` in `render.yaml`; Fly via the GitHub Actions
+workflow at `.github/workflows/ci-deploy.yml` if you set the
+`FLY_API_TOKEN` repo secret).
 
-Educational / research use. Not a substitute for full vetting pipelines like
-DAVE, VESPA, or the TESS-SPOC Data Validation Report. Always cross-check with
-ExoFOP, Gaia DR3 (RUWE), and high-resolution imaging before publishing a
-candidate.
-
-## Build a standalone executable (.exe / .app / ELF)
-
-PyInstaller bundles Python + all deps + the web UI into one self-contained
-binary. The user double-clicks it and a browser tab opens to the app — no
-Python install needed.
+### Build a standalone executable
 
 ```bash
 python build_exe.py
 ```
 
-That produces:
+PyInstaller bundles Python + all deps + the web UI into one binary
+(`dist/tess-vetting-studio.exe` on Windows, `dist/tess-vetting-studio` on
+macOS/Linux, ~180–230 MB). The binary auto-opens a browser to
+`http://127.0.0.1:8000` on launch. PyInstaller does not cross-compile —
+to build a Windows `.exe` you must run on Windows.
 
-- `dist/tess-vetting-studio.exe`  on Windows  (~180–230 MB)
-- `dist/tess-vetting-studio`      on macOS    (Mach-O)
-- `dist/tess-vetting-studio`      on Linux    (ELF)
-
-**PyInstaller does not cross-compile.** To produce a Windows `.exe` you must
-run `python build_exe.py` on a Windows machine (or a Windows VM, or a GitHub
-Actions `windows-latest` runner). Likewise for macOS.
-
-The binary auto-opens a browser to `http://127.0.0.1:8000` on launch. Press
-Ctrl-C in the console window to quit, or close the console window. Flags:
-
-```
-tess-vetting-studio --port 9000     # custom port
-tess-vetting-studio --no-browser    # don't auto-open the browser
-```
-
-
-## Deploy to the cloud (no local install needed for users)
-
-The simplest way to give people a "click-the-link, no install" experience
-is to deploy this app to a free cloud host. A `render.yaml` is included for
-[Render](https://render.com).
-
-### One-time setup
-
-1. Push this repo to GitHub.
-2. Sign up at <https://render.com> (free tier, no credit card).
-3. In Render: **New** → **Blueprint** → connect your GitHub repo.
-   Render detects `render.yaml` and provisions the service automatically.
-4. Wait ~5 minutes for the first build (Docker image: frontend bundle +
-   Python deps). You get a permanent URL like
-   `https://tess-vetting-studio.onrender.com`.
-
-That's it. Share the URL with anyone — they open it in a browser, get the
-GUI, upload a FITS file or query MAST, get results and a PDF. Nothing to
-install.
-
-### Auto-deploy on git push
-
-`render.yaml` sets `autoDeploy: true`, so every push to `main` triggers a
-fresh deploy automatically. The GitHub Actions workflow at
-`.github/workflows/ci-deploy.yml` additionally:
-
-- Runs a fast smoke-test (imports the backend, builds the frontend) on every
-  push and PR.
-- Pings a Render deploy hook on push to `main` (optional — Render's own
-  autoDeploy covers this; the hook is useful if you ever turn autoDeploy off
-  or want CI to gate deploys).
-
-To enable the optional deploy hook:
-
-1. In Render, open the service → **Settings** → **Deploy Hook** → copy the URL.
-2. In GitHub, repo **Settings** → **Secrets and variables** → **Actions** →
-   **New repository secret**, name `RENDER_DEPLOY_HOOK`, paste the URL.
-
-### Free-tier caveats
-
-Render's free plan sleeps the service after ~15 minutes of inactivity. The
-next visit takes ~30 seconds to wake up (the app then runs normally).
-For zero cold starts, upgrade to the $7/month Starter plan or keep-alive
-the service with an external ping.
-
-### Other platforms
-
-The `Dockerfile` is portable — it works on:
-
-- **Railway** — `New Project` → `Deploy from GitHub` → it auto-detects the
-  Dockerfile.
-- **Fly.io** — `fly launch` from the repo root; it reads the Dockerfile.
-- **Google Cloud Run** — `gcloud run deploy --source .`
-- **AWS App Runner / Azure Container Apps** — point them at the repo.
-
-
-### Or deploy to Fly.io instead
-
-Fly.io is a strong alternative — its free allowance includes always-on
-machines, so there's no 15-min sleep + 30-sec cold-start like Render's
-free tier. It also gives you 1 GB RAM (vs Render free's 512 MB), which
-matters for big multi-sector FITS analyses.
-
-The repo includes `fly.toml` already configured.
+### Optional: Docker
 
 ```bash
-# One-time setup
-brew install flyctl                          # or: curl -L https://fly.io/install.sh | sh
-fly auth login
-fly launch --no-deploy --copy-config         # picks up fly.toml; choose a unique app name
-fly deploy
+docker compose up --build
+# → http://localhost:8080
 ```
 
-After this, your app is live at `https://<your-app-name>.fly.dev`.
+### License
 
-**For auto-deploy on git push:**
+CC0-1.0. See `LICENSE`.
 
-1. Generate a long-lived token: `fly tokens create deploy -x 999999h`
-2. In GitHub, repo Settings → Secrets and variables → Actions → New secret,
-   name it `FLY_API_TOKEN`, paste the token.
-3. Every push to `main` deploys automatically (the existing
-   `.github/workflows/ci-deploy.yml` handles it).
-
-**Free-tier requirements:** Fly requires a credit card on file (no charges
-within the free allowance). The free tier comfortably covers one always-on
-`shared-cpu-1x` machine with 1 GB RAM.
-
-### Fly vs Render: which to pick?
-
-| Concern | Render free | Fly free |
-|---|---|---|
-| Idle sleep + cold start | Yes, ~30 s | Optional |
-| RAM | 512 MB | 1 GB |
-| Credit card required | No | Yes (no charges) |
-| Setup complexity | Click in browser | `flyctl` CLI, one time |
-| Regions | Limited | Many (including Asia) |
-| Auto-deploy on push | Native (`render.yaml`) | Via GitHub Actions |
-
-For this app, **Fly** is the better default if you can tolerate the credit
-card requirement — bigger RAM, no cold starts, closer regions. **Render**
-is simpler if you want browser-only setup.
 
