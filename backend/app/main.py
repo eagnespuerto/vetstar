@@ -1,5 +1,5 @@
 """
-FastAPI backend.
+FastAPI backend for TESS vetting app.
 """
 
 from __future__ import annotations
@@ -51,7 +51,8 @@ def health():
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)):
     try:
-        data = parse_upload(file)
+        # ✅ UploadFile works directly
+        data = parse_upload(file.file, filename=file.filename)
         result = run_full_vetting(data)
         return result.to_dict()
 
@@ -62,11 +63,10 @@ async def analyze(file: UploadFile = File(...)):
 @app.post("/api/report")
 async def report(file: UploadFile = File(...)):
     try:
-        data = parse_upload(file)
+        data = parse_upload(file.file, filename=file.filename)
         result = run_full_vetting(data)
 
         pdf = build_pdf(result)
-
         fname = f"vetting_{uuid.uuid4().hex[:6]}.pdf"
 
         return Response(
@@ -101,9 +101,15 @@ async def mast_sectors(tic_id: int):
 @app.post("/api/mast/analyze")
 async def mast_analyze(query: MastQuery):
     try:
+        # ✅ Fetch FITS from MAST
         info = fetch_spoc_lightcurve(query.tic_id, query.sector)
 
-        data = parse_upload(info["filename"])
+        file_path = info["filename"]
+
+        # ✅ FIX: parse correctly using file + filename
+        with open(file_path, "rb") as f:
+            data = parse_upload(f, filename=file_path)
+
         result = run_full_vetting(data)
 
         out = result.to_dict()
@@ -120,7 +126,11 @@ async def mast_report(query: MastQuery):
     try:
         info = fetch_spoc_lightcurve(query.tic_id, query.sector)
 
-        data = parse_upload(info["filename"])
+        file_path = info["filename"]
+
+        with open(file_path, "rb") as f:
+            data = parse_upload(f, filename=file_path)
+
         result = run_full_vetting(data)
 
         pdf = build_pdf(result)
@@ -146,10 +156,11 @@ DIST = HERE.parent.parent / "frontend" / "dist"
 
 if DIST.exists():
     app.mount("/", StaticFiles(directory=str(DIST), html=True), name="frontend")
+
 else:
     @app.get("/")
     def no_frontend():
         return {
             "status": "API running",
-            "message": "Frontend not built"
+            "message": "Frontend not built. Run: cd frontend && npm run build"
         }
