@@ -121,15 +121,20 @@ async def mast_report(query: MastQuery):
     )
 
 
+
 # ------------------------------
-# Static frontend
+# Static frontend (FULL FIX)
 # ------------------------------
 
 HERE = pathlib.Path(__file__).resolve().parent
-
 DIST = HERE.parent.parent / "frontend" / "dist"
 
 if DIST.exists():
-    app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
-
-
+    app.mount("/", StaticFiles(directory=str(DIST), html=True), name="frontend")
+else:
+    @app.get("/")
+    def no_frontend():
+        return {
+            "status": "API running",
+            "message": "Frontend not built. Run: cd frontend && npm install && npm run build"
+        }
