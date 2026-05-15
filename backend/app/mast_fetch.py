@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 MAST fetcher: given TIC + sector, locate and download a TESS light curve
@@ -27,8 +28,6 @@ Tries multiple data providers in order:
 MAST fetcher: given TIC + sector, locate and download a TESS light curve
 FITS from the public MAST archive.
 """
-
-from __future__ import annotations
 
 import logging
 from typing import Optional, List, Tuple
