@@ -230,7 +230,23 @@ def fetch_spoc_lightcurve(
     def get_products():
         return Observations.get_product_list(chosen)
 
-    products = retry(get_products, name="get product list")
+    try:
+        products = retry(get_products, name="get product list")
+    except RuntimeError as e:
+        # MAST raises when the observation record exists but no products
+        # are attached yet — very common for recent sectors where the
+        # pipeline hasn't finished processing.
+        err_str = str(e).lower()
+        if "empty" in err_str or "no associated" in err_str:
+            raise RuntimeError(
+                f"MAST found {len(chosen)} observation record(s) for TIC {tic_id} "
+                f"in sector {sector}, but no downloadable data products are attached yet. "
+                f"This usually means the sector was observed recently and the SPOC/QLP "
+                f"pipeline hasn't finished processing this target's light curve. "
+                f"TESS data typically become available 1–2 months after the sector ends. "
+                f"Try again in a few weeks, or try an earlier sector."
+            )
+        raise  # re-raise for other unexpected errors
     if len(products) == 0:
         raise RuntimeError(
             f"No products returned for {chosen_author}/{chosen_exptime}s. Tried: {tried}"
@@ -299,4 +315,3 @@ def list_available_sectors(tic_id: int) -> list:
         {"sector": s, "providers": sorted(p)}
         for s, p in sorted(by_sector.items())
     ]
-
