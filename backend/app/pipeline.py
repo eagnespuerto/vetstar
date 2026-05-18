@@ -160,27 +160,45 @@ def run_bls(
 def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
     """Direct event detection — finds discrete dips regardless of period.
 
-    Two filters keep this sensitive to real dips while rejecting noise:
-    - ``threshold``: smoothed flux must drop below this fraction of baseline
-      (0.997 = 0.3% deep). Going lower than ~0.998 starts catching noise.
-    - ``min_snr``: the dip depth must exceed ``min_snr`` × local photometric
-      scatter (MAD-based). For typical 2-min cadence stars, scatter is
-      ~0.001-0.002, so a 4σ filter catches dips ≳0.4-0.8% but rejects
-      single-cadence noise excursions.
+    Uses a two-pass approach:
+      Pass 1 — measure the star's photometric scatter from out-of-dip data.
+      Pass 2 — flag contiguous stretches where smoothed flux drops below
+               **the greater of** the user's absolute threshold AND an
+               adaptive threshold = baseline − min_snr × scatter.
+
+    The adaptive threshold is the key change: for a quiet star with
+    scatter = 0.0002, a 3σ dip is only 0.06% deep — well above the old
+    fixed 0.997 threshold. The adaptive approach catches it. For a noisy
+    star the fixed threshold still acts as a floor.
+
+    Each candidate event must also pass the per-event SNR check (depth
+    must exceed min_snr × scatter) to reject noise wiggles that happen to
+    cross the threshold on individual points.
     """
     fs = median_filter(f, size=21)
-    # Local scatter: MAD of the *un*-smoothed flux, but only of points that
-    # are NOT in a dip (so the scatter estimate isn't pulled down by the
-    # event itself). Use a rough first-pass to estimate.
-    rough_mask = fs >= 0.99
+    baseline = float(np.nanmedian(fs))
+
+    # --- Pass 1: measure local scatter from non-dip data ---
+    # Use a rough cut: anything within 2× the raw MAD of median is "baseline"
+    raw_mad = float(1.4826 * np.nanmedian(np.abs(f - baseline)))
+    rough_mask = np.abs(fs - baseline) < 3 * max(raw_mad, 1e-6)
     if rough_mask.sum() > 100:
         scatter = float(1.4826 * np.nanmedian(np.abs(f[rough_mask] - np.nanmedian(f[rough_mask]))))
     else:
-        scatter = float(1.4826 * np.nanmedian(np.abs(f - np.nanmedian(f))))
+        scatter = raw_mad
     if scatter <= 0:
-        scatter = 1e-4   # numerical floor
+        scatter = 1e-5
 
-    in_dip = fs < threshold
+    # --- Pass 2: adaptive threshold ---
+    # The threshold is the HIGHER (less strict) of:
+    #   (a) the user-supplied absolute threshold (e.g. 0.997 = 0.3% below baseline)
+    #   (b) baseline − min_snr × scatter (adapts to the star's actual noise)
+    # This way quiet stars get a sensitive threshold automatically, while the
+    # absolute threshold still caps things for noisy stars.
+    adaptive_threshold = baseline - min_snr * scatter
+    effective_threshold = max(threshold, adaptive_threshold)
+
+    in_dip = fs < effective_threshold
     events = []
     i = 0
     while i < len(t):
@@ -191,8 +209,8 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
             end = i
             if end - start >= min_pts:
                 seg_min = float(fs[start:end].min())
-                depth = float(1.0 - seg_min)
-                # SNR filter: depth must beat min_snr × scatter.
+                depth = float(baseline - seg_min)
+                # Per-event SNR check (depth vs scatter)
                 snr = depth / scatter if scatter > 0 else 0.0
                 if snr >= min_snr:
                     events.append(
@@ -208,6 +226,7 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
                     )
         else:
             i += 1
+
     return events
 
 
@@ -515,6 +534,9 @@ def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, l
     ymin, ymax = float(np.nanpercentile(f, 0.3)), float(np.nanpercentile(f, 99.7))
     y_pad = 0.05 * (ymax - ymin)
     ax.set_ylim(ymin - y_pad, ymax + y_pad)
+    # IMPORTANT: disable the "+1" offset notation — it's confusing for shallow dips
+    ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+    ax.yaxis.set_major_formatter(plt.ScalarFormatter(useOffset=False))
     label_y = ymax + 0.3 * y_pad  # just below the top
     for i, ev in enumerate(events):
         is_primary = primary_event is not None and ev["t_start"] == primary_event["t_start"]
