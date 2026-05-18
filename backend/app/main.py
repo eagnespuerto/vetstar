@@ -24,6 +24,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from typing import Optional
+
 from pydantic import BaseModel
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
@@ -262,6 +264,185 @@ async def mast_report(query: MastQuery):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# -------------------------------------------------
+# Habitability + multi-sector endpoints
+# -------------------------------------------------
+
+from .habitability import PlanetCandidate, compute_hci
+from .exofop import query_exofop
+from .pipeline import run_multisector_analysis
+
+
+class HabitabilityQuery(BaseModel):
+    tic_id: int
+    # Optional overrides — if absent we fetch from ExoFOP/FITS header
+    radius_earth: Optional[float] = None
+    semi_major_axis_au: Optional[float] = None
+    orbital_period_d: Optional[float] = None
+    stellar_teff: Optional[float] = None
+    stellar_radius_sun: Optional[float] = None
+    stellar_mass_sun: Optional[float] = None
+    # Vetting context
+    n_sectors_with_detections: int = 1
+    n_sectors_observed: int = 1
+    vetting_verdict: Optional[dict] = None
+
+
+class MultisectorQuery(BaseModel):
+    tic_id: int
+    sectors: Optional[list] = None       # if None, fetch all available
+    detect_threshold: float = 0.997
+    detect_min_snr: float = 4.0
+
+
+@app.post("/api/habitability")
+async def habitability(query: HabitabilityQuery):
+    """
+    Compute the Habitability Chance Index for a TIC.
+    Fetches stellar and TOI data from ExoFOP automatically; caller can
+    override any field via the request body.
+    """
+    try:
+        exofop = query_exofop(query.tic_id)
+    except Exception as e:
+        log.warning("ExoFOP query failed for TIC %s: %s", query.tic_id, e)
+        exofop = {"star": {}, "tois": [], "source": "unavailable"}
+
+    star = exofop.get("star", {})
+    tois = exofop.get("tois", [])
+
+    # Build PlanetCandidate — caller fields take priority over ExoFOP
+    # Use the first PC/APC/CP/KP TOI if available
+    best_toi = None
+    for t in tois:
+        d = (t.get("disposition") or "").upper()
+        if d in ("PC", "APC", "CP", "KP") or best_toi is None:
+            best_toi = t
+            if d in ("CP", "KP"):
+                break
+
+    planet = PlanetCandidate(
+        radius_earth=(
+            query.radius_earth
+            or (best_toi.get("radius_earth") if best_toi else None)
+        ),
+        semi_major_axis_au=(
+            query.semi_major_axis_au
+            or (best_toi.get("semi_major_axis_au") if best_toi else None)
+        ),
+        orbital_period_d=(
+            query.orbital_period_d
+            or (best_toi.get("period_d") if best_toi else None)
+        ),
+        toi_number=best_toi.get("toi_number") if best_toi else None,
+        disposition=best_toi.get("disposition") if best_toi else None,
+        stellar_teff=(
+            query.stellar_teff
+            or star.get("teff")
+        ),
+        stellar_radius_sun=(
+            query.stellar_radius_sun
+            or star.get("radius")
+        ),
+        stellar_mass_sun=(
+            query.stellar_mass_sun
+            or star.get("mass")
+        ),
+        depth_ppm=best_toi.get("depth_ppm") if best_toi else None,
+        duration_hr=best_toi.get("duration_hr") if best_toi else None,
+        source=exofop.get("source", "unknown"),
+    )
+
+    hci_result = compute_hci(
+        planet=planet,
+        vetting_verdict=query.vetting_verdict,
+        n_sectors_with_detections=query.n_sectors_with_detections,
+        n_sectors_observed=query.n_sectors_observed,
+    )
+
+    return {
+        "hci": hci_result.to_dict(),
+        "planet": {
+            "radius_earth": planet.radius_earth,
+            "semi_major_axis_au": planet.semi_major_axis_au,
+            "orbital_period_d": planet.orbital_period_d,
+            "toi_number": planet.toi_number,
+            "disposition": planet.disposition,
+            "stellar_teff": planet.stellar_teff,
+            "stellar_radius_sun": planet.stellar_radius_sun,
+            "stellar_mass_sun": planet.stellar_mass_sun,
+        },
+        "exofop_source": exofop.get("source"),
+        "all_tois": tois,
+    }
+
+
+@app.post("/api/mast/multisector")
+async def mast_multisector(query: MultisectorQuery):
+    """
+    Fetch all available TESS sectors for a TIC, run the vetting pipeline
+    on each, then produce a multi-sector detection timeline.
+    """
+    from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
+
+    try:
+        all_sectors = list_available_sectors(query.tic_id)
+    except Exception as e:
+        raise HTTPException(502, f"MAST sector list failed: {e}")
+
+    if not all_sectors:
+        raise HTTPException(404, f"No TESS sectors found for TIC {query.tic_id}.")
+
+    # Respect explicit sector list if provided
+    if query.sectors:
+        wanted = set(int(s) for s in query.sectors)
+        sectors_to_fetch = [s for s in all_sectors if s["sector"] in wanted]
+    else:
+        # Cap at 10 sectors to avoid very long requests on prolific targets
+        sectors_to_fetch = all_sectors[:10]
+
+    sector_results = []
+    errors = []
+
+    for sec_info in sectors_to_fetch:
+        sec_num = sec_info["sector"]
+        try:
+            info = fetch_spoc_lightcurve(query.tic_id, sec_num)
+            parsed = parse_upload(info["path"], info["filename"])
+            result = _run_pipeline(parsed, query.detect_threshold, query.detect_min_snr)
+            sector_results.append((sec_num, result))
+        except Exception as e:
+            log.warning("Sector %s failed for TIC %s: %s", sec_num, query.tic_id, e)
+            errors.append({"sector": sec_num, "error": str(e)})
+
+    if not sector_results:
+        raise HTTPException(502, f"All sector fetches failed. Errors: {errors}")
+
+    analysis = run_multisector_analysis(
+        sector_results,
+        detect_threshold=query.detect_threshold,
+        detect_min_snr=query.detect_min_snr,
+    )
+    analysis["errors"] = errors
+    analysis["sectors_attempted"] = len(sectors_to_fetch)
+    analysis["sectors_succeeded"] = len(sector_results)
+
+    # Embed per-sector verdict summaries
+    analysis["sector_verdicts"] = [
+        {
+            "sector": sec,
+            "verdict": res.verdict.get("headline"),
+            "category": res.verdict.get("category"),
+            "n_events": len(res.events),
+            "bls_period_d": res.bls.get("period"),
+            "bls_sde": res.bls.get("sde"),
+        }
+        for sec, res in sector_results
+    ]
+
+    return analysis
 
 
 # -------------------------------------------------

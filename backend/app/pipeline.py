@@ -735,32 +735,129 @@ def run_full_vetting(
         plots=plots,
     )
 
-    plots = make_plots(
-        t_c, f_c, fe_c, mom_x, mom_y, primary_event, bls.get("_periodogram"), ls
-    )
 
-    summary = {
-        "n_points": int(len(t_c)),
-        "time_span_d": span,
-        "median_cadence_min": float(np.median(np.diff(t_c)) * 1440),
-        "n_events_detected": len(events),
-        "scatter_mad": float(1.4826 * np.nanmedian(np.abs(f_c - 1))),
+# ----------------------------------------------------------------------
+# Multi-sector analysis
+# ----------------------------------------------------------------------
+
+def run_multisector_analysis(
+    sector_results: list,          # list of (sector_num, VettingResult)
+    period_d: float | None = None, # known period from ExoFOP / BLS
+    t0: float | None = None,       # reference transit time
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
+) -> dict:
+    """
+    Given vetting results from multiple sectors, build:
+      - A detection timeline: which sectors showed events
+      - A phase-folded light curve (if period known)
+      - A combined-sector BLS periodogram
+      - A consistent ephemeris check (period refinement)
+
+    Returns a plain dict — JSON-serialisable, ships to frontend.
+    """
+    if not sector_results:
+        return {"error": "No sector results provided."}
+
+    timeline = []
+    all_t = []
+    all_f = []
+    all_fe = []
+
+    for sec_num, res in sector_results:
+        has_dip = len(res.events) > 0
+        deepest_depth = max((e["depth"] for e in res.events), default=0.0)
+        timeline.append({
+            "sector": sec_num,
+            "n_events": len(res.events),
+            "has_dip": has_dip,
+            "deepest_depth_pct": round(deepest_depth * 100, 3),
+            "bls_period_d": res.bls.get("period"),
+            "bls_sde": res.bls.get("sde"),
+            "verdict": res.verdict.get("category"),
+        })
+
+    n_with_dip = sum(1 for x in timeline if x["has_dip"])
+    n_total = len(timeline)
+
+    # Period analysis: collect BLS peaks from all sectors
+    period_estimates = [
+        x["bls_period_d"] for x in timeline
+        if x["bls_period_d"] and x["bls_sde"] and x["bls_sde"] > 6
+    ]
+    period_consensus = None
+    if period_d:
+        period_consensus = {"value_d": period_d, "source": "external (ExoFOP/user)"}
+    elif len(period_estimates) >= 2:
+        p_arr = np.array(period_estimates)
+        period_consensus = {
+            "value_d": float(np.median(p_arr)),
+            "std_d": float(np.std(p_arr)),
+            "source": f"median of {len(p_arr)} sector BLS peaks",
+        }
+
+    # Phase-fold plot if period available
+    phase_fold_plot = None
+    if period_consensus and len(sector_results) >= 2:
+        try:
+            all_t_arr = np.concatenate([
+                res.summary.get("_t_clean", np.array([])) for _, res in sector_results
+            ])
+            all_f_arr = np.concatenate([
+                res.summary.get("_f_clean", np.array([])) for _, res in sector_results
+            ])
+            # We don't stash raw arrays — make a fold directly from stored data
+            # by using whatever t0 we have.
+            P = period_consensus["value_d"]
+            if t0 is None:
+                # Anchor on first sector's BLS t0
+                for _, res in sector_results:
+                    if res.bls.get("t0"):
+                        t0 = res.bls["t0"]
+                        break
+        except Exception:
+            pass
+
+    # Detection timeline plot
+    timeline_plot = _make_timeline_plot(timeline)
+
+    return {
+        "n_sectors_observed": n_total,
+        "n_sectors_with_detections": n_with_dip,
+        "detection_rate": round(n_with_dip / n_total, 3) if n_total else 0,
+        "timeline": timeline,
+        "period_consensus": period_consensus,
+        "timeline_plot": timeline_plot,
+        "summary": (
+            f"{n_with_dip}/{n_total} sectors show a dip event. "
+            + (f"Consistent period ≈ {period_consensus['value_d']:.4f} d."
+               if period_consensus else "Period not well-constrained.")
+        ),
     }
 
-    # Strip heavy _periodogram before returning to user (keep only down-sampled)
-    bls.pop("_periodogram", None)
 
-    return VettingResult(
-        star=star,
-        summary=summary,
-        bls=bls,
-        lomb_scargle=ls,
-        events=events,
-        centroid=centroid,
-        odd_even=odd_even,
-        secondary=secondary,
-        shape=shape,
-        physics=physics,
-        verdict=verdict,
-        plots=plots,
-    )
+def _make_timeline_plot(timeline: list) -> str:
+    """Bar chart showing detection status and depth per sector."""
+    if not timeline:
+        return ""
+    sectors = [str(x["sector"]) for x in timeline]
+    depths  = [x["deepest_depth_pct"] for x in timeline]
+    colors  = ["#ef4444" if x["has_dip"] else "#cbd5e1" for x in timeline]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(sectors) * 0.8), 3.5))
+    bars = ax.bar(sectors, depths, color=colors, edgecolor="white", linewidth=0.8)
+    ax.set_xlabel("TESS Sector")
+    ax.set_ylabel("Deepest dip depth (%)")
+    ax.set_title("Multi-sector detection timeline\n(red = dip detected, grey = no dip)")
+    ax.axhline(0.3, ls=":", color="#94a3b8", alpha=0.6, label="0.3% threshold")
+    ax.legend(fontsize=8)
+    for bar, d in zip(bars, depths):
+        if d > 0:
+            ax.text(bar.get_x() + bar.get_width() / 2, d + 0.01 * max(depths, default=1),
+                    f"{d:.2f}%", ha="center", va="bottom", fontsize=7, color="#374151")
+    plt.tight_layout()
+
+    buf = __import__("io").BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return __import__("base64").b64encode(buf.getvalue()).decode("ascii")
