@@ -562,6 +562,9 @@ function ResultsView({ result }: { result: VettingResult }) {
           )}
         </div>
       )}
+      {/* Glossary */}
+      <GlossaryPanel />
+
       {/* Verdict */}
       <section className={`rounded-lg border-2 p-5 ${verdictColor}`}>
         <p className="text-xs uppercase tracking-wide opacity-70">Verdict</p>
@@ -601,13 +604,13 @@ function ResultsView({ result }: { result: VettingResult }) {
 
       {/* Tests */}
       <div className="grid md:grid-cols-2 gap-4">
-        <KV title="BLS" data={result.bls} hide={["_periodogram"]} />
-        <KV title="Lomb-Scargle" data={result.lomb_scargle} hide={["top_peaks"]} />
+        <KV title="BLS (Box Least Squares)" data={result.bls} hide={["_periodogram"]} />
+        <KV title="Lomb-Scargle periodogram" data={result.lomb_scargle} hide={["top_peaks"]} />
         <KV title="Centroid (background-blend test)" data={result.centroid} />
-        <KV title="Transit shape" data={result.shape} />
-        <KV title="Odd / even depths" data={result.odd_even} />
-        <KV title="Secondary eclipse" data={result.secondary} />
-        <KV title="Physics" data={result.physics} />
+        <KV title="Transit shape (U vs V)" data={result.shape} />
+        <KV title="Odd / even depths (EB test)" data={result.odd_even} />
+        <KV title="Secondary eclipse search" data={result.secondary} />
+        <KV title="Physical interpretation" data={result.physics} />
       </div>
 
       {/* Events */}
@@ -1266,7 +1269,9 @@ function KV({
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
           {entries.map(([k, v]) => (
             <div key={k} className="contents">
-              <dt className="text-slate-600 font-mono text-xs">{k}</dt>
+              <dt className="text-slate-600 font-mono text-xs">
+                <Tip term={k}>{k}</Tip>
+              </dt>
               <dd className="font-mono">{formatVal(v)}</dd>
             </div>
           ))}
@@ -1275,6 +1280,101 @@ function KV({
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Glossary: inline tooltips + collapsible reference panel
+// ---------------------------------------------------------------------------
+
+import { GLOSSARY, lookupTerm } from "./glossary";
+
+/**
+ * Tooltip wrapper — shows a dotted underline; on hover/tap reveals the
+ * glossary definition. Works on both desktop (hover) and mobile (tap).
+ */
+function Tip({ term, children }: { term: string; children?: React.ReactNode }) {
+  const def = lookupTerm(term);
+  if (!def) return <>{children || term}</>;
+  return (
+    <span className="group relative inline">
+      <span className="border-b border-dotted border-slate-400 cursor-help">
+        {children || term}
+      </span>
+      <span
+        className="
+          pointer-events-none absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2
+          w-72 max-w-[90vw] p-2.5 rounded-lg shadow-lg
+          bg-slate-900 text-white text-xs leading-relaxed
+          opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
+          transition-opacity duration-150
+        "
+        role="tooltip"
+      >
+        <strong className="text-emerald-300">{term}</strong>
+        <br />
+        {def}
+      </span>
+    </span>
+  );
+}
+
+
+function GlossaryPanel() {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const entries = Object.entries(GLOSSARY).filter(
+    ([k, v]) =>
+      !filter ||
+      k.toLowerCase().includes(filter.toLowerCase()) ||
+      v.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  return (
+    <section className="bg-white rounded-lg shadow overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition text-sm"
+      >
+        <span className="font-semibold text-slate-700">
+          📖 Glossary of technical terms
+          <span className="ml-2 text-xs font-normal text-slate-400">
+            ({Object.keys(GLOSSARY).length} terms — hover any{" "}
+            <span className="border-b border-dotted border-slate-400">
+              dotted-underlined
+            </span>{" "}
+            term in the results for its definition)
+          </span>
+        </span>
+        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="px-5 pb-4 border-t border-slate-100 space-y-3">
+          <input
+            type="text"
+            placeholder="Search glossary…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="w-full border rounded px-3 py-1.5 text-sm mt-3"
+          />
+          <dl className="space-y-2 max-h-96 overflow-y-auto">
+            {entries.length === 0 && (
+              <p className="text-sm text-slate-400 italic">No matching terms.</p>
+            )}
+            {entries.map(([term, def]) => (
+              <div key={term} className="text-sm">
+                <dt className="font-semibold text-slate-800 font-mono text-xs">
+                  {term}
+                </dt>
+                <dd className="text-slate-600 ml-2">{def}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+    </section>
+  );
+}
+
 
 function formatVal(v: any): string {
   if (typeof v === "boolean") return v ? "yes" : "no";
