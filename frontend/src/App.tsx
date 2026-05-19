@@ -493,15 +493,21 @@ function ResultsView({ result }: { result: VettingResult }) {
     if (!result.star.tic_id) return;
     setHciLoading(true); setHciError(null);
     try {
+      // Enrich the verdict with depth info so the backend can derive
+      // R_companion when the pipeline's physics block was unavailable.
+      const enrichedVerdict = {
+        ...result.verdict,
+        _depth: result.events?.[0]?.depth ?? null,
+        _bls_depth: result.bls?.depth ?? null,
+        _events: result.events,
+      };
       const data = await fetchHabitability(result.star.tic_id, {
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
-        // Pass pipeline-derived companion radius as fallback for when
-        // ExoFOP has no planet radius (common for new/non-TOI targets).
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
         n_sectors_observed: 1,
-        vetting_verdict: result.verdict,
+        vetting_verdict: enrichedVerdict,
       });
       setHciData(data);
     } catch (e: any) {
@@ -519,13 +525,19 @@ function ResultsView({ result }: { result: VettingResult }) {
       setMultisectorData(data);
       // Re-run HCI with updated sector counts
       if (data.n_sectors_observed > 1) {
+        const enrichedVerdict = {
+          ...result.verdict,
+          _depth: result.events?.[0]?.depth ?? null,
+          _bls_depth: result.bls?.depth ?? null,
+          _events: result.events,
+        };
         const updated = await fetchHabitability(result.star.tic_id, {
           stellar_teff: result.star.teff ?? undefined,
           stellar_radius_sun: result.star.radius ?? undefined,
           R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
           n_sectors_with_detections: data.n_sectors_with_detections,
           n_sectors_observed: data.n_sectors_observed,
-          vetting_verdict: result.verdict,
+          vetting_verdict: enrichedVerdict,
         });
         setHciData(updated);
       }
