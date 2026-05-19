@@ -330,15 +330,49 @@ async def habitability(query: HabitabilityQuery):
     #   1. Explicit caller override (query.radius_earth)
     #   2. ExoFOP TOI planet radius
     #   3. Pipeline's R_companion_Rjup converted to R_Earth (1 R_Jup = 11.209 R_Earth)
+    #   4. Compute from transit depth + stellar radius (ExoFOP or FITS)
+    #      when the pipeline couldn't (e.g. missing RADIUS in FITS header)
     RJUP_TO_REARTH = 11.209
+    RSUN_TO_RJUP = 9.73
+
     radius_earth = query.radius_earth
     radius_source = "override"
+
     if radius_earth is None and best_toi:
         radius_earth = best_toi.get("radius_earth")
-        radius_source = "exofop"
+        if radius_earth is not None:
+            radius_source = "exofop"
+
     if radius_earth is None and query.R_companion_Rjup is not None:
         radius_earth = query.R_companion_Rjup * RJUP_TO_REARTH
         radius_source = "pipeline (R_companion_Rjup)"
+
+    # Fallback 4: derive from transit depth + stellar radius from ExoFOP/TIC
+    # This catches the case where the FITS header lacked RADIUS so the
+    # pipeline returned physics.available=false, but ExoFOP/TIC has the star's radius.
+    if radius_earth is None and query.vetting_verdict:
+        import math
+        # Get depth from the vetting result (events or BLS)
+        depth = None
+        events = query.vetting_verdict.get("_events", [])
+        if not depth:
+            # Try the physics block if it was partially populated
+            depth = query.vetting_verdict.get("_depth")
+        # Try BLS depth from the verdict flags context
+        bls_depth = query.vetting_verdict.get("_bls_depth")
+        if bls_depth and not depth:
+            depth = bls_depth
+
+        stellar_r = (
+            query.stellar_radius_sun
+            or star.get("radius")
+        )
+        if depth and depth > 0 and stellar_r and stellar_r > 0:
+            # Rp/R* = sqrt(depth), Rp_Rsun = ratio * R*, Rp_Rjup = Rp_Rsun * 9.73
+            ratio = math.sqrt(min(depth, 0.99))
+            r_comp_rjup = ratio * stellar_r * RSUN_TO_RJUP
+            radius_earth = r_comp_rjup * RJUP_TO_REARTH
+            radius_source = f"derived (depth={depth:.5f}, R*={stellar_r:.2f} R_sun)"
 
     planet = PlanetCandidate(
         radius_earth=radius_earth,
