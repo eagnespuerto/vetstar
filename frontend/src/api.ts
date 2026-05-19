@@ -64,6 +64,7 @@ export async function fetchHabitability(
     stellar_teff: number;
     stellar_radius_sun: number;
     stellar_mass_sun: number;
+    R_companion_Rjup: number;
     n_sectors_with_detections: number;
     n_sectors_observed: number;
     vetting_verdict: Record<string, any>;

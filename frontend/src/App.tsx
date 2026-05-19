@@ -496,6 +496,9 @@ function ResultsView({ result }: { result: VettingResult }) {
       const data = await fetchHabitability(result.star.tic_id, {
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
+        // Pass pipeline-derived companion radius as fallback for when
+        // ExoFOP has no planet radius (common for new/non-TOI targets).
+        R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
         n_sectors_observed: 1,
         vetting_verdict: result.verdict,
@@ -519,6 +522,7 @@ function ResultsView({ result }: { result: VettingResult }) {
         const updated = await fetchHabitability(result.star.tic_id, {
           stellar_teff: result.star.teff ?? undefined,
           stellar_radius_sun: result.star.radius ?? undefined,
+          R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
           n_sectors_with_detections: data.n_sectors_with_detections,
           n_sectors_observed: data.n_sectors_observed,
           vetting_verdict: result.verdict,
@@ -728,7 +732,7 @@ function HabitabilityPanel({ data }: { data: any }) {
           <div className="mt-2 text-xs opacity-80 flex flex-wrap gap-3">
             {data.planet.toi_number && <span>TOI {data.planet.toi_number}</span>}
             {data.planet.disposition && <span>Disposition: {data.planet.disposition}</span>}
-            {data.planet.radius_earth && <span>R = {data.planet.radius_earth.toFixed(2)} R⊕</span>}
+            {data.planet.radius_earth && <span>R = {data.planet.radius_earth.toFixed(2)} R⊕ <span className="text-[10px] opacity-60">({data.planet.radius_source || "unknown source"})</span></span>}
             {data.planet.semi_major_axis_au && <span>a = {data.planet.semi_major_axis_au.toFixed(3)} AU</span>}
             {data.planet.orbital_period_d && <span>P = {data.planet.orbital_period_d.toFixed(2)} d</span>}
             {data.exofop_source && (
