@@ -284,6 +284,9 @@ class HabitabilityQuery(BaseModel):
     stellar_teff: Optional[float] = None
     stellar_radius_sun: Optional[float] = None
     stellar_mass_sun: Optional[float] = None
+    # Pipeline-derived companion radius (R_Jup) — used as fallback when
+    # ExoFOP has no planet radius.  Converted to R_Earth via ×11.209.
+    R_companion_Rjup: Optional[float] = None
     # Vetting context
     n_sectors_with_detections: int = 1
     n_sectors_observed: int = 1
@@ -323,11 +326,22 @@ async def habitability(query: HabitabilityQuery):
             if d in ("CP", "KP"):
                 break
 
+    # Derive radius_earth with fallback chain:
+    #   1. Explicit caller override (query.radius_earth)
+    #   2. ExoFOP TOI planet radius
+    #   3. Pipeline's R_companion_Rjup converted to R_Earth (1 R_Jup = 11.209 R_Earth)
+    RJUP_TO_REARTH = 11.209
+    radius_earth = query.radius_earth
+    radius_source = "override"
+    if radius_earth is None and best_toi:
+        radius_earth = best_toi.get("radius_earth")
+        radius_source = "exofop"
+    if radius_earth is None and query.R_companion_Rjup is not None:
+        radius_earth = query.R_companion_Rjup * RJUP_TO_REARTH
+        radius_source = "pipeline (R_companion_Rjup)"
+
     planet = PlanetCandidate(
-        radius_earth=(
-            query.radius_earth
-            or (best_toi.get("radius_earth") if best_toi else None)
-        ),
+        radius_earth=radius_earth,
         semi_major_axis_au=(
             query.semi_major_axis_au
             or (best_toi.get("semi_major_axis_au") if best_toi else None)
@@ -366,6 +380,7 @@ async def habitability(query: HabitabilityQuery):
         "hci": hci_result.to_dict(),
         "planet": {
             "radius_earth": planet.radius_earth,
+            "radius_source": radius_source,
             "semi_major_axis_au": planet.semi_major_axis_au,
             "orbital_period_d": planet.orbital_period_d,
             "toi_number": planet.toi_number,
