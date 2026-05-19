@@ -597,7 +597,7 @@ function ResultsView({ result }: { result: VettingResult }) {
       </div>
 
       {/* Plots */}
-      <PlotsSection plots={result.plots} />
+      <PlotsSection plots={result.plots} ticId={result.star.tic_id} sector={result.star.sector} />
 
       {/* Tests */}
       <div className="grid md:grid-cols-2 gap-4">
@@ -941,7 +941,15 @@ function MultisectorPanel({ data }: { data: any }) {
 }
 
 
-function PlotsSection({ plots }: { plots: Record<string, string> }) {
+function PlotsSection({
+  plots,
+  ticId,
+  sector,
+}: {
+  plots: Record<string, string>;
+  ticId?: number | null;
+  sector?: number | null;
+}) {
   const order = ["lightcurve", "event_zoom", "centroid", "bls", "lomb_scargle"];
   const labels: Record<string, string> = {
     lightcurve: "Full detrended light curve",
@@ -950,13 +958,118 @@ function PlotsSection({ plots }: { plots: Record<string, string> }) {
     bls: "BLS periodogram",
     lomb_scargle: "Lomb-Scargle top peaks",
   };
+
+  const [albumResult, setAlbumResult] = useState<any>(null);
+  const [albumLoading, setAlbumLoading] = useState(false);
+  const [albumError, setAlbumError] = useState<string | null>(null);
+  const [forumText, setForumText] = useState<string | null>(null);
+
+  const uploadAll = async () => {
+    setAlbumLoading(true);
+    setAlbumError(null);
+    try {
+      const { uploadAllPlots, forumPost } = await import("./imgbb");
+      const title = ticId
+        ? `TIC_${ticId}${sector ? `_S${sector}` : ""}`
+        : "Vetstar";
+      const result = await uploadAllPlots(plots, labels, title);
+      setAlbumResult(result);
+      setForumText(forumPost(result.images, ticId, sector));
+    } catch (e: any) {
+      setAlbumError(e.message || String(e));
+    } finally {
+      setAlbumLoading(false);
+    }
+  };
+
   return (
     <section className="bg-white rounded-lg shadow p-5 space-y-4">
-      <h3 className="font-bold">Diagnostic plots</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold">Diagnostic plots</h3>
+        <button
+          onClick={uploadAll}
+          disabled={albumLoading}
+          className="text-xs px-3 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-slate-300 flex items-center gap-1"
+        >
+          {albumLoading ? (
+            "Uploading…"
+          ) : (
+            <>
+              <ShareIcon />
+              Upload all to ImgBB
+            </>
+          )}
+        </button>
+      </div>
+
+      {albumError && (
+        <p className="text-xs text-red-700 bg-red-50 rounded p-2">
+          ImgBB error: {albumError}
+        </p>
+      )}
+
+      {albumResult && (
+        <div className="bg-purple-50 border border-purple-200 rounded p-3 space-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-purple-900">
+              Plots uploaded to ImgBB
+            </span>
+            <span className="text-xs text-purple-600">
+              {albumResult.images.length} image{albumResult.images.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="grid gap-1">
+            {albumResult.images.map((img: any) => (
+              <CopyField
+                key={img.name}
+                label={img.label}
+                value={img.link}
+              />
+            ))}
+          </div>
+          {/* Forum BBCode ready to paste */}
+          {forumText && (
+            <details className="mt-2">
+              <summary className="text-xs text-purple-700 cursor-pointer hover:underline">
+                Copy BBCode for Planet Hunters / forum post
+              </summary>
+              <div className="mt-1 relative">
+                <textarea
+                  readOnly
+                  value={forumText}
+                  className="w-full h-32 text-xs font-mono bg-white border rounded p-2 text-slate-700"
+                />
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(forumText);
+                  }}
+                  className="absolute top-1 right-1 text-[10px] px-2 py-0.5 bg-purple-600 text-white rounded hover:bg-purple-700"
+                >
+                  Copy
+                </button>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
       {order.map((k) =>
         plots[k] ? (
           <figure key={k}>
-            <figcaption className="text-sm text-slate-600 mb-1">{labels[k]}</figcaption>
+            <div className="flex items-center justify-between mb-1">
+              <figcaption className="text-sm text-slate-600">
+                {labels[k]}
+              </figcaption>
+              <ShareToImgbbButton
+                base64={plots[k]}
+                title={
+                  ticId
+                    ? `TIC ${ticId}${sector ? ` S${sector}` : ""} — ${labels[k]}`
+                    : labels[k]
+                }
+                label={labels[k]}
+              />
+            </div>
             <img
               src={`data:image/png;base64,${plots[k]}`}
               alt={labels[k]}
@@ -966,6 +1079,164 @@ function PlotsSection({ plots }: { plots: Record<string, string> }) {
         ) : null
       )}
     </section>
+  );
+}
+
+
+function ShareToImgbbButton({
+  base64,
+  title,
+  label,
+}: {
+  base64: string;
+  title: string;
+  label: string;
+}) {
+  const [state, setState] = useState<"idle" | "uploading" | "done" | "error">(
+    "idle"
+  );
+  const [result, setResult] = useState<{
+    link: string;
+    markdown: string;
+    bbcode: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const upload = async () => {
+    setState("uploading");
+    setError(null);
+    try {
+      const { uploadImage, markdownEmbed, bbcodeEmbed } = await import(
+        "./imgbb"
+      );
+      const res = await uploadImage(base64, title.replace(/[^a-zA-Z0-9_-]/g, "_"));
+      setResult({
+        link: res.url,
+        markdown: markdownEmbed(res.url, label),
+        bbcode: bbcodeEmbed(res.url),
+      });
+      setState("done");
+    } catch (e: any) {
+      setError(e.message || String(e));
+      setState("error");
+    }
+  };
+
+  if (state === "idle") {
+    return (
+      <button
+        onClick={upload}
+        className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 rounded hover:bg-purple-100 hover:text-purple-700 flex items-center gap-1 transition"
+        title="Upload to ImgBB for a shareable link"
+      >
+        <ShareIcon size={10} />
+        Share
+      </button>
+    );
+  }
+
+  if (state === "uploading") {
+    return (
+      <span className="text-[10px] text-slate-400">uploading…</span>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <span
+        className="text-[10px] text-red-500 cursor-pointer"
+        title={error || ""}
+        onClick={upload}
+      >
+        failed — retry?
+      </span>
+    );
+  }
+
+  // done
+  return (
+    <span className="flex items-center gap-1">
+      <CopyMini value={result!.link} tooltip="Copy image URL" />
+      <CopyMini value={result!.bbcode} tooltip="Copy BBCode [img]" label="BBC" />
+      <CopyMini value={result!.markdown} tooltip="Copy Markdown" label="MD" />
+    </span>
+  );
+}
+
+
+function CopyMini({
+  value,
+  tooltip,
+  label,
+}: {
+  value: string;
+  tooltip: string;
+  label?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className={`text-[10px] px-1.5 py-0.5 rounded transition ${
+        copied
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-slate-100 text-slate-600 hover:bg-purple-100 hover:text-purple-700"
+      }`}
+      title={tooltip}
+      onClick={() => {
+        navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+    >
+      {copied ? "Copied!" : label || "URL"}
+    </button>
+  );
+}
+
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-slate-600 w-36 truncate" title={label}>
+        {label}
+      </span>
+      <input
+        readOnly
+        value={value}
+        className="flex-1 bg-white border rounded px-2 py-0.5 font-mono text-[11px] text-slate-700"
+        onClick={(e) => (e.target as HTMLInputElement).select()}
+      />
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }}
+        className={`px-2 py-0.5 rounded text-[10px] transition ${
+          copied
+            ? "bg-emerald-100 text-emerald-700"
+            : "bg-slate-100 hover:bg-purple-100 text-slate-600 hover:text-purple-700"
+        }`}
+      >
+        {copied ? "Copied!" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+
+function ShareIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M21.95 6.536a1.523 1.523 0 0 0-1.07-.445H3.12c-.417 0-.77.148-1.07.445A1.463 1.463 0 0 0 1.605 7.6v8.8c0 .417.148.77.445 1.07.297.296.653.445 1.07.445h17.76c.417 0 .773-.149 1.07-.446.296-.296.445-.652.445-1.069V7.6c0-.417-.149-.77-.445-1.064zM12 16.4c-2.648 0-4.8-2.152-4.8-4.8 0-2.648 2.152-4.8 4.8-4.8 2.648 0 4.8 2.152 4.8 4.8 0 2.648-2.152 4.8-4.8 4.8zm0-7.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z" />
+    </svg>
   );
 }
 
