@@ -328,7 +328,7 @@ export default function App() {
         {result && <ResultsView result={result} />}
       </main>
 
-      <ExoMinerPanel result={result} />
+     {result && <ExoMinerPanel result={result} />}
       
       <footer className="text-center text-xs text-slate-400 py-6">
         Pipeline: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy
