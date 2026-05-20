@@ -11,6 +11,7 @@ import {
   type DetectParams,
 } from "./api";
 import type { VettingResult } from "./types";
+import ExoMinerPanel from "./ExoMinerPanel";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
 type Mode = "upload" | "mast";
@@ -327,6 +328,8 @@ export default function App() {
         {result && <ResultsView result={result} />}
       </main>
 
+      <ExoMinerPanel result={result} />
+      
       <footer className="text-center text-xs text-slate-400 py-6">
         Pipeline: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy
         median filtering, centroid + odd/even + secondary tests, physics-based
