@@ -1,14 +1,5 @@
 """
 FastAPI backend for TESS vetting app.
-
-Key implementation notes:
-  * ``parse_upload`` expects a *filesystem path*, not a file object. Every
-    upload endpoint writes the uploaded file to a temp path first.
-  * Detection sensitivity (``detect_threshold``, ``detect_min_snr``) is
-    accepted on all analyze/report endpoints, defaulted to the safe values
-    from the pipeline (0.997 and 4.0).
-  * Errors return useful messages including the exception type, and the
-    full Python traceback is logged to stderr so it shows in Render logs.
 """
 
 from __future__ import annotations
@@ -30,7 +21,7 @@ from pydantic import BaseModel
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
 from .parsers import parse_upload
-from .pipeline import run_full_vetting
+from .pipeline import run_full_vetting, clean_lightcurve
 from .report import build_pdf
 
 
@@ -46,24 +37,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -------------------------------------------------
+# Module-level LC cache for ExoMiner reuse
+# Keyed by (tic_id, sector) or "__last__".
+# Process-local — fine for single-worker Render deployment.
+# -------------------------------------------------
+_lc_cache: dict = {}
+
+
+def _cache_lc(parsed: dict) -> None:
+    """Store cleaned LC arrays after a successful parse so ExoMiner can
+    reuse them without re-downloading."""
+    try:
+        t_c, f_c, _ = clean_lightcurve(
+            parsed["t"], parsed["flux"], parsed["flux_err"], parsed["quality"]
+        )
+        star = parsed.get("star")
+        tic_id = getattr(star, "tic_id", None)
+        sector = getattr(star, "sector", None)
+        entry = {
+            "t": t_c,
+            "f": f_c,
+            "mom_x": parsed.get("mom_x"),
+            "mom_y": parsed.get("mom_y"),
+        }
+        _lc_cache[(tic_id, sector)] = entry
+        _lc_cache["__last__"] = entry
+    except Exception as exc:
+        log.warning("LC cache update failed: %s", exc)
+
 
 # -------------------------------------------------
 # Sensitivity helpers
 # -------------------------------------------------
 
 def _clamp_params(detect_threshold: float, detect_min_snr: float):
-    """Constrain the sliders to safe ranges."""
     th = max(0.95, min(0.999, float(detect_threshold)))
     snr = max(1.0, min(20.0, float(detect_min_snr)))
     return th, snr
 
 
 def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float):
-    """Call ``run_full_vetting`` with keyword arguments (the signature is
-    keyword-only) and the user's sensitivity settings.
-
-    ``parsed`` comes from ``parsers.parse_upload`` and uses lowercase keys.
-    """
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
     return run_full_vetting(
         t=parsed["t"],
@@ -79,8 +93,6 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float):
 
 
 def _save_upload_to_tempfile(upload: UploadFile) -> str:
-    """Persist an uploaded file to a temp path on disk and return that
-    path. ``parsers.parse_upload`` needs a path, not a file object."""
     if not upload.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     suffix = os.path.splitext(upload.filename)[1].lower() or ".bin"
@@ -94,9 +106,6 @@ def _save_upload_to_tempfile(upload: UploadFile) -> str:
 
 
 def _handle_exception(label: str, e: Exception) -> HTTPException:
-    """Log the full traceback to stderr (visible in Render) and return an
-    HTTPException whose detail names the exception type — much more useful
-    than the bare ``str(e)`` we had before."""
     tb = traceback.format_exc()
     log.error("%s crashed:\n%s", label, tb)
     return HTTPException(
@@ -136,6 +145,7 @@ async def analyze(
                     "series). Upload a FITS light curve instead."
                 ),
             )
+        _cache_lc(parsed)
         result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
         return result.to_dict()
     except HTTPException:
@@ -198,7 +208,6 @@ class MastQuery(BaseModel):
 
 @app.get("/api/mast/sectors/{tic_id}")
 async def mast_sectors(tic_id: int):
-    """Return ``{"tic_id": ..., "sectors": [{"sector": N, "providers": [...]}, ...]}``."""
     try:
         sectors = list_available_sectors(tic_id)
         return {"tic_id": tic_id, "sectors": sectors}
@@ -207,18 +216,13 @@ async def mast_sectors(tic_id: int):
 
 
 def _mast_fetch_and_analyze(query: MastQuery):
-    """Shared body for /api/mast/analyze and /api/mast/report."""
-    # 1. Fetch from MAST.
     try:
         info = fetch_spoc_lightcurve(query.tic_id, query.sector)
     except RuntimeError as e:
-        # Expected: MAST returned nothing useful. Clean 502 with the helpful
-        # message that fetch_spoc_lightcurve assembled.
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise _handle_exception("mast_fetch", e)
 
-    # 2. Parse the FITS file.
     try:
         parsed = parse_upload(info["path"], info["filename"])
     except Exception as e:
@@ -226,7 +230,8 @@ def _mast_fetch_and_analyze(query: MastQuery):
             f"parse downloaded FITS ({os.path.basename(info.get('path', ''))})", e
         )
 
-    # 3. Run the pipeline.
+    _cache_lc(parsed)
+
     try:
         result = _run_pipeline(parsed, query.detect_threshold, query.detect_min_snr)
     except Exception as e:
@@ -277,17 +282,13 @@ from .pipeline import run_multisector_analysis
 
 class HabitabilityQuery(BaseModel):
     tic_id: int
-    # Optional overrides — if absent we fetch from ExoFOP/FITS header
     radius_earth: Optional[float] = None
     semi_major_axis_au: Optional[float] = None
     orbital_period_d: Optional[float] = None
     stellar_teff: Optional[float] = None
     stellar_radius_sun: Optional[float] = None
     stellar_mass_sun: Optional[float] = None
-    # Pipeline-derived companion radius (R_Jup) — used as fallback when
-    # ExoFOP has no planet radius.  Converted to R_Earth via ×11.209.
     R_companion_Rjup: Optional[float] = None
-    # Vetting context
     n_sectors_with_detections: int = 1
     n_sectors_observed: int = 1
     vetting_verdict: Optional[dict] = None
@@ -295,18 +296,13 @@ class HabitabilityQuery(BaseModel):
 
 class MultisectorQuery(BaseModel):
     tic_id: int
-    sectors: Optional[list] = None       # if None, fetch all available
+    sectors: Optional[list] = None
     detect_threshold: float = 0.997
     detect_min_snr: float = 4.0
 
 
 @app.post("/api/habitability")
 async def habitability(query: HabitabilityQuery):
-    """
-    Compute the Habitability Chance Index for a TIC.
-    Fetches stellar and TOI data from ExoFOP automatically; caller can
-    override any field via the request body.
-    """
     try:
         exofop = query_exofop(query.tic_id)
     except Exception as e:
@@ -316,8 +312,6 @@ async def habitability(query: HabitabilityQuery):
     star = exofop.get("star", {})
     tois = exofop.get("tois", [])
 
-    # Build PlanetCandidate — caller fields take priority over ExoFOP
-    # Use the first PC/APC/CP/KP TOI if available
     best_toi = None
     for t in tois:
         d = (t.get("disposition") or "").upper()
@@ -326,12 +320,6 @@ async def habitability(query: HabitabilityQuery):
             if d in ("CP", "KP"):
                 break
 
-    # Derive radius_earth with fallback chain:
-    #   1. Explicit caller override (query.radius_earth)
-    #   2. ExoFOP TOI planet radius
-    #   3. Pipeline's R_companion_Rjup converted to R_Earth (1 R_Jup = 11.209 R_Earth)
-    #   4. Compute from transit depth + stellar radius (ExoFOP or FITS)
-    #      when the pipeline couldn't (e.g. missing RADIUS in FITS header)
     RJUP_TO_REARTH = 11.209
     RSUN_TO_RJUP = 9.73
 
@@ -347,18 +335,12 @@ async def habitability(query: HabitabilityQuery):
         radius_earth = query.R_companion_Rjup * RJUP_TO_REARTH
         radius_source = "pipeline (R_companion_Rjup)"
 
-    # Fallback 4: derive from transit depth + stellar radius from ExoFOP/TIC
-    # This catches the case where the FITS header lacked RADIUS so the
-    # pipeline returned physics.available=false, but ExoFOP/TIC has the star's radius.
     if radius_earth is None and query.vetting_verdict:
         import math
-        # Get depth from the vetting result (events or BLS)
         depth = None
         events = query.vetting_verdict.get("_events", [])
         if not depth:
-            # Try the physics block if it was partially populated
             depth = query.vetting_verdict.get("_depth")
-        # Try BLS depth from the verdict flags context
         bls_depth = query.vetting_verdict.get("_bls_depth")
         if bls_depth and not depth:
             depth = bls_depth
@@ -368,7 +350,6 @@ async def habitability(query: HabitabilityQuery):
             or star.get("radius")
         )
         if depth and depth > 0 and stellar_r and stellar_r > 0:
-            # Rp/R* = sqrt(depth), Rp_Rsun = ratio * R*, Rp_Rjup = Rp_Rsun * 9.73
             ratio = math.sqrt(min(depth, 0.99))
             r_comp_rjup = ratio * stellar_r * RSUN_TO_RJUP
             radius_earth = r_comp_rjup * RJUP_TO_REARTH
@@ -430,10 +411,6 @@ async def habitability(query: HabitabilityQuery):
 
 @app.post("/api/mast/multisector")
 async def mast_multisector(query: MultisectorQuery):
-    """
-    Fetch all available TESS sectors for a TIC, run the vetting pipeline
-    on each, then produce a multi-sector detection timeline.
-    """
     from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
 
     try:
@@ -444,12 +421,10 @@ async def mast_multisector(query: MultisectorQuery):
     if not all_sectors:
         raise HTTPException(404, f"No TESS sectors found for TIC {query.tic_id}.")
 
-    # Respect explicit sector list if provided
     if query.sectors:
         wanted = set(int(s) for s in query.sectors)
         sectors_to_fetch = [s for s in all_sectors if s["sector"] in wanted]
     else:
-        # Cap at 10 sectors to avoid very long requests on prolific targets
         sectors_to_fetch = all_sectors[:10]
 
     sector_results = []
@@ -478,7 +453,6 @@ async def mast_multisector(query: MultisectorQuery):
     analysis["sectors_attempted"] = len(sectors_to_fetch)
     analysis["sectors_succeeded"] = len(sector_results)
 
-    # Embed per-sector verdict summaries
     analysis["sector_verdicts"] = [
         {
             "sector": sec,
@@ -495,19 +469,61 @@ async def mast_multisector(query: MultisectorQuery):
 
 
 # -------------------------------------------------
+# ExoMiner endpoint
+# -------------------------------------------------
+
+from .exominer import run_exominer as _run_exominer
+
+
+class ExominerRequest(BaseModel):
+    tic_id: Optional[int] = None
+    sector: Optional[int] = None
+    period: float
+    t0: float
+    duration: float
+    crowdsap: Optional[float] = None
+
+
+@app.post("/api/exominer")
+def api_exominer(req: ExominerRequest):
+    key = (req.tic_id, req.sector) if req.tic_id else "__last__"
+    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    if not cached:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No light curve in cache. Run /api/analyze or "
+                "/api/mast/analyze first, then call this endpoint."
+            ),
+        )
+    try:
+        return _run_exominer(
+            t=cached["t"],
+            f=cached["f"],
+            mom_x=cached.get("mom_x"),
+            mom_y=cached.get("mom_y"),
+            period=req.period,
+            t0=req.t0,
+            duration=req.duration,
+            crowdsap=req.crowdsap,
+        )
+    except Exception as e:
+        raise _handle_exception("exominer", e)
+
+
+# -------------------------------------------------
 # Static frontend mount
 # -------------------------------------------------
 
 HERE = pathlib.Path(__file__).resolve().parent
 _CANDIDATES = [
-    HERE.parent.parent / "frontend" / "dist",      # source layout
+    HERE.parent.parent / "frontend" / "dist",
     HERE.parent / "frontend" / "dist",
     pathlib.Path(os.environ.get("FRONTEND_DIST", "")),
 ]
 DIST = next((p for p in _CANDIDATES if p and p.is_dir()), None)
 
 if DIST is not None:
-    # Mount under /assets for the JS/CSS bundles; SPA fallback for paths.
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
 
     @app.get("/")
