@@ -14,7 +14,7 @@
  *  - Shows 7 phase-folded views + scalar diagnostics with σ badges.
  *  - Collapses/expands like the HCI section.
  */
-import { runExominer, type ExominerResult } from "./api_additions";
+import { runExominer, type ExominerResult } from "./api";
 import { useEffect, useRef, useState } from "react";
 import type { VettingResult } from "./types";
 
