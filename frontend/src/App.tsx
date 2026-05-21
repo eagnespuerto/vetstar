@@ -1105,7 +1105,7 @@ function PlotsSection({
 }
 
 
-function ShareToImgbbButton({
+export function ShareToImgbbButton({
   base64,
   title,
   label,
