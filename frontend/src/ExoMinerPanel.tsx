@@ -17,6 +17,7 @@
 import { runExominer, type ExominerResult } from "./api";
 import { useEffect, useRef, useState } from "react";
 import type { VettingResult } from "./types";
+import { ShareToImgbbButton } from "./App";
 
 // ─── Sigma badge ────────────────────────────────────────────────────────────
 
@@ -84,7 +85,10 @@ function ViewFig({
   if (!b64) return null;
   return (
     <figure className="space-y-1">
-      <figcaption className="text-xs text-slate-500 font-medium">{label}</figcaption>
+      <div className="flex items-center justify-between">
+        <figcaption className="text-xs text-slate-500 font-medium">{label}</figcaption>
+        <ShareToImgbbButton base64={b64} title={label} label={label} />
+      </div>
       <img
         src={`data:image/png;base64,${b64}`}
         alt={label}
