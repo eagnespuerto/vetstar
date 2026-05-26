@@ -410,13 +410,31 @@ async def habitability(query: HabitabilityQuery):
         source=exofop.get("source", "unknown"),
     )
 
-    # POE: if semi-major axis is unknown but we have period + stellar mass,
-    # derive it via Kepler's third law so the HZ sub-score has a real input.
-    if planet.semi_major_axis_au is None and planet.orbital_period_d and planet.stellar_mass_sun:
+    # TLCM transit geometry: a model-independent stellar density and a
+    # photometric semi-major axis (a/Rs x R*) that needs no catalogue mass.
+    from .tlcm_geometry import compute_tlcm_geometry
+    vv = query.vetting_verdict or {}
+    tlcm_geo = compute_tlcm_geometry(
+        period_d=planet.orbital_period_d,
+        t14_d=vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration"),
+        depth_frac=vv.get("_depth") or vv.get("_bls_depth"),
+        rstar_sun=planet.stellar_radius_sun,
+        grazing=str(vv.get("_shape_class", "")).startswith("V"),
+        mstar_sun=planet.stellar_mass_sun,
+    ).to_dict()
+
+    a_source = "exofop/override"
+    if planet.semi_major_axis_au is None and tlcm_geo.get("a_au_photometric"):
+        # Prefer the photometric a — independent of the catalogue stellar mass.
+        planet.semi_major_axis_au = tlcm_geo["a_au_photometric"]
+        a_source = "TLCM photometric (a/Rs x R*)"
+    elif planet.semi_major_axis_au is None and planet.orbital_period_d and planet.stellar_mass_sun:
+        # Fall back to Kepler's third law from period + stellar mass.
         from .observables import semi_major_axis_from_period
         planet.semi_major_axis_au = semi_major_axis_from_period(
             planet.orbital_period_d, planet.stellar_mass_sun
         )
+        a_source = "Kepler III (P + M*)"
 
     hci_result = compute_hci(
         planet=planet,
@@ -440,6 +458,8 @@ async def habitability(query: HabitabilityQuery):
     return {
         "hci": hci_result.to_dict(),
         "observables": poe,
+        "tlcm": tlcm_geo,
+        "semi_major_axis_source": a_source,
         "planet": {
             "radius_earth": planet.radius_earth,
             "radius_source": radius_source,
@@ -618,6 +638,11 @@ class ObservablesQuery(BaseModel):
     mp_mjup: Optional[float] = None
     inclination_deg: float = 90.0
     eccentricity: float = 0.0
+    # TLCM transit geometry inputs (Csizmadia 2020)
+    t14_d: Optional[float] = None            # full transit duration (days)
+    impact_parameter: Optional[float] = None # b; if absent, central transit assumed
+    grazing: bool = False
+    k_rv_ms: Optional[float] = None          # RV semi-amplitude -> absolute mass
     # Auto-detected mode: pull period/depth from a vetting result
     vetting_verdict: Optional[dict] = None
 
@@ -647,12 +672,45 @@ async def observables(query: ObservablesQuery):
             log.warning("ExoFOP lookup failed for TIC %s: %s", query.tic_id, e)
 
     # Auto-detected: harvest period / depth / Rp from a vetting verdict blob
+    t14 = query.t14_d
+    grazing = query.grazing
     if query.vetting_verdict:
         vv = query.vetting_verdict
         period = period or vv.get("_bls_period") or vv.get("_period")
         depth = depth or vv.get("_depth") or vv.get("_bls_depth")
+        t14 = t14 or vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration")
+        if not grazing and str(vv.get("_shape_class", "")).startswith("V"):
+            grazing = True
         if rp_rjup is None and vv.get("_R_companion_Rjup") is not None:
             rp_rjup = vv.get("_R_companion_Rjup")
+
+    # TLCM transit geometry: radius ratio, a/Rs, model-independent stellar
+    # density, photometric semi-major axis, and (with RV) absolute mass.
+    from .tlcm_geometry import compute_tlcm_geometry
+    tlcm = compute_tlcm_geometry(
+        period_d=period,
+        t14_d=t14,
+        depth_frac=depth,
+        rstar_sun=rstar,
+        impact_parameter=query.impact_parameter,
+        grazing=grazing,
+        k_rv_ms=query.k_rv_ms,
+        eccentricity=query.eccentricity,
+        mstar_sun=mstar,
+        inclination_deg=query.inclination_deg,
+    ).to_dict()
+
+    # Prefer the light-curve-derived (photometric) semi-major axis when the
+    # user did not supply one: it does not depend on a catalogue stellar mass.
+    a_au = query.semi_major_axis_au
+    a_source = "user/Kepler"
+    if a_au is None and tlcm.get("a_au_photometric"):
+        a_au = tlcm["a_au_photometric"]
+        a_source = "TLCM photometric (a/Rs x R*)"
+    # If geometry pinned an absolute companion mass from RV, use it.
+    mp_mjup = query.mp_mjup
+    if mp_mjup is None and tlcm.get("radial_velocity", {}).get("mp_mjup"):
+        mp_mjup = tlcm["radial_velocity"]["mp_mjup"]
 
     result = compute_observables(
         teff_k=teff,
@@ -661,16 +719,101 @@ async def observables(query: ObservablesQuery):
         luminosity_lsun_override=query.luminosity_lsun,
         distance_pc=dist,
         orbital_period_d=period,
-        semi_major_axis_au=query.semi_major_axis_au,
+        semi_major_axis_au=a_au,
         rp_rjup=rp_rjup,
         rp_earth=query.rp_earth,
         transit_depth_frac=depth,
-        mp_mjup=query.mp_mjup,
+        mp_mjup=mp_mjup,
         inclination_deg=query.inclination_deg,
         eccentricity=query.eccentricity,
     )
     out = result.to_dict()
+    out["tlcm"] = tlcm
+    out["semi_major_axis_source"] = a_source
     out["exofop_source"] = exofop_source
+    return out
+
+
+# -------------------------------------------------
+# Radial velocity -> absolute mass (mass function)
+# -------------------------------------------------
+class RVQuery(BaseModel):
+    # Archive-first: resolve K (and orbit/stellar params) from a TIC ...
+    tic_id: Optional[int] = None
+    # ... or supply them directly (upload / manual fallback):
+    orbital_period_d: Optional[float] = None
+    stellar_mass_sun: Optional[float] = None
+    inclination_deg: float = 90.0
+    eccentricity: float = 0.0
+    k_ms: Optional[float] = None              # direct semi-amplitude, OR ...
+    rv_values_ms: Optional[list] = None       # ... an RV time series (min/max)
+    rv_reduce_method: str = "minmax"
+
+
+@app.post("/api/rv")
+async def radial_velocity(query: RVQuery):
+    from .tlcm_geometry import (
+        reduce_rv_timeseries, planet_mass_from_rv, rv_mass_function_sun,
+    )
+    from .rv_fetch import fetch_rv_from_archive
+
+    k_ms = query.k_ms
+    period = query.orbital_period_d
+    e = query.eccentricity
+    inc = query.inclination_deg
+    mstar = query.stellar_mass_sun
+    reduction = None
+    archive = None
+    source = "manual"
+
+    # Manual / uploaded RV time series takes precedence when given.
+    if k_ms is None and query.rv_values_ms:
+        reduction = reduce_rv_timeseries(query.rv_values_ms, query.rv_reduce_method)
+        if reduction.get("available"):
+            k_ms = reduction["K_estimate"]
+            source = "rv_timeseries_upload"
+
+    # Otherwise try the NASA Exoplanet Archive, then fall back to upload.
+    if k_ms is None and query.tic_id is not None:
+        archive = fetch_rv_from_archive(query.tic_id)
+        if archive.get("available"):
+            k_ms = archive["k_ms"]
+            source = archive["source"]
+            period = period or archive.get("orbital_period_d")
+            if query.eccentricity == 0.0 and archive.get("eccentricity") is not None:
+                e = archive["eccentricity"]
+            if inc == 90.0 and archive.get("inclination_deg") is not None:
+                inc = archive["inclination_deg"]
+            mstar = mstar or archive.get("stellar_mass_sun")
+
+    if k_ms is None:
+        return {
+            "available": False,
+            "source": "none",
+            "archive": archive,
+            "fallback": "upload",
+            "detail": "No catalog RV semi-amplitude found; upload an RV time "
+                      "series (rv_values_ms) or supply k_ms directly.",
+        }
+    if period is None:
+        raise HTTPException(
+            status_code=400,
+            detail="orbital_period_d is required to compute the mass function.",
+        )
+
+    out = {
+        "available": True,
+        "source": source,
+        "K_ms": k_ms,
+        "orbital_period_d": period,
+        "eccentricity": e,
+        "inclination_deg": inc,
+        "rv_reduction": reduction,
+        "archive": archive,
+        "mass_function_msun": rv_mass_function_sun(k_ms, period, e),
+    }
+    if mstar:
+        out["companion"] = planet_mass_from_rv(k_ms, period, mstar, inc, e)
     return out
 
 
