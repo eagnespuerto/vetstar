@@ -11,6 +11,8 @@ import tempfile
 import traceback
 import uuid
 
+import numpy as np
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -21,7 +23,12 @@ from pydantic import BaseModel
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
 from .parsers import parse_upload
-from .pipeline import run_full_vetting, clean_lightcurve
+from .pipeline import (
+    run_full_vetting,
+    clean_lightcurve,
+    measure_shape,
+    centroid_check,
+)
 from .report import build_pdf
 
 
@@ -52,14 +59,29 @@ def _cache_lc(parsed: dict) -> None:
         t_c, f_c, _ = clean_lightcurve(
             parsed["t"], parsed["flux"], parsed["flux_err"], parsed["quality"]
         )
+        # Mask moments with the SAME finite/quality filter clean_lightcurve
+        # applies, so centroid arrays line up 1:1 with t_c/f_c (required by
+        # centroid_check, which needs len(mom_x) == len(t)).
+        mom_x = parsed.get("mom_x")
+        mom_y = parsed.get("mom_y")
+        quality = parsed.get("quality")
+        if mom_x is not None and quality is not None:
+            m = (
+                np.isfinite(parsed["t"])
+                & np.isfinite(parsed["flux"])
+                & (parsed["flux"] > 0)
+                & (quality == 0)
+            )
+            mom_x = mom_x[m]
+            mom_y = mom_y[m] if mom_y is not None else None
         star = parsed.get("star")
         tic_id = getattr(star, "tic_id", None)
         sector = getattr(star, "sector", None)
         entry = {
             "t": t_c,
             "f": f_c,
-            "mom_x": parsed.get("mom_x"),
-            "mom_y": parsed.get("mom_y"),
+            "mom_x": mom_x,
+            "mom_y": mom_y,
         }
         _lc_cache[(tic_id, sector)] = entry
         _lc_cache["__last__"] = entry
@@ -147,7 +169,9 @@ async def analyze(
             )
         _cache_lc(parsed)
         result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
-        return result.to_dict()
+        d = result.to_dict()
+        d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+        return d
     except HTTPException:
         raise
     except Exception as e:
@@ -253,6 +277,7 @@ async def mast_analyze(query: MastQuery):
         "fallback": info.get("fallback", False),
         "tried": info.get("tried", []),
     }
+    out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
     return out
 
 
@@ -509,6 +534,100 @@ def api_exominer(req: ExominerRequest):
         )
     except Exception as e:
         raise _handle_exception("exominer", e)
+
+
+# -------------------------------------------------
+# Manual tiny-dip selector
+# -------------------------------------------------
+
+def _downsample_cached_lc(tic_id, sector, max_pts: int = 4000) -> Optional[dict]:
+    """Return a transport-friendly {t, f} from the cached cleaned LC."""
+    key = (tic_id, sector) if tic_id else "__last__"
+    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    if not cached:
+        return None
+    t = np.asarray(cached["t"], dtype=float)
+    f = np.asarray(cached["f"], dtype=float)
+    if t.size == 0:
+        return None
+    step = max(1, int(np.ceil(t.size / max_pts)))
+    return {"t": t[::step].tolist(), "f": f[::step].tolist()}
+
+
+class ManualDipRequest(BaseModel):
+    tic_id: Optional[int] = None
+    sector: Optional[int] = None
+    t_start: float
+    t_end: float
+    crowdsap: Optional[float] = None
+
+
+@app.post("/api/manual_dip")
+def api_manual_dip(req: ManualDipRequest):
+    """Characterise a user-marked time window as a dip: depth, duration,
+    shape (U/V) and — when centroid moments are cached — an on-target test."""
+    if req.t_end <= req.t_start:
+        raise HTTPException(status_code=400, detail="t_end must be greater than t_start.")
+
+    key = (req.tic_id, req.sector) if req.tic_id else "__last__"
+    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    if not cached:
+        raise HTTPException(
+            status_code=400,
+            detail="No light curve in cache. Run an analysis first.",
+        )
+
+    t = np.asarray(cached["t"], dtype=float)
+    f = np.asarray(cached["f"], dtype=float)
+
+    in_mask = (t >= req.t_start) & (t <= req.t_end)
+    n_in = int(in_mask.sum())
+    if n_in < 3:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {n_in} points inside the selected window; pick a wider span.",
+        )
+
+    # Baseline from a symmetric out-of-transit pad on either side.
+    pad = (req.t_end - req.t_start)
+    oot_mask = (
+        ((t >= req.t_start - pad) & (t < req.t_start))
+        | ((t > req.t_end) & (t <= req.t_end + pad))
+    )
+    baseline = float(np.median(f[oot_mask])) if oot_mask.sum() >= 3 else 1.0
+    min_flux = float(np.min(f[in_mask]))
+    depth = baseline - min_flux
+
+    out = {
+        "t_start": req.t_start,
+        "t_end": req.t_end,
+        "depth": depth,
+        "depth_pct": depth * 100.0,
+        "duration_hr": (req.t_end - req.t_start) * 24.0,
+        "n_points": n_in,
+        "baseline": baseline,
+    }
+
+    # Shape (U vs V)
+    out["shape"] = measure_shape(t, f, req.t_start, req.t_end)
+
+    # Centroid (only if cached moments line up with t)
+    mom_x = cached.get("mom_x")
+    mom_y = cached.get("mom_y")
+    if (
+        mom_x is not None
+        and mom_y is not None
+        and len(mom_x) == len(t)
+        and len(mom_y) == len(t)
+    ):
+        out["centroid"] = centroid_check(
+            t, np.asarray(mom_x, float), np.asarray(mom_y, float),
+            req.t_start, req.t_end,
+        )
+    else:
+        out["centroid"] = {"available": False}
+
+    return out
 
 
 # -------------------------------------------------
