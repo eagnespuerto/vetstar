@@ -706,7 +706,7 @@ function ResultsView({ result }: { result: VettingResult }) {
           <div className="flex gap-2">
             {result.star.tic_id && (
               <button
-                onClick={runHci}
+                onClick={() => runHci()}
                 disabled={hciLoading}
                 className="text-sm px-3 py-1.5 bg-teal-600 text-white rounded hover:bg-teal-700 disabled:bg-slate-300"
               >
