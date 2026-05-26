@@ -47,6 +47,8 @@ class TLCMGeometry:
     radius_ratio_k: Optional[float] = None
     a_over_rs: Optional[float] = None
     a_over_rs_assumption: Optional[str] = None
+    a_over_rs_dynamical: Optional[float] = None      # Kepler III / density route
+    a_over_rs_agreement_pct: Optional[float] = None  # duration vs dynamical
     impact_parameter_b: Optional[float] = None
     inclination_deg: Optional[float] = None
     stellar_density_kgm3: Optional[float] = None
@@ -83,6 +85,25 @@ def a_over_rs_from_duration(
     if val <= 0:
         return None
     return (period_d / (math.pi * t14_d)) * math.sqrt(val)
+
+
+def a_over_rs_from_density(period_d: float, mstar_sun: float,
+                           rstar_sun: float) -> Optional[float]:
+    """
+    a/Rs from Kepler's third law (Mp << M*), independent of the transit shape:
+
+        a/Rs = (G M* P^2 / (4 pi^2 R*^3))^(1/3)
+
+    Equivalent to inverting the stellar-density relation (TLCM eq. 59), since
+    rho_* fixes a/Rs for a given period. Uses only catalogue quantities we
+    already have: period, stellar mass, stellar radius.
+    """
+    if not (mstar_sun and rstar_sun) or period_d <= 0:
+        return None
+    p = period_d * DAY
+    m = mstar_sun * M_SUN
+    r = rstar_sun * R_SUN
+    return (G * m * p ** 2 / (4.0 * math.pi ** 2 * r ** 3)) ** (1.0 / 3.0)
 
 
 def stellar_density(period_d: float, a_over_rs: float, q: float = 0.0):
@@ -235,6 +256,19 @@ def compute_tlcm_geometry(
         if rstar_sun:
             res.a_au_photometric = res.a_over_rs * rstar_sun * RSUN_TO_AU
             res.mstar_from_density_sun = mass_from_density_radius(rho, rstar_sun)
+
+    # Independent dynamical route (Kepler III / density) from catalogue M*, R*.
+    res.a_over_rs_dynamical = a_over_rs_from_density(period_d, mstar_sun, rstar_sun)
+    if res.a_over_rs and res.a_over_rs_dynamical:
+        ad, ag = res.a_over_rs_dynamical, res.a_over_rs
+        res.a_over_rs_agreement_pct = 100.0 * abs(ag - ad) / ad
+        if res.a_over_rs_agreement_pct > 20.0:
+            cav.append(
+                f"a/Rs from transit duration ({ag:.1f}) and from Kepler/stellar "
+                f"density ({ad:.1f}) disagree by {res.a_over_rs_agreement_pct:.0f}% "
+                f"— possible eccentric orbit, grazing transit, dilution/blend, or "
+                f"inaccurate stellar parameters (TLCM §2.12, Appendix A)."
+            )
 
     # Inclination from geometry
     if res.a_over_rs and impact_parameter is not None:
