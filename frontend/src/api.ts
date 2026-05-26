@@ -65,6 +65,8 @@ export async function fetchHabitability(
     stellar_radius_sun: number;
     stellar_mass_sun: number;
     R_companion_Rjup: number;
+    planet_mass_earth: number;
+    use_archive_rv: boolean;
     n_sectors_with_detections: number;
     n_sectors_observed: number;
     vetting_verdict: Record<string, any>;
@@ -230,6 +232,7 @@ export interface ObservablesQuery {
   mp_mjup?: number;
   inclination_deg?: number;
   eccentricity?: number;
+  mr_relation?: string;
   vetting_verdict?: Record<string, any>;
 }
 

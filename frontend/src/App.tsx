@@ -513,7 +513,7 @@ function ResultsView({ result }: { result: VettingResult }) {
   const [msLoading, setMsLoading] = useState(false);
   const [msError, setMsError] = useState<string | null>(null);
 
-  const runHci = async () => {
+  const runHci = async (massEarth?: number) => {
     if (!result.star.tic_id) return;
     setHciLoading(true); setHciError(null);
     try {
@@ -532,6 +532,7 @@ function ResultsView({ result }: { result: VettingResult }) {
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
+        planet_mass_earth: massEarth ?? undefined,
         n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
         n_sectors_observed: 1,
         vetting_verdict: enrichedVerdict,
@@ -736,14 +737,14 @@ function ResultsView({ result }: { result: VettingResult }) {
 
         {hciData && <HabitabilityPanel data={hciData} />}
         {hciData?.observables && <ObservablesPanel obs={hciData.observables} tlcm={hciData.tlcm} aSource={hciData.semi_major_axis_source} />}
-        {hciData && <RVPanel ticId={result.star.tic_id} periodD={result.bls?.period ?? null} mstar={hciData?.planet?.stellar_mass_sun ?? null} />}
+        {hciData && <RVPanel ticId={result.star.tic_id} periodD={result.bls?.period ?? null} mstar={hciData?.planet?.stellar_mass_sun ?? null} onUseMass={(m) => runHci(m)} massInHci={hciData?.planet?.mass_earth ?? null} massSource={hciData?.planet?.mass_source ?? null} />}
         {multisectorData && <MultisectorPanel data={multisectorData} />}
       </section>
     </div>
   );
 }
 
-function RVPanel({ ticId, periodD, mstar }: { ticId: number | null; periodD: number | null; mstar: number | null }) {
+function RVPanel({ ticId, periodD, mstar, onUseMass, massInHci, massSource }: { ticId: number | null; periodD: number | null; mstar: number | null; onUseMass?: (m: number) => void; massInHci?: number | null; massSource?: string | null }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -809,6 +810,15 @@ function RVPanel({ ticId, periodD, mstar }: { ticId: number | null; periodD: num
             <dd className="mono">{fmt(comp.mp_mjup, 4)} / {fmt(comp.mp_earth, 4)}</dd></>}
         </dl>
       )}
+      {comp && onUseMass && (
+        <button onClick={() => onUseMass(comp.mp_earth)}
+          className="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700">
+          Use {fmt(comp.mp_earth, 3)} M⊕ in HCI (density check)
+        </button>
+      )}
+      {massInHci != null && (
+        <p className="text-xs text-slate-500">HCI size score currently using mass {fmt(massInHci, 3)} M⊕{massSource ? ` (${massSource})` : ""}.</p>
+      )}
       {data && data.available === false && (
         <p className="text-sm text-amber-700">No catalog RV semi-amplitude found — paste an RV time series below.</p>
       )}
@@ -848,7 +858,11 @@ function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSourc
     ["Insolation S (S⊕)", fmt(obs.insolation_searth)],
     ["Planet radius (R⊕ / R♃)", `${fmt(obs.planet?.rp_earth, 3)} / ${fmt(obs.planet?.rp_rjup, 3)}`],
     ["Planet mass (M♃)", `${fmt(obs.planet?.mp_mjup, 3)}  (${obs.planet?.mass_source})`],
-    ["RV semi-amplitude K (m/s)", fmt(obs.radial_velocity?.K_ms)],
+    ...(obs.planet?.mass_estimates_earth ? [["M–R estimates (M⊕): C&K / power-law",
+      `${fmt(obs.planet.mass_estimates_earth.chen_kipping, 3)} / ${fmt(obs.planet.mass_estimates_earth.powerlaw, 3)}`] as [string, any]] : []),
+    ["RV semi-amplitude K (m/s)", obs.radial_velocity?.K_ms_textbook !== undefined
+      ? `${fmt(obs.radial_velocity?.K_ms, 4)}  (textbook ${fmt(obs.radial_velocity?.K_ms_textbook, 4)}, Δ${fmt(obs.radial_velocity?.K_agreement_pct, 2)}%)`
+      : fmt(obs.radial_velocity?.K_ms)],
     ["Astrometric Δθ (μas)", obs.astrometric?.theta_uas !== undefined ? fmt(obs.astrometric.theta_uas, 4) : "— (needs distance)"],
     ["Predicted transit depth (%)", fmt(obs.transit?.depth_pct, 4)],
     ["Max projected separation (″)", fmt(obs.max_projected_separation_arcsec)],
@@ -923,6 +937,9 @@ function HabitabilityPanel({ data }: { data: any }) {
           <div>
             <span className="text-3xl font-bold">{score}</span>
             <span className="text-lg font-semibold ml-1">/ 100</span>
+            {hci.hci_low != null && hci.hci_high != null && (hci.hci_high - hci.hci_low) > 0.1 && (
+              <span className="ml-2 text-sm font-medium opacity-80">({hci.hci_low}–{hci.hci_high})</span>
+            )}
             <span className="ml-3 text-sm font-semibold">{hci.tier}</span>
           </div>
           <div className="text-right text-xs opacity-70">
