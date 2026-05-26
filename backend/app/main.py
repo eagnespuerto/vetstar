@@ -82,6 +82,7 @@ def _cache_lc(parsed: dict) -> None:
             "f": f_c,
             "mom_x": mom_x,
             "mom_y": mom_y,
+            "star": star,
         }
         _lc_cache[(tic_id, sector)] = entry
         _lc_cache["__last__"] = entry
@@ -409,6 +410,14 @@ async def habitability(query: HabitabilityQuery):
         source=exofop.get("source", "unknown"),
     )
 
+    # POE: if semi-major axis is unknown but we have period + stellar mass,
+    # derive it via Kepler's third law so the HZ sub-score has a real input.
+    if planet.semi_major_axis_au is None and planet.orbital_period_d and planet.stellar_mass_sun:
+        from .observables import semi_major_axis_from_period
+        planet.semi_major_axis_au = semi_major_axis_from_period(
+            planet.orbital_period_d, planet.stellar_mass_sun
+        )
+
     hci_result = compute_hci(
         planet=planet,
         vetting_verdict=query.vetting_verdict,
@@ -416,8 +425,21 @@ async def habitability(query: HabitabilityQuery):
         n_sectors_observed=query.n_sectors_observed,
     )
 
+    # POE predicted observables for this candidate (insolation, RV, etc.)
+    from .observables import compute_observables as _compute_obs
+    poe = _compute_obs(
+        teff_k=planet.stellar_teff,
+        rstar_sun=planet.stellar_radius_sun,
+        mstar_sun=planet.stellar_mass_sun,
+        distance_pc=star.get("distance"),
+        orbital_period_d=planet.orbital_period_d,
+        semi_major_axis_au=planet.semi_major_axis_au,
+        rp_earth=planet.radius_earth,
+    ).to_dict()
+
     return {
         "hci": hci_result.to_dict(),
+        "observables": poe,
         "planet": {
             "radius_earth": planet.radius_earth,
             "radius_source": radius_source,
@@ -522,7 +544,7 @@ def api_exominer(req: ExominerRequest):
             ),
         )
     try:
-        return _run_exominer(
+        result = _run_exominer(
             t=cached["t"],
             f=cached["f"],
             mom_x=cached.get("mom_x"),
@@ -532,8 +554,124 @@ def api_exominer(req: ExominerRequest):
             duration=req.duration,
             crowdsap=req.crowdsap,
         )
+        # Integrate POE predicted observables alongside the ML feature set.
+        star = cached.get("star")
+        depth_frac = None
+        try:
+            depth_frac = float(result["scalars"]["depth_ppm"]) / 1e6
+        except Exception:
+            pass
+        obs = compute_observables(
+            teff_k=getattr(star, "teff", None),
+            rstar_sun=getattr(star, "radius", None),
+            mstar_sun=getattr(star, "mass", None),
+            distance_pc=getattr(star, "distance", None),
+            orbital_period_d=req.period,
+            transit_depth_frac=depth_frac,
+        ).to_dict()
+        result["observables"] = obs
+        # Flatten the headline observables into the scalar feature vector so
+        # downstream ExoMiner consumers can use them directly.
+        result["scalars"]["a_au"] = (
+            round(obs["orbit"]["semi_major_axis_au"], 6)
+            if obs["orbit"].get("semi_major_axis_au") is not None else None
+        )
+        result["scalars"]["insolation_searth"] = (
+            round(obs["insolation_searth"], 4)
+            if obs.get("insolation_searth") is not None else None
+        )
+        result["scalars"]["rv_k_ms"] = (
+            round(obs["radial_velocity"]["K_ms"], 4)
+            if obs.get("radial_velocity", {}).get("K_ms") is not None else None
+        )
+        result["scalars"]["transit_depth_pred_pct"] = (
+            round(obs["transit"]["depth_pct"], 5)
+            if obs.get("transit", {}).get("depth_pct") is not None else None
+        )
+        return result
     except Exception as e:
         raise _handle_exception("exominer", e)
+
+
+# -------------------------------------------------
+# Predicted Observables for Exoplanets (POE)
+# -------------------------------------------------
+from .observables import compute_observables, RSUN_TO_RJUP as _RSUN_TO_RJUP
+
+
+class ObservablesQuery(BaseModel):
+    # Optional: auto-fill stellar params from ExoFOP/TIC for an object
+    tic_id: Optional[int] = None
+    # Stellar (override / user-specified)
+    stellar_teff: Optional[float] = None
+    stellar_radius_sun: Optional[float] = None
+    stellar_mass_sun: Optional[float] = None
+    luminosity_lsun: Optional[float] = None
+    distance_pc: Optional[float] = None
+    # Orbit (supply either period or a; the other is derived via Kepler III)
+    orbital_period_d: Optional[float] = None
+    semi_major_axis_au: Optional[float] = None
+    # Planet (supply radius in any of these; mass optional)
+    rp_rjup: Optional[float] = None
+    rp_earth: Optional[float] = None
+    transit_depth_frac: Optional[float] = None
+    mp_mjup: Optional[float] = None
+    inclination_deg: float = 90.0
+    eccentricity: float = 0.0
+    # Auto-detected mode: pull period/depth from a vetting result
+    vetting_verdict: Optional[dict] = None
+
+
+@app.post("/api/observables")
+async def observables(query: ObservablesQuery):
+    teff = query.stellar_teff
+    rstar = query.stellar_radius_sun
+    mstar = query.stellar_mass_sun
+    dist = query.distance_pc
+    period = query.orbital_period_d
+    depth = query.transit_depth_frac
+    rp_rjup = query.rp_rjup
+
+    # Auto-fill stellar params from ExoFOP/TIC when a TIC is given
+    exofop_source = None
+    if query.tic_id is not None:
+        try:
+            exofop = query_exofop(query.tic_id)
+            star = exofop.get("star", {}) or {}
+            exofop_source = exofop.get("source")
+            teff = teff if teff is not None else star.get("teff")
+            rstar = rstar if rstar is not None else star.get("radius")
+            mstar = mstar if mstar is not None else star.get("mass")
+            dist = dist if dist is not None else star.get("distance")
+        except Exception as e:
+            log.warning("ExoFOP lookup failed for TIC %s: %s", query.tic_id, e)
+
+    # Auto-detected: harvest period / depth / Rp from a vetting verdict blob
+    if query.vetting_verdict:
+        vv = query.vetting_verdict
+        period = period or vv.get("_bls_period") or vv.get("_period")
+        depth = depth or vv.get("_depth") or vv.get("_bls_depth")
+        if rp_rjup is None and vv.get("_R_companion_Rjup") is not None:
+            rp_rjup = vv.get("_R_companion_Rjup")
+
+    result = compute_observables(
+        teff_k=teff,
+        rstar_sun=rstar,
+        mstar_sun=mstar,
+        luminosity_lsun_override=query.luminosity_lsun,
+        distance_pc=dist,
+        orbital_period_d=period,
+        semi_major_axis_au=query.semi_major_axis_au,
+        rp_rjup=rp_rjup,
+        rp_earth=query.rp_earth,
+        transit_depth_frac=depth,
+        mp_mjup=query.mp_mjup,
+        inclination_deg=query.inclination_deg,
+        eccentricity=query.eccentricity,
+    )
+    out = result.to_dict()
+    out["exofop_source"] = exofop_source
+    return out
 
 
 # -------------------------------------------------
