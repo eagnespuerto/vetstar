@@ -871,13 +871,16 @@ function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSourc
   const rv = tl.radial_velocity || {};
   const tlRows: [string, any][] = [
     ["Radius ratio k = Rp/Rs", fmt(tl.radius_ratio_k, 4)],
-    ["Scaled semi-major axis a/Rs", fmt(tl.a_over_rs, 4)],
+    ["Scaled semi-major axis a/Rs (duration / dynamical)",
+      tl.a_over_rs_dynamical != null
+        ? `${fmt(tl.a_over_rs, 4)} / ${fmt(tl.a_over_rs_dynamical, 4)}${tl.a_over_rs_agreement_pct != null ? ` (Δ${fmt(tl.a_over_rs_agreement_pct, 1)}%)` : ""}`
+        : fmt(tl.a_over_rs, 4)],
     ["Stellar density (g/cm³ · ρ⊙)", `${fmt(tl.stellar_density_gcc, 3)} · ${fmt(tl.stellar_density_rho_sun, 3)}`],
     ["M★ from density (M⊙)", fmt(tl.mstar_from_density_sun, 3)],
     ["Impact parameter b / i (°)", `${fmt(tl.impact_parameter_b, 3)} / ${fmt(tl.inclination_deg, 4)}`],
     ["Absolute mass from RV (M♃)", rv.mp_mjup !== undefined ? fmt(rv.mp_mjup, 4) : "— (needs RV K)"],
   ];
-  const showTlcm = tl.radius_ratio_k != null || tl.a_over_rs != null;
+  const showTlcm = tl.radius_ratio_k != null || tl.a_over_rs != null || tl.a_over_rs_dynamical != null;
   return (
     <div className="rounded-lg border border-slate-300 bg-white p-4 space-y-2">
       <div className="flex items-center justify-between">
