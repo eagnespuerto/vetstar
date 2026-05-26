@@ -22,6 +22,29 @@ import { ShareToImgbbButton } from "./ShareButton";
 
 // ─── Sigma badge ────────────────────────────────────────────────────────────
 
+/** Format a possibly-null/NaN scalar consistently as "—" or a fixed-decimal
+ *  string with an optional unit. Keeps units attached only when there's a
+ *  real value, so missing scalars never render as a bare " d" / " h". */
+function fmtNum(
+  v: number | null | undefined,
+  opts: { decimals?: number; unit?: string; group?: boolean } = {}
+): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const { decimals = 2, unit, group = false } = opts;
+  const n = group
+    ? v.toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      })
+    : v.toFixed(decimals);
+  return unit ? `${n} ${unit}` : n;
+}
+
+/** NaN-safe value for the sigma progress bars. */
+function safeSigma(v: number | null | undefined): number {
+  return v != null && Number.isFinite(v) ? v : 0;
+}
+
 function SigmaBadge({ value }: { value: number | null | undefined }) {
   if (value == null || isNaN(value))
     return <span className="text-slate-400 font-mono">—</span>;
@@ -167,9 +190,9 @@ export default function ExoMinerPanel({
       : label;
 
   // Interpret diagnostics
-  const oe = s?.odd_even_sigma ?? 0;
-  const sec = s?.secondary_depth_sigma ?? 0;
-  const cen = s?.centroid_shift_sigma ?? 0;
+  const oe = safeSigma(s?.odd_even_sigma);
+  const sec = safeSigma(s?.secondary_depth_sigma);
+  const cen = safeSigma(s?.centroid_shift_sigma);
   const signals: string[] = [];
   if (oe >= 3) signals.push(`odd/even depth mismatch (${oe.toFixed(1)}σ)`);
   if (sec >= 3) signals.push(`secondary eclipse (${sec.toFixed(1)}σ)`);
@@ -263,19 +286,17 @@ export default function ExoMinerPanel({
                   <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2">
                     <ScalarRow
                       label="Period"
-                      value={<span className="font-mono">{s?.period_d?.toFixed(6)} d</span>}
+                      value={<span className="font-mono">{fmtNum(s?.period_d, { decimals: 6, unit: "d" })}</span>}
                     />
                     <ScalarRow
                       label="Duration"
-                      value={<span className="font-mono">{s?.duration_h?.toFixed(3)} h</span>}
+                      value={<span className="font-mono">{fmtNum(s?.duration_h, { decimals: 3, unit: "h" })}</span>}
                     />
                     <ScalarRow
                       label="Depth (local min)"
                       value={
                         <span className="font-mono">
-                          {s?.depth_ppm != null
-                            ? `${Math.round(s.depth_ppm).toLocaleString()} ppm`
-                            : "—"}
+                          {fmtNum(s?.depth_ppm, { decimals: 0, unit: "ppm", group: true })}
                         </span>
                       }
                     />
@@ -297,20 +318,16 @@ export default function ExoMinerPanel({
                     />
                     <ScalarRow
                       label="Scatter MAD"
-                      value={<span className="font-mono">{s?.scatter_mad?.toFixed(6)}</span>}
+                      value={<span className="font-mono">{fmtNum(s?.scatter_mad, { decimals: 6 })}</span>}
                     />
                     <ScalarRow
                       label="CROWDSAP"
-                      value={
-                        <span className="font-mono">
-                          {s?.crowdsap != null ? s.crowdsap.toFixed(3) : "—"}
-                        </span>
-                      }
+                      value={<span className="font-mono">{fmtNum(s?.crowdsap, { decimals: 3 })}</span>}
                     />
                     <ScalarRow
                       label="SG detrend window"
                       value={
-                        <span className="font-mono">{s?.sg_detrend_window_h?.toFixed(2)} h</span>
+                        <span className="font-mono">{fmtNum(s?.sg_detrend_window_h, { decimals: 2, unit: "h" })}</span>
                       }
                     />
                   </dl>
