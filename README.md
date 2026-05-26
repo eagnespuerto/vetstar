@@ -76,6 +76,25 @@ Results are surfaced in the Habitability panel and folded into the HCI
 the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
 `transit_depth_pred_pct`).
 
+### Transit geometry & absolute masses (TLCM)
+
+Model-independent quantities from the light curve itself, following Csizmadia
+(2020, MNRAS 496, 4442):
+
+- **Radius ratio** k = Rp/Rs = sqrt(depth) (flagged as a lower limit for grazing
+  transits)
+- **Scaled semi-major axis** a/Rs from the transit duration (TLCM eq. 70), giving
+  a **photometric semi-major axis** (a/Rs x R*) that needs no catalogue stellar mass
+- **Model-independent stellar density** rho_* = 3pi/(G P^2)(a/Rs)^3 (eq. 59), and a
+  stellar mass cross-check from rho_* + R*
+- **Absolute companion mass** from the SB1 mass function f(m) = K^3 P (1-e^2)^{3/2}/(2 pi G)
+  given a radial-velocity semi-amplitude K, solved exactly for Mp
+
+The photometric semi-major axis is preferred over the Kepler-from-catalogue-mass
+estimate when available, sharpening the HCI habitable-zone sub-score. Absolute mass
+from RV (via `POST /api/rv`, which also accepts an RV time series and reduces it to
+K by the min/max method) feeds the predicted observables and HCI. RV lookup is archive-first: it queries the NASA Exoplanet Archive `pscomppars` table for `pl_rvamp` and falls back to an uploaded RV series when the catalog has no K. The deploy must allow outbound HTTPS to `exoplanetarchive.ipac.caltech.edu`.
+
 ### Multi-sector analysis
 
 Fetches all available TESS sectors for a TIC from MAST (up to 10), runs
@@ -278,6 +297,7 @@ POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr
 POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
+POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
 POST /api/mast/multisector     {tic_id, ?sectors, detect_threshold, detect_min_snr} → timeline JSON
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
