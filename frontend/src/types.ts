@@ -55,4 +55,6 @@ export interface VettingResult {
   verdict: Verdict;
   plots: Record<string, string>;
   mast?: MastInfo;
+  /** Downsampled cleaned light curve for the manual dip selector. */
+  lightcurve?: { t: number[]; f: number[] };
 }

@@ -12,6 +12,7 @@ import {
 } from "./api";
 import type { VettingResult } from "./types";
 import ExoMinerPanel from "./ExoMinerPanel";
+import ManualDipSelector from "./ManualDipSelector";
 import { ShareToImgbbButton, ShareIcon } from "./ShareButton";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
@@ -373,37 +374,55 @@ function SensitivityPanel({
           </p>
 
           <div>
-            <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
-              <span>
-                Depth threshold:{" "}
-                <span className="font-mono">{params.threshold.toFixed(4)}</span>
-                <span className="text-slate-400 ml-1">
-                  (flag dips deeper than {((1 - params.threshold) * 100).toFixed(2)}%)
-                </span>
-              </span>
-              <button
-                onClick={() => setParams({ ...params, threshold: 0.997 })}
-                className="text-blue-600 hover:underline"
-              >
-                reset
-              </button>
-            </label>
-            <input
-              type="range"
-              min={0.95}
-              max={0.999}
-              step={0.001}
-              value={params.threshold}
-              onChange={(e) =>
-                setParams({ ...params, threshold: parseFloat(e.target.value) })
-              }
-              className="w-full"
-            />
-            <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
-              <span>0.95 (very loose)</span>
-              <span>0.997 default</span>
-              <span>0.999 (very strict)</span>
-            </div>
+            {(() => {
+              // Slider moves in log-depth space so the sensitive shallow end
+              // (0.1–0.5%) gets most of the travel. Stored value stays the
+              // raw threshold (0.95–0.999) — API unchanged.
+              const MIN_DEPTH = 0.001; // 0.1% — strict end
+              const MAX_DEPTH = 0.05; //  5%   — loose end
+              const lnMin = Math.log(MIN_DEPTH);
+              const lnMax = Math.log(MAX_DEPTH);
+              const depth = Math.min(Math.max(1 - params.threshold, MIN_DEPTH), MAX_DEPTH);
+              // pos 0 = loose (5%), 1 = strict (0.1%)
+              const pos = (lnMax - Math.log(depth)) / (lnMax - lnMin);
+              const setFromPos = (p: number) => {
+                const d = Math.exp(lnMax - p * (lnMax - lnMin));
+                setParams({ ...params, threshold: 1 - d });
+              };
+              return (
+                <>
+                  <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+                    <span>
+                      Depth threshold:{" "}
+                      <span className="font-mono">{params.threshold.toFixed(4)}</span>
+                      <span className="text-slate-400 ml-1">
+                        (flag dips deeper than {((1 - params.threshold) * 100).toFixed(2)}%)
+                      </span>
+                    </span>
+                    <button
+                      onClick={() => setParams({ ...params, threshold: 0.997 })}
+                      className="text-blue-600 hover:underline"
+                    >
+                      reset
+                    </button>
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.001}
+                    value={pos}
+                    onChange={(e) => setFromPos(parseFloat(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+                    <span>5% (very loose)</span>
+                    <span>~0.3% default</span>
+                    <span>0.1% (very strict)</span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           <div>
@@ -663,6 +682,9 @@ function ResultsView({ result }: { result: VettingResult }) {
           </table>
         )}
       </section>
+
+      {/* Manual tiny-dip selector */}
+      <ManualDipSelector result={result} />
 
       {/* Habitability Chance Index */}
       <section className="bg-white rounded-lg shadow p-5">

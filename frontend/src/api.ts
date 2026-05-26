@@ -180,3 +180,35 @@ export async function runExominer(req: ExominerRequest): Promise<ExominerResult>
   }
   return r.json();
 }
+
+// ---------- Manual tiny-dip selector -----------------------------------
+
+export interface ManualDip {
+  t_start: number;
+  t_end: number;
+  depth: number;
+  depth_pct: number;
+  duration_hr: number;
+  n_points: number;
+  baseline: number;
+  shape?: Record<string, any>;
+  centroid?: Record<string, any>;
+}
+
+export interface ManualDipRequest {
+  tic_id?: number;
+  sector?: number;
+  t_start: number;
+  t_end: number;
+  crowdsap?: number;
+}
+
+export async function analyzeManualDip(req: ManualDipRequest): Promise<ManualDip> {
+  const r = await fetch(`${API_BASE}/api/manual_dip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(`Manual dip analysis failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
