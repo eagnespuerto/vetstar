@@ -90,10 +90,16 @@ Model-independent quantities from the light curve itself, following Csizmadia
 - **Absolute companion mass** from the SB1 mass function f(m) = K^3 P (1-e^2)^{3/2}/(2 pi G)
   given a radial-velocity semi-amplitude K, solved exactly for Mp
 
-The photometric semi-major axis is preferred over the Kepler-from-catalogue-mass
+The forward RV semi-amplitude K is computed two ways and cross-checked: the exact POE form and the Clubb (2008) textbook closed form (K = 203.255 m/s (1 day/P)^{1/3} (Mp sin i/Mjup)(Msun/M*)^{2/3} / sqrt(1-e^2)); they agree to <0.2% (the gap is the Mp<<M* approximation). The photometric semi-major axis is preferred over the Kepler-from-catalogue-mass
 estimate when available, sharpening the HCI habitable-zone sub-score. Absolute mass
 from RV (via `POST /api/rv`, which also accepts an RV time series and reduces it to
 K by the min/max method) feeds the predicted observables and HCI. RV lookup is archive-first: it queries the NASA Exoplanet Archive `pscomppars` table for `pl_rvamp` and falls back to an uploaded RV series when the catalog has no K. The deploy must allow outbound HTTPS to `exoplanetarchive.ipac.caltech.edu`.
+
+When an absolute companion mass is available (RV semi-amplitude from the archive, an uploaded RV series, or an explicit override), the HCI **planet-size sub-score** is refined by bulk density (mass/radius): a rocky-consistent density (>~3.3 g/cm^3) confirms a solid surface, while a low density (<~2.2 g/cm^3) flags a volatile/H-He envelope and downgrades the score regardless of radius. Mass is resolved automatically from the archive on each HCI run (fails safe to radius-only) and can be set explicitly via `planet_mass_earth`.
+
+Planet mass from radius is computed with two relations for comparison — Chen & Kipping (2017, default) and a simple piecewise power-law — and both estimates plus their spread are reported (the mass-radius relation is the dominant error in the radius->mass->K chain). Select via `mr_relation` ("chen_kipping" | "powerlaw") on `/api/observables`.
+
+The mass-radius spread is propagated into the HCI itself: when only an estimated mass is available, both relations are run, the density check is evaluated for each, and the resulting size-score spread is carried into a reported **HCI range** (e.g. 78.5 with a 69.5-78.5 band). A measured mass (RV) collapses the range to a single value.
 
 ### Multi-sector analysis
 
