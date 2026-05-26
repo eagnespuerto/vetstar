@@ -242,3 +242,26 @@ export async function fetchObservables(query: ObservablesQuery) {
   if (!r.ok) throw new Error(`Observables fetch failed (${r.status}): ${await r.text()}`);
   return r.json();
 }
+
+// ---------- Radial velocity -> absolute mass ----------------------------
+
+export interface RVQuery {
+  tic_id?: number;               // archive-first lookup
+  orbital_period_d?: number;
+  stellar_mass_sun?: number;
+  inclination_deg?: number;
+  eccentricity?: number;
+  k_ms?: number;                 // direct semi-amplitude, OR ...
+  rv_values_ms?: number[];       // ... a time series to reduce via min/max
+  rv_reduce_method?: string;
+}
+
+export async function fetchRadialVelocity(query: RVQuery) {
+  const r = await fetch(`${API_BASE}/api/rv`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(query),
+  });
+  if (!r.ok) throw new Error(`RV fetch failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}

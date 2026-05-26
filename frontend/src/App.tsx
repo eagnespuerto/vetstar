@@ -4,6 +4,7 @@ import {
   downloadReport,
   fetchHabitability,
   fetchMultisector,
+  fetchRadialVelocity,
   mastAnalyze,
   mastReport,
   mastSectors,
@@ -522,6 +523,9 @@ function ResultsView({ result }: { result: VettingResult }) {
         ...result.verdict,
         _depth: result.events?.[0]?.depth ?? null,
         _bls_depth: result.bls?.depth ?? null,
+        _t14_d: result.shape?.t14_d ?? null,
+        _bls_duration: result.bls?.duration ?? null,
+        _shape_class: result.shape?.shape_class ?? null,
         _events: result.events,
       };
       const data = await fetchHabitability(result.star.tic_id, {
@@ -552,6 +556,9 @@ function ResultsView({ result }: { result: VettingResult }) {
           ...result.verdict,
           _depth: result.events?.[0]?.depth ?? null,
           _bls_depth: result.bls?.depth ?? null,
+          _t14_d: result.shape?.t14_d ?? null,
+          _bls_duration: result.bls?.duration ?? null,
+          _shape_class: result.shape?.shape_class ?? null,
           _events: result.events,
         };
         const updated = await fetchHabitability(result.star.tic_id, {
@@ -728,14 +735,106 @@ function ResultsView({ result }: { result: VettingResult }) {
         )}
 
         {hciData && <HabitabilityPanel data={hciData} />}
-        {hciData?.observables && <ObservablesPanel obs={hciData.observables} />}
+        {hciData?.observables && <ObservablesPanel obs={hciData.observables} tlcm={hciData.tlcm} aSource={hciData.semi_major_axis_source} />}
+        {hciData && <RVPanel ticId={result.star.tic_id} periodD={result.bls?.period ?? null} mstar={hciData?.planet?.stellar_mass_sun ?? null} />}
         {multisectorData && <MultisectorPanel data={multisectorData} />}
       </section>
     </div>
   );
 }
 
-function ObservablesPanel({ obs }: { obs: any }) {
+function RVPanel({ ticId, periodD, mstar }: { ticId: number | null; periodD: number | null; mstar: number | null }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
+  const [rvText, setRvText] = useState("");
+  const [periodIn, setPeriodIn] = useState<string>(periodD ? String(periodD) : "");
+  const [massIn, setMassIn] = useState<string>(mstar ? String(mstar) : "");
+  const fmt = (v: any, d = 4) =>
+    v === null || v === undefined ? "—" : typeof v === "number" ? Number(v.toPrecision(d)) : String(v);
+
+  const tryArchive = async () => {
+    if (!ticId) { setShowUpload(true); return; }
+    setLoading(true); setErr(null);
+    try {
+      const d = await fetchRadialVelocity({ tic_id: ticId, stellar_mass_sun: mstar ?? undefined });
+      setData(d);
+      if (!d.available) setShowUpload(true);
+    } catch (e: any) { setErr(e.message); setShowUpload(true); }
+    finally { setLoading(false); }
+  };
+
+  const submitUpload = async () => {
+    const vals = rvText.split(/[\s,]+/).map((s) => parseFloat(s)).filter((x) => !isNaN(x));
+    if (vals.length < 2) { setErr("Enter at least 2 RV values (m/s)."); return; }
+    const period = parseFloat(periodIn);
+    if (isNaN(period)) { setErr("Enter the orbital period (days)."); return; }
+    setLoading(true); setErr(null);
+    try {
+      const d = await fetchRadialVelocity({
+        orbital_period_d: period,
+        stellar_mass_sun: massIn ? parseFloat(massIn) : undefined,
+        rv_values_ms: vals,
+      });
+      setData(d);
+    } catch (e: any) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const comp = data?.companion;
+  return (
+    <div className="rounded-lg border border-slate-300 bg-white p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="font-bold text-slate-800">Radial velocity → absolute mass</h4>
+        <span className="text-xs text-slate-400">Archive K, else upload (TLCM mass function)</span>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={tryArchive} disabled={loading}
+          className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:bg-slate-300">
+          {loading ? "Querying…" : "Fetch RV from archive"}
+        </button>
+        <button onClick={() => setShowUpload((s) => !s)}
+          className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded text-sm hover:bg-slate-200">
+          Paste RV data
+        </button>
+      </div>
+      {err && <p className="text-sm text-rose-600">{err}</p>}
+      {data && data.available && (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+          <dt className="text-slate-600">Source</dt><dd className="mono">{data.source}</dd>
+          <dt className="text-slate-600">K (m/s)</dt><dd className="mono">{fmt(data.K_ms, 4)}</dd>
+          <dt className="text-slate-600">Mass function (M⊙)</dt><dd className="mono">{fmt(data.mass_function_msun)}</dd>
+          {comp && <><dt className="text-slate-600">Companion mass (M♃ / M⊕)</dt>
+            <dd className="mono">{fmt(comp.mp_mjup, 4)} / {fmt(comp.mp_earth, 4)}</dd></>}
+        </dl>
+      )}
+      {data && data.available === false && (
+        <p className="text-sm text-amber-700">No catalog RV semi-amplitude found — paste an RV time series below.</p>
+      )}
+      {showUpload && (
+        <div className="space-y-2 pt-2 border-t">
+          <textarea value={rvText} onChange={(e) => setRvText(e.target.value)} rows={3}
+            placeholder="RV values in m/s, comma/space/newline separated"
+            className="w-full text-sm border rounded p-2 mono" />
+          <div className="flex gap-2 text-sm">
+            <input value={periodIn} onChange={(e) => setPeriodIn(e.target.value)} placeholder="Period (d)"
+              className="border rounded p-1.5 w-28" />
+            <input value={massIn} onChange={(e) => setMassIn(e.target.value)} placeholder="M★ (M⊙)"
+              className="border rounded p-1.5 w-28" />
+            <button onClick={submitUpload} disabled={loading}
+              className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-slate-300">
+              Compute
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">K is estimated as (max − min)/2 from the series.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSource?: string }) {
   if (!obs) return null;
   const hz = obs.habitable_zone || {};
   const fmt = (v: any, d = 4) =>
@@ -744,7 +843,7 @@ function ObservablesPanel({ obs }: { obs: any }) {
     ["Luminosity (L⊙)", fmt(obs.luminosity_lsun)],
     ["HZ inner / centre / outer (AU)", `${fmt(hz.inner_au, 3)} / ${fmt(hz.center_au, 3)} / ${fmt(hz.outer_au, 3)}`],
     ["HZ centre (mas)", hz.center_mas !== undefined ? fmt(hz.center_mas, 3) : "— (needs distance)"],
-    ["Semi-major axis a (AU)", fmt(obs.orbit?.semi_major_axis_au)],
+    ["Semi-major axis a (AU)", `${fmt(obs.orbit?.semi_major_axis_au)}${aSource ? `  (${aSource})` : ""}`],
     ["Orbital period P (d)", fmt(obs.orbit?.orbital_period_d)],
     ["Insolation S (S⊕)", fmt(obs.insolation_searth)],
     ["Planet radius (R⊕ / R♃)", `${fmt(obs.planet?.rp_earth, 3)} / ${fmt(obs.planet?.rp_rjup, 3)}`],
@@ -754,6 +853,17 @@ function ObservablesPanel({ obs }: { obs: any }) {
     ["Predicted transit depth (%)", fmt(obs.transit?.depth_pct, 4)],
     ["Max projected separation (″)", fmt(obs.max_projected_separation_arcsec)],
   ];
+  const tl = tlcm || {};
+  const rv = tl.radial_velocity || {};
+  const tlRows: [string, any][] = [
+    ["Radius ratio k = Rp/Rs", fmt(tl.radius_ratio_k, 4)],
+    ["Scaled semi-major axis a/Rs", fmt(tl.a_over_rs, 4)],
+    ["Stellar density (g/cm³ · ρ⊙)", `${fmt(tl.stellar_density_gcc, 3)} · ${fmt(tl.stellar_density_rho_sun, 3)}`],
+    ["M★ from density (M⊙)", fmt(tl.mstar_from_density_sun, 3)],
+    ["Impact parameter b / i (°)", `${fmt(tl.impact_parameter_b, 3)} / ${fmt(tl.inclination_deg, 4)}`],
+    ["Absolute mass from RV (M♃)", rv.mp_mjup !== undefined ? fmt(rv.mp_mjup, 4) : "— (needs RV K)"],
+  ];
+  const showTlcm = tl.radius_ratio_k != null || tl.a_over_rs != null;
   return (
     <div className="rounded-lg border border-slate-300 bg-white p-4 space-y-2">
       <div className="flex items-center justify-between">
@@ -768,12 +878,28 @@ function ObservablesPanel({ obs }: { obs: any }) {
           </div>
         ))}
       </dl>
+      {showTlcm && (
+        <>
+          <div className="flex items-center justify-between pt-2 border-t mt-2">
+            <h4 className="font-bold text-slate-800">Transit geometry (TLCM)</h4>
+            <span className="text-xs text-slate-400">Csizmadia 2020</span>
+          </div>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+            {tlRows.map(([k, v]) => (
+              <div className="contents" key={k}>
+                <dt className="text-slate-600">{k}</dt>
+                <dd className="mono text-slate-900">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      )}
       {obs.orbit?.derivation && obs.orbit.derivation !== "as supplied" && (
         <p className="text-xs text-slate-500">{obs.orbit.derivation}.</p>
       )}
-      {obs.caveats?.length > 0 && (
+      {[...(obs.caveats || []), ...((tlcm && tlcm.caveats) || [])].length > 0 && (
         <ul className="text-xs text-slate-500 list-disc pl-4 space-y-0.5">
-          {obs.caveats.map((c: string, i: number) => <li key={i}>{c}</li>)}
+          {[...(obs.caveats || []), ...((tlcm && tlcm.caveats) || [])].map((c: string, i: number) => <li key={i}>{c}</li>)}
         </ul>
       )}
     </div>
