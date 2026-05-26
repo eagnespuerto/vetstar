@@ -728,8 +728,54 @@ function ResultsView({ result }: { result: VettingResult }) {
         )}
 
         {hciData && <HabitabilityPanel data={hciData} />}
+        {hciData?.observables && <ObservablesPanel obs={hciData.observables} />}
         {multisectorData && <MultisectorPanel data={multisectorData} />}
       </section>
+    </div>
+  );
+}
+
+function ObservablesPanel({ obs }: { obs: any }) {
+  if (!obs) return null;
+  const hz = obs.habitable_zone || {};
+  const fmt = (v: any, d = 4) =>
+    v === null || v === undefined ? "—" : typeof v === "number" ? Number(v.toPrecision(d)) : String(v);
+  const rows: [string, any][] = [
+    ["Luminosity (L⊙)", fmt(obs.luminosity_lsun)],
+    ["HZ inner / centre / outer (AU)", `${fmt(hz.inner_au, 3)} / ${fmt(hz.center_au, 3)} / ${fmt(hz.outer_au, 3)}`],
+    ["HZ centre (mas)", hz.center_mas !== undefined ? fmt(hz.center_mas, 3) : "— (needs distance)"],
+    ["Semi-major axis a (AU)", fmt(obs.orbit?.semi_major_axis_au)],
+    ["Orbital period P (d)", fmt(obs.orbit?.orbital_period_d)],
+    ["Insolation S (S⊕)", fmt(obs.insolation_searth)],
+    ["Planet radius (R⊕ / R♃)", `${fmt(obs.planet?.rp_earth, 3)} / ${fmt(obs.planet?.rp_rjup, 3)}`],
+    ["Planet mass (M♃)", `${fmt(obs.planet?.mp_mjup, 3)}  (${obs.planet?.mass_source})`],
+    ["RV semi-amplitude K (m/s)", fmt(obs.radial_velocity?.K_ms)],
+    ["Astrometric Δθ (μas)", obs.astrometric?.theta_uas !== undefined ? fmt(obs.astrometric.theta_uas, 4) : "— (needs distance)"],
+    ["Predicted transit depth (%)", fmt(obs.transit?.depth_pct, 4)],
+    ["Max projected separation (″)", fmt(obs.max_projected_separation_arcsec)],
+  ];
+  return (
+    <div className="rounded-lg border border-slate-300 bg-white p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="font-bold text-slate-800">Predicted Observables (POE)</h4>
+        <span className="text-xs text-slate-400">NASA Exoplanet Archive POE equations</span>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+        {rows.map(([k, v]) => (
+          <div className="contents" key={k}>
+            <dt className="text-slate-600">{k}</dt>
+            <dd className="mono text-slate-900">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {obs.orbit?.derivation && obs.orbit.derivation !== "as supplied" && (
+        <p className="text-xs text-slate-500">{obs.orbit.derivation}.</p>
+      )}
+      {obs.caveats?.length > 0 && (
+        <ul className="text-xs text-slate-500 list-disc pl-4 space-y-0.5">
+          {obs.caveats.map((c: string, i: number) => <li key={i}>{c}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

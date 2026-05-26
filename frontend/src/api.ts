@@ -212,3 +212,33 @@ export async function analyzeManualDip(req: ManualDipRequest): Promise<ManualDip
   if (!r.ok) throw new Error(`Manual dip analysis failed (${r.status}): ${await r.text()}`);
   return r.json();
 }
+
+// ---------- Predicted Observables for Exoplanets (POE) ------------------
+
+export interface ObservablesQuery {
+  tic_id?: number;
+  stellar_teff?: number;
+  stellar_radius_sun?: number;
+  stellar_mass_sun?: number;
+  luminosity_lsun?: number;
+  distance_pc?: number;
+  orbital_period_d?: number;
+  semi_major_axis_au?: number;
+  rp_rjup?: number;
+  rp_earth?: number;
+  transit_depth_frac?: number;
+  mp_mjup?: number;
+  inclination_deg?: number;
+  eccentricity?: number;
+  vetting_verdict?: Record<string, any>;
+}
+
+export async function fetchObservables(query: ObservablesQuery) {
+  const r = await fetch(`${API_BASE}/api/observables`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(query),
+  });
+  if (!r.ok) throw new Error(`Observables fetch failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
