@@ -340,6 +340,11 @@ async def habitability(query: HabitabilityQuery):
     star = exofop.get("star", {})
     tois = exofop.get("tois", [])
 
+    # ExoFOP often returns empty stellar fields, and FFI/QLP headers lack
+    # TEFF/RADIUS/LOGG. Backfill from TIC v8 so POE/physics/density can run.
+    from .tic_catalog import backfill_star
+    star, _used_tic = backfill_star(star, query.tic_id)
+
     best_toi = None
     for t in tois:
         d = (t.get("disposition") or "").upper()
@@ -699,6 +704,8 @@ async def observables(query: ObservablesQuery):
             exofop = query_exofop(query.tic_id)
             star = exofop.get("star", {}) or {}
             exofop_source = exofop.get("source")
+            from .tic_catalog import backfill_star
+            star, _used_tic = backfill_star(star, query.tic_id)
             teff = teff if teff is not None else star.get("teff")
             rstar = rstar if rstar is not None else star.get("radius")
             mstar = mstar if mstar is not None else star.get("mass")
