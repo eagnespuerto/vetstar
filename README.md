@@ -54,6 +54,28 @@ radius, period, semi-major axis, disposition) and stellar parameters. If
 ExoFOP is unavailable it falls back to the TIC v8 catalog via astroquery.
 All ExoFOP-derived values can be overridden from the request body.
 
+### Predicted Observables for Exoplanets (POE)
+
+Forward-model predicted observables using the NASA Exoplanet Archive POE
+equations (NExScI), for both auto-detected candidates and user-specified
+objects:
+
+- **Stellar luminosity** from Teff and R*
+- **Habitable-zone radii** (recent Venus / centre / early Mars) in AU, and in
+  mas when a distance is known
+- **Semi-major axis ⇄ orbital period** via Kepler's third law
+- **Insolation flux** in Earth units
+- **Radial-velocity semi-amplitude K** (forward model; planet mass estimated
+  from radius via the Chen & Kipping 2017 mass–radius relation when not given)
+- **Astrometric semi-amplitude Δθ** and **maximum projected separation**
+  (distance permitting)
+- **Predicted transit depth**
+
+Results are surfaced in the Habitability panel and folded into the HCI
+(semi-major axis derived from period feeds the habitable-zone sub-score) and
+the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
+`transit_depth_pred_pct`).
+
 ### Multi-sector analysis
 
 Fetches all available TESS sectors for a TIC from MAST (up to 10), runs
@@ -255,6 +277,7 @@ GET  /api/mast/sectors/{tic}                                                    
 POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr}   → JSON
 POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON
+POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/mast/multisector     {tic_id, ?sectors, detect_threshold, detect_min_snr} → timeline JSON
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
