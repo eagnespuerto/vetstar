@@ -531,6 +531,8 @@ function ResultsView({ result }: { result: VettingResult }) {
       const data = await fetchHabitability(result.star.tic_id, {
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
+        stellar_mass_sun: result.star.mass ?? undefined,
+        orbital_period_d: result.bls?.period ?? undefined,
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         planet_mass_earth: massEarth ?? undefined,
         n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
@@ -565,6 +567,8 @@ function ResultsView({ result }: { result: VettingResult }) {
         const updated = await fetchHabitability(result.star.tic_id, {
           stellar_teff: result.star.teff ?? undefined,
           stellar_radius_sun: result.star.radius ?? undefined,
+          stellar_mass_sun: result.star.mass ?? undefined,
+          orbital_period_d: result.bls?.period ?? undefined,
           R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
           n_sectors_with_detections: data.n_sectors_with_detections,
           n_sectors_observed: data.n_sectors_observed,
