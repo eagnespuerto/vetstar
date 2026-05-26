@@ -139,6 +139,37 @@ def rv_semi_amplitude_ms(
     return 203.0 * period_d ** (-1.0 / 3.0) * (mp_mjup * sin_i) / denom / ecc
 
 
+def rv_semi_amplitude_clubb_ms(
+    period_d: float,
+    mp_mjup: float,
+    mstar_sun: float,
+    inclination_deg: float = 90.0,
+    eccentricity: float = 0.0,
+) -> float:
+    """
+    Textbook closed form from Clubb (2008), "A Detailed Derivation of the
+    Radial Velocity Equation" (page-34 reference, days + Jupiter-mass form):
+
+        K = 203.255 m/s (1 day / P)^{1/3} (Mp sin i / Mjup)
+              (Msun / M*)^{2/3} / sqrt(1 - e^2)
+
+    This makes the Mp << M* approximation (eq. 57), so it differs from the
+    exact POE form (`rv_semi_amplitude_ms`) by <~0.1% in the planetary regime.
+    Provided as an independent cross-check / teaching reference. Other
+    published constants: 0.6395 (day, Earth-mass), 0.0895 (yr, Earth-mass),
+    28.435 (yr, Jupiter-mass).
+    """
+    sin_i = math.sin(math.radians(inclination_deg))
+    ecc = math.sqrt(max(1.0 - eccentricity ** 2, 1e-12))
+    return (
+        203.255
+        * (1.0 / period_d) ** (1.0 / 3.0)
+        * (mp_mjup * sin_i)
+        * (1.0 / mstar_sun) ** (2.0 / 3.0)
+        / ecc
+    )
+
+
 def astrometric_semi_amplitude_uas(
     mp_mjup: float, mstar_sun: float, a_au: float, distance_pc: float
 ) -> float:
@@ -189,6 +220,34 @@ def estimate_mass_from_radius(rp_earth: float) -> dict:
     }
 
 
+def estimate_mass_powerlaw(rp_earth: float) -> dict:
+    """
+    Simple piecewise power-law mass-radius relation (Earth units), the quick
+    estimate from the practical TIC->RV pipeline note:
+
+        Rp < 1.5 R_E : Mp = Rp^3.7          (rocky)
+        Rp < 4   R_E : Mp = 2.69 Rp^0.93     (Weiss & Marcy 2014-style)
+        else         : Mp = 0.5 Rp^1.5       (volatile/giant, rough)
+
+    Coarser than Chen & Kipping but a useful independent comparison; the
+    relations diverge most in the sub-Neptune range.
+    """
+    if rp_earth < 1.5:
+        m, branch = rp_earth ** 3.7, "rocky (Rp^3.7)"
+    elif rp_earth < 4.0:
+        m, branch = 2.69 * rp_earth ** 0.93, "intermediate (2.69 Rp^0.93)"
+    else:
+        m, branch = 0.5 * rp_earth ** 1.5, "giant (0.5 Rp^1.5)"
+    return {"mp_earth": m, "branch": branch, "degenerate": False}
+
+
+# Registry so callers can select a relation by name.
+MR_RELATIONS = {
+    "chen_kipping": estimate_mass_from_radius,
+    "powerlaw": estimate_mass_powerlaw,
+}
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -207,6 +266,7 @@ def compute_observables(
     mp_mjup: Optional[float] = None,
     inclination_deg: float = 90.0,
     eccentricity: float = 0.0,
+    mr_relation: str = "chen_kipping",
 ) -> ObservablesResult:
     """
     Compute the full POE observable set. Every output is best-effort: when a
@@ -273,15 +333,29 @@ def compute_observables(
         rp_earth = rp_rjup * RJUP_TO_REARTH
 
     mass_source = "supplied"
+    mass_estimates = None
     if mp_mjup is None and rp_earth is not None:
-        est = estimate_mass_from_radius(rp_earth)
+        # Evaluate every relation so the user sees the spread (the M-R relation
+        # is the dominant error in this chain, ~50-100%).
+        mass_estimates = {
+            name: fn(rp_earth)["mp_earth"] for name, fn in MR_RELATIONS.items()
+        }
+        chosen_fn = MR_RELATIONS.get(mr_relation, estimate_mass_from_radius)
+        est = chosen_fn(rp_earth)
         mp_mjup = est["mp_earth"] / MJUP_TO_MEARTH
-        mass_source = f"Chen & Kipping 2017 ({est['branch']})"
-        if est["degenerate"]:
+        label = "Chen & Kipping 2017" if mr_relation == "chen_kipping" else "power-law"
+        mass_source = f"{label} ({est['branch']})"
+        if est.get("degenerate"):
             cav.append(
                 "Planet radius is in the Jovian regime where radius does not "
                 "constrain mass; RV/astrometric amplitudes use a lower-bound "
                 "mass and are order-of-magnitude only."
+            )
+        vals = [v for v in mass_estimates.values() if v]
+        if vals and max(vals) / min(vals) > 1.5:
+            cav.append(
+                f"Mass-radius relations disagree by {max(vals)/min(vals):.1f}x "
+                f"({min(vals):.1f}-{max(vals):.1f} M_earth); mass is uncertain."
             )
     res.planet = {
         "rp_rjup": rp_rjup,
@@ -289,6 +363,7 @@ def compute_observables(
         "mp_mjup": mp_mjup,
         "mp_earth": (mp_mjup * MJUP_TO_MEARTH) if mp_mjup is not None else None,
         "mass_source": mass_source,
+        "mass_estimates_earth": mass_estimates,   # all relations, for comparison
     }
 
     # --- Transit depth (predicted) ---
@@ -300,9 +375,17 @@ def compute_observables(
 
     # --- Radial velocity ---
     if period_d and mp_mjup is not None and mstar_sun:
+        k_poe = rv_semi_amplitude_ms(
+            period_d, mp_mjup, mstar_sun, inclination_deg, eccentricity
+        )
+        k_clubb = rv_semi_amplitude_clubb_ms(
+            period_d, mp_mjup, mstar_sun, inclination_deg, eccentricity
+        )
         res.radial_velocity = {
-            "K_ms": rv_semi_amplitude_ms(
-                period_d, mp_mjup, mstar_sun, inclination_deg, eccentricity
+            "K_ms": k_poe,
+            "K_ms_textbook": k_clubb,            # Clubb 2008 closed form
+            "K_agreement_pct": (
+                100.0 * abs(k_poe - k_clubb) / k_poe if k_poe else None
             ),
             "inclination_deg": inclination_deg,
             "eccentricity": eccentricity,

@@ -315,6 +315,8 @@ class HabitabilityQuery(BaseModel):
     stellar_radius_sun: Optional[float] = None
     stellar_mass_sun: Optional[float] = None
     R_companion_Rjup: Optional[float] = None
+    planet_mass_earth: Optional[float] = None    # absolute mass override (RV, etc.)
+    use_archive_rv: bool = True                  # auto-derive mass from archive RV K
     n_sectors_with_detections: int = 1
     n_sectors_observed: int = 1
     vetting_verdict: Optional[dict] = None
@@ -410,6 +412,25 @@ async def habitability(query: HabitabilityQuery):
         source=exofop.get("source", "unknown"),
     )
 
+    # Resolve an absolute companion mass to feed the size sub-score (density).
+    # Priority: explicit override -> archive RV semi-amplitude -> none.
+    if query.planet_mass_earth is not None:
+        planet.mass_earth = query.planet_mass_earth
+        planet.mass_source = "provided"
+    elif query.use_archive_rv and planet.orbital_period_d and planet.stellar_mass_sun:
+        from .rv_fetch import fetch_rv_from_archive
+        from .tlcm_geometry import planet_mass_from_rv
+        rv = fetch_rv_from_archive(query.tic_id)
+        if rv.get("available") and rv.get("k_ms"):
+            period_rv = rv.get("orbital_period_d") or planet.orbital_period_d
+            ecc = rv.get("eccentricity") or 0.0
+            comp = planet_mass_from_rv(
+                rv["k_ms"], period_rv, planet.stellar_mass_sun,
+                inclination_deg=90.0, e=ecc,   # transiting => edge-on
+            )
+            planet.mass_earth = comp["mp_earth"]
+            planet.mass_source = "RV (archive)"
+
     # TLCM transit geometry: a model-independent stellar density and a
     # photometric semi-major axis (a/Rs x R*) that needs no catalogue mass.
     from .tlcm_geometry import compute_tlcm_geometry
@@ -436,11 +457,22 @@ async def habitability(query: HabitabilityQuery):
         )
         a_source = "Kepler III (P + M*)"
 
+    # When no measured mass is available, estimate it from the radius with
+    # every M-R relation so the spread propagates into the HCI as a range.
+    mass_estimates = None
+    if planet.mass_earth is None and planet.radius_earth:
+        from .observables import MR_RELATIONS
+        mass_estimates = [
+            fn(planet.radius_earth)["mp_earth"] for fn in MR_RELATIONS.values()
+        ]
+        planet.mass_source = "M–R relations"
+
     hci_result = compute_hci(
         planet=planet,
         vetting_verdict=query.vetting_verdict,
         n_sectors_with_detections=query.n_sectors_with_detections,
         n_sectors_observed=query.n_sectors_observed,
+        mass_estimates_earth=mass_estimates,
     )
 
     # POE predicted observables for this candidate (insolation, RV, etc.)
@@ -462,6 +494,8 @@ async def habitability(query: HabitabilityQuery):
         "semi_major_axis_source": a_source,
         "planet": {
             "radius_earth": planet.radius_earth,
+            "mass_earth": planet.mass_earth,
+            "mass_source": planet.mass_source,
             "radius_source": radius_source,
             "semi_major_axis_au": planet.semi_major_axis_au,
             "orbital_period_d": planet.orbital_period_d,
@@ -643,6 +677,7 @@ class ObservablesQuery(BaseModel):
     impact_parameter: Optional[float] = None # b; if absent, central transit assumed
     grazing: bool = False
     k_rv_ms: Optional[float] = None          # RV semi-amplitude -> absolute mass
+    mr_relation: str = "chen_kipping"        # or "powerlaw" (mass from radius)
     # Auto-detected mode: pull period/depth from a vetting result
     vetting_verdict: Optional[dict] = None
 
@@ -726,6 +761,7 @@ async def observables(query: ObservablesQuery):
         mp_mjup=mp_mjup,
         inclination_deg=query.inclination_deg,
         eccentricity=query.eccentricity,
+        mr_relation=query.mr_relation,
     )
     out = result.to_dict()
     out["tlcm"] = tlcm

@@ -42,6 +42,12 @@ STEHM_SAFE_RE   = 0.8   # Default threshold: ≥0.8 R⊕ retains atmosphere
 STEHM_MARGIN_RE = 0.7   # Possible under favourable conditions
 STEHM_UPPER_RE  = 2.2   # Above this: likely sub-Neptune, not rocky/habitable
 
+# Bulk-density composition bands (Earth densities; rho_Earth = 5.51 g/cm^3).
+# Used only when an absolute mass (e.g. from RV) is available alongside radius.
+RHO_EARTH_GCC = 5.51
+RHO_ROCKY_REL = 0.6     # >= 0.6 rho_E (~3.3 g/cm^3): rocky-consistent
+RHO_VOLATILE_REL = 0.4  # <  0.4 rho_E (~2.2 g/cm^3): volatile/gas-rich envelope
+
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -56,6 +62,8 @@ class PlanetCandidate:
     stellar_radius_sun: Optional[float] = None
     stellar_teff: Optional[float] = None
     stellar_mass_sun: Optional[float] = None
+    mass_earth: Optional[float] = None        # absolute companion mass (e.g. RV)
+    mass_source: Optional[str] = None
     depth_ppm: Optional[float] = None
     duration_hr: Optional[float] = None
     source: str = "unknown"
@@ -68,6 +76,8 @@ class SubScore:
     weight: float
     label: str
     explanation: str
+    score_low: Optional[float] = None
+    score_high: Optional[float] = None
 
 
 @dataclass
@@ -75,6 +85,8 @@ class HabitabilityResult:
     hci: float
     tier: str
     tier_color: str
+    hci_low: Optional[float] = None
+    hci_high: Optional[float] = None
     sub_scores: list = field(default_factory=list)
     caveats: list = field(default_factory=list)
     paper_ref: str = "Hill et al. (2026), arXiv:2605.00170 — STEHM"
@@ -87,7 +99,19 @@ class HabitabilityResult:
 # Sub-score functions
 # ---------------------------------------------------------------------------
 
-def _score_planet_size(rp: Optional[float]) -> SubScore:
+def _density_verdict(rho_rel: float):
+    """Return (score_multiplier, label_override_or_None, note) for a density."""
+    rho_gcc = rho_rel * RHO_EARTH_GCC
+    if rho_rel >= RHO_ROCKY_REL:
+        return 1.1, None, f"{rho_gcc:.1f} g/cm³ (~{rho_rel:.1f} ρ⊕): rocky-consistent"
+    if rho_rel < RHO_VOLATILE_REL:
+        return 0.35, "Volatile-rich", f"{rho_gcc:.1f} g/cm³ (~{rho_rel:.1f} ρ⊕): too low for rock"
+    return 0.7, None, f"{rho_gcc:.1f} g/cm³ (~{rho_rel:.1f} ρ⊕): intermediate"
+
+
+def _score_planet_size(rp: Optional[float], mp_earth: Optional[float] = None,
+                       mass_source: Optional[str] = None,
+                       mass_estimates: Optional[list] = None) -> SubScore:
     w = 0.30
     if rp is None:
         return SubScore("Planet size", 0.5, w, "Unknown",
@@ -102,19 +126,41 @@ def _score_planet_size(rp: Optional[float]) -> SubScore:
                         f"atmosphere retention is effectively zero.")
     if rp >= STEHM_SAFE_RE:
         s = 0.75 + 0.25 * min((rp - STEHM_SAFE_RE) / (1.0 - STEHM_SAFE_RE), 1.0)
-        return SubScore("Planet size", s, w, "Favourable",
+        base = SubScore("Planet size", s, w, "Favourable",
                         f"{rp:.2f} R⊕ ≥ 0.8 R⊕ STEHM threshold — can retain a "
                         f"long-term CO₂ atmosphere under Earth-like conditions.")
-    if rp >= STEHM_MARGIN_RE:
+    elif rp >= STEHM_MARGIN_RE:
         s = 0.35 + 0.40 * (rp - STEHM_MARGIN_RE) / (STEHM_SAFE_RE - STEHM_MARGIN_RE)
-        return SubScore("Planet size", s, w, "Marginal",
+        base = SubScore("Planet size", s, w, "Marginal",
                         f"{rp:.2f} R⊕ is below the default STEHM threshold (0.8 R⊕). "
                         f"Atmosphere retention requires favourable formation conditions "
                         f"(high carbon, cool mantle start, low CRF — Hill et al. 2026 §5).")
-    s = 0.05 + 0.30 * (rp - 0.5) / (STEHM_MARGIN_RE - 0.5)
-    return SubScore("Planet size", s, w, "Unlikely",
-                    f"{rp:.2f} R⊕ < 0.7 R⊕ — STEHM predicts rapid atmosphere loss "
-                    f"even under the most favourable conditions (Hill et al. 2026 Fig 5).")
+    else:
+        s = 0.05 + 0.30 * (rp - 0.5) / (STEHM_MARGIN_RE - 0.5)
+        base = SubScore("Planet size", s, w, "Unlikely",
+                        f"{rp:.2f} R⊕ < 0.7 R⊕ — STEHM predicts rapid atmosphere loss "
+                        f"even under the most favourable conditions (Hill et al. 2026 Fig 5).")
+
+    # Refine with bulk density. A measured mass (RV) gives a single density; a
+    # mass from the M-R relations gives a *range*, which we propagate into the
+    # score so the dominant M-R uncertainty is visible in the final HCI.
+    masses = [m for m in (mass_estimates or ([mp_earth] if mp_earth else [])) if m and m > 0]
+    if masses and rp > 0:
+        radius_only = base.score
+        scored = [min(1.0, radius_only * _density_verdict(m / rp ** 3)[0]) for m in masses]
+        central_mp = mp_earth if (mp_earth and mp_earth > 0) else sorted(masses)[len(masses) // 2]
+        mult, label, note = _density_verdict(central_mp / rp ** 3)
+        base.score = min(1.0, radius_only * mult)
+        if label:
+            base.label = label
+        src = f" ({mass_source})" if mass_source else ""
+        base.explanation += f" Mass {central_mp:.1f} M⊕{src} ⇒ density {note}."
+        if len(scored) > 1 and max(scored) - min(scored) > 0.02:
+            base.score_low, base.score_high = min(scored), max(scored)
+            base.explanation += (
+                f" Mass–radius spread ({min(masses):.1f}–{max(masses):.1f} M⊕) maps "
+                f"to a size score of {base.score_low:.2f}–{base.score_high:.2f}.")
+    return base
 
 
 def _score_habitable_zone(a_au, teff, rstar, mstar) -> SubScore:
@@ -262,9 +308,11 @@ def compute_hci(
     vetting_verdict: Optional[dict] = None,
     n_sectors_with_detections: int = 1,
     n_sectors_observed: int = 1,
+    mass_estimates_earth: Optional[list] = None,
 ) -> HabitabilityResult:
     subs = [
-        _score_planet_size(planet.radius_earth),
+        _score_planet_size(planet.radius_earth, planet.mass_earth,
+                           planet.mass_source, mass_estimates_earth),
         _score_habitable_zone(
             planet.semi_major_axis_au, planet.stellar_teff,
             planet.stellar_radius_sun, planet.stellar_mass_sun,
@@ -277,6 +325,15 @@ def compute_hci(
 
     total_w = sum(s.weight for s in subs)
     hci = sum(s.score * s.weight for s in subs) / total_w * 100
+
+    # Propagate the size sub-score range (driven by the mass-radius spread)
+    # into an HCI range; only the size term varies with mass.
+    size = subs[0]
+    hci_low = hci_high = None
+    if size.score_low is not None and size.score_high is not None:
+        f = size.weight / total_w * 100
+        hci_low = max(0.0, hci - (size.score - size.score_low) * f)
+        hci_high = min(100.0, hci + (size.score_high - size.score) * f)
 
     if hci >= 70:
         tier, color = "Promising", "bg-emerald-100 border-emerald-500 text-emerald-900"
@@ -292,6 +349,7 @@ def compute_hci(
         "eclipsing_binary_candidate", "false_positive_blend"
     ):
         hci = min(hci, 12.0)
+        hci_low = hci_high = None
         tier, color = "Very unlikely", "bg-slate-100 border-slate-400 text-slate-700"
 
     caveats = []
@@ -326,6 +384,8 @@ def compute_hci(
         hci=round(hci, 1),
         tier=tier,
         tier_color=color,
+        hci_low=round(hci_low, 1) if hci_low is not None else None,
+        hci_high=round(hci_high, 1) if hci_high is not None else None,
         sub_scores=[asdict(s) for s in subs],
         caveats=caveats,
     )
