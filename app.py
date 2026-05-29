@@ -60,10 +60,25 @@ def ensure_python_deps():
     _run([sys.executable, "-m", "pip", "install", "-r", str(BACKEND / "requirements.txt")])
 
 
+def _frontend_is_stale() -> bool:
+    """True if any frontend source file is newer than the built bundle."""
+    built = DIST / "index.html"
+    if not built.is_file():
+        return True
+    built_mtime = built.stat().st_mtime
+    watch = [FRONTEND / "index.html"]
+    src = FRONTEND / "src"
+    if src.is_dir():
+        watch += list(src.rglob("*"))
+    return any(p.is_file() and p.stat().st_mtime > built_mtime for p in watch)
+
+
 def ensure_frontend_built(skip_build: bool):
     if IS_FROZEN or skip_build:
         return DIST.is_dir()
-    if DIST.is_dir() and (DIST / "index.html").is_file():
+    # Use an existing build only if it's up to date with the source. Otherwise
+    # rebuild, so source edits are always reflected when npm is available.
+    if DIST.is_dir() and (DIST / "index.html").is_file() and not _frontend_is_stale():
         return True
 
     if not shutil.which("npm"):
