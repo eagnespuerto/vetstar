@@ -24,6 +24,57 @@ from scipy.ndimage import median_filter
 
 
 # ----------------------------------------------------------------------
+# Tolerances
+# ----------------------------------------------------------------------
+# How far two transit/eclipse durations may differ (in HOURS) and still be
+# treated as "the same" event — across cycles within a sector, or across
+# sectors in a multi-sector run. Mature vetting pipelines allow a small
+# slop here so that noise-driven width differences are NOT mistaken for the
+# unequal primary/secondary durations that betray an eclipsing binary.
+# Tune this if real signals are being over-flagged as EBs.
+DURATION_MATCH_TOL_H = 0.05  # hours
+
+# Fractional tolerance for calling two periods "the same" across sectors.
+PERIOD_MATCH_TOL_FRAC = 0.02  # 2%
+
+# Companion-size thresholds used by the verdict. A radius just above the
+# planetary cap is BORDERLINE — mature pipelines do not call an eclipsing
+# binary on size alone; they need an eclipse signature (secondary / odd-even)
+# or an RV mass. Only a radius well above the cap is treated as unambiguously
+# stellar/brown-dwarf sized.
+COMPANION_PLANET_CAP_RJUP = 2.2   # largest plausible (inflated) giant planet
+COMPANION_EB_HARD_RJUP = 4.0      # above this: unambiguously not a planet
+
+
+def durations_consistent(durations_h, tol_h: float = DURATION_MATCH_TOL_H) -> bool:
+    """True if all finite durations (hours) lie within ``tol_h`` of their median.
+
+    A single value (or none) is trivially consistent. This is the absolute
+    test used when the durations being compared are already robust medians
+    (e.g. odd-vs-even transit durations, or one representative event per
+    sector) rather than raw, noise-broadened single-event widths.
+    """
+    arr = np.asarray(
+        [d for d in durations_h if d is not None and np.isfinite(d)], dtype=float
+    )
+    if arr.size < 2:
+        return True
+    return bool(np.all(np.abs(arr - np.median(arr)) <= tol_h))
+
+
+def periods_consistent(periods_d, tol_frac: float = PERIOD_MATCH_TOL_FRAC) -> bool:
+    """True if all finite periods agree to within ``tol_frac`` of their median."""
+    arr = np.asarray(
+        [p for p in periods_d if p is not None and np.isfinite(p) and p > 0],
+        dtype=float,
+    )
+    if arr.size < 2:
+        return True
+    med = np.median(arr)
+    return bool(med > 0 and np.all(np.abs(arr - med) / med <= tol_frac))
+
+
+# ----------------------------------------------------------------------
 # Data containers
 # ----------------------------------------------------------------------
 @dataclass
@@ -435,6 +486,8 @@ def make_verdict(
     odd_even: dict,
     secondary: dict,
     bls_sde: float,
+    duration_consistent: Optional[bool] = None,
+    duration_tol_h: float = DURATION_MATCH_TOL_H,
 ) -> dict:
     flags = []
     reasons = []
@@ -450,13 +503,28 @@ def make_verdict(
             "reasons": ["No discrete dip events found and BLS SDE < 7."],
         }
 
-    # Physics-based companion size
+    # Physics-based companion size. A radius just over the planetary cap is
+    # BORDERLINE, not an automatic EB — only a radius well above the cap is a
+    # hard EB indicator on size alone.
+    companion_borderline = False
     if physics.get("available"):
-        if physics["R_companion_Rjup"] > 2.5:
+        R = physics["R_companion_Rjup"]
+        if R > COMPANION_EB_HARD_RJUP:
             flags.append("companion_too_large_for_planet")
             reasons.append(
-                f"Implied companion radius {physics['R_companion_Rjup']:.1f} R_Jup "
-                f"({physics['category']}) — exceeds planetary cap (~2.2 R_Jup)."
+                f"Implied companion radius {R:.1f} R_Jup ({physics['category']}) — "
+                f"far above the planetary cap (~{COMPANION_PLANET_CAP_RJUP} R_Jup); "
+                "stellar / brown-dwarf sized."
+            )
+        elif R > COMPANION_PLANET_CAP_RJUP:
+            companion_borderline = True
+            flags.append("companion_borderline_large")
+            reasons.append(
+                f"Implied companion radius {R:.1f} R_Jup is just above the "
+                f"~{COMPANION_PLANET_CAP_RJUP} R_Jup planetary cap — borderline. "
+                "Size alone is not treated as proof of an eclipsing binary; an "
+                "eclipse signature (secondary or odd/even) or an RV mass is "
+                "needed to confirm."
             )
 
     # Centroid offset = blend
@@ -480,6 +548,21 @@ def make_verdict(
             f"Secondary eclipse detected at phase 0.5 ({secondary['sigma']:.1f}σ) — eclipsing-binary indicator."
         )
 
+    # Transit-duration corroboration (±duration_tol_h). Consistent durations
+    # across events support a single real transiting body; large variation is a
+    # caution flag (blends / multiple signals) but is not, by itself, an EB call.
+    if duration_consistent is True:
+        reasons.append(
+            f"Transit durations agree across events to within ±{duration_tol_h:.2f} h "
+            "— consistent with a single repeating transit."
+        )
+    elif duration_consistent is False:
+        flags.append("duration_inconsistent")
+        reasons.append(
+            f"Transit durations vary by more than ±{duration_tol_h:.2f} h between "
+            "events — check for blends or more than one signal."
+        )
+
     # Single-transit case
     if n_events == 1:
         reasons.append(
@@ -487,7 +570,10 @@ def make_verdict(
         )
 
     # Decide
-    if "companion_too_large_for_planet" in flags or "secondary_eclipse_detected" in flags or "odd_even_mismatch" in flags:
+    has_eclipse_indicator = (
+        "secondary_eclipse_detected" in flags or "odd_even_mismatch" in flags
+    )
+    if "companion_too_large_for_planet" in flags or has_eclipse_indicator:
         category = "eclipsing_binary_candidate"
         headline = "Eclipsing binary candidate"
         confidence = 0.85
@@ -495,6 +581,12 @@ def make_verdict(
         category = "false_positive_blend"
         headline = "Likely background blend (false positive)"
         confidence = 0.75
+    elif companion_borderline:
+        # Borderline size, no corroborating eclipse signature -> large planet
+        # candidate pending RV (matches mature-pipeline behaviour).
+        category = "planet_candidate"
+        headline = "Large planet candidate (RV needed to exclude brown dwarf)"
+        confidence = 0.55
     elif physics.get("available") and physics.get("is_planet_candidate"):
         category = "planet_candidate"
         headline = "Planet candidate (further vetting required)"
@@ -762,33 +854,87 @@ def run_full_vetting(
 # Multi-sector analysis
 # ----------------------------------------------------------------------
 
+# Multi-sector runs are intentionally capped: from each of up to MAX_SECTORS
+# sectors we take up to EVENTS_PER_SECTOR (2) of the deepest events, then group
+# them into up to MAX_OBJECTS (2) distinct objects by transit duration. Each
+# object is confirmed by checking its members share the same duration and
+# period across sectors.
+MAX_SECTORS = 5
+EVENTS_PER_SECTOR = 2
+MAX_OBJECTS = 2
+
+
+def _cluster_events_into_objects(reps: list, tol_h: float, max_objects: int = MAX_OBJECTS) -> list:
+    """Group representative events into <=max_objects clusters by duration.
+
+    Events whose durations sit within ``tol_h`` of each other join the same
+    object; a gap larger than ``tol_h`` starts a new object. If that yields
+    more than ``max_objects`` clusters, the two closest are merged until the
+    cap is met. Returns a list of lists of rep dicts.
+    """
+    if not reps:
+        return []
+    s = sorted(reps, key=lambda e: e["duration_h"])
+    clusters = [[s[0]]]
+    for prev, cur in zip(s, s[1:]):
+        if cur["duration_h"] - prev["duration_h"] <= tol_h:
+            clusters[-1].append(cur)
+        else:
+            clusters.append([cur])
+    while len(clusters) > max_objects:
+        gaps = [
+            (clusters[i + 1][0]["duration_h"] - clusters[i][-1]["duration_h"], i)
+            for i in range(len(clusters) - 1)
+        ]
+        _, i = min(gaps, key=lambda g: g[0])
+        clusters[i].extend(clusters[i + 1])
+        del clusters[i + 1]
+    return clusters
+
+
 def run_multisector_analysis(
     sector_results: list,          # list of (sector_num, VettingResult)
     period_d: float | None = None, # known period from ExoFOP / BLS
     t0: float | None = None,       # reference transit time
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    duration_tol_h: float = DURATION_MATCH_TOL_H,
 ) -> dict:
     """
     Given vetting results from multiple sectors, build:
       - A detection timeline: which sectors showed events
-      - A phase-folded light curve (if period known)
-      - A combined-sector BLS periodogram
-      - A consistent ephemeris check (period refinement)
+      - Up to EVENTS_PER_SECTOR representative (deepest) events per sector,
+        across up to MAX_SECTORS sectors
+      - Grouping of those events into up to MAX_OBJECTS distinct objects by
+        transit duration, each confirmed to share the SAME duration (within
+        ``duration_tol_h`` hours) and the SAME period across sectors
+      - A consensus ephemeris (period refinement)
 
     Returns a plain dict — JSON-serialisable, ships to frontend.
     """
     if not sector_results:
         return {"error": "No sector results provided."}
 
+    # Cap to MAX_SECTORS, preferring sectors that show a dip and, among those,
+    # the deepest detection (most diagnostic).
+    ranked = sorted(
+        sector_results,
+        key=lambda sr: (
+            len(sr[1].events) > 0,
+            max((e["depth"] for e in sr[1].events), default=0.0),
+        ),
+        reverse=True,
+    )
+    sector_results = ranked[:MAX_SECTORS]
+
     timeline = []
-    all_t = []
-    all_f = []
-    all_fe = []
+    representative_events = []  # up to EVENTS_PER_SECTOR per sector with a dip
 
     for sec_num, res in sector_results:
         has_dip = len(res.events) > 0
-        deepest_depth = max((e["depth"] for e in res.events), default=0.0)
+        # Up to EVENTS_PER_SECTOR deepest events from this sector.
+        top_evs = sorted(res.events, key=lambda e: e["depth"], reverse=True)[:EVENTS_PER_SECTOR]
+        deepest_depth = top_evs[0]["depth"] if top_evs else 0.0
         timeline.append({
             "sector": sec_num,
             "n_events": len(res.events),
@@ -798,6 +944,14 @@ def run_multisector_analysis(
             "bls_sde": res.bls.get("sde"),
             "verdict": res.verdict.get("category"),
         })
+        for rep in top_evs:
+            representative_events.append({
+                "sector": sec_num,
+                "t_center": round(0.5 * (rep["t_start"] + rep["t_end"]), 5),
+                "duration_h": round(rep["duration_d"] * 24.0, 4),
+                "depth_pct": round(rep["depth"] * 100, 4),
+                "bls_period_d": res.bls.get("period"),
+            })
 
     n_with_dip = sum(1 for x in timeline if x["has_dip"])
     n_total = len(timeline)
@@ -818,27 +972,74 @@ def run_multisector_analysis(
             "source": f"median of {len(p_arr)} sector BLS peaks",
         }
 
-    # Phase-fold plot if period available
-    phase_fold_plot = None
-    if period_consensus and len(sector_results) >= 2:
-        try:
-            all_t_arr = np.concatenate([
-                res.summary.get("_t_clean", np.array([])) for _, res in sector_results
-            ])
-            all_f_arr = np.concatenate([
-                res.summary.get("_f_clean", np.array([])) for _, res in sector_results
-            ])
-            # We don't stash raw arrays — make a fold directly from stored data
-            # by using whatever t0 we have.
-            P = period_consensus["value_d"]
-            if t0 is None:
-                # Anchor on first sector's BLS t0
-                for _, res in sector_results:
-                    if res.bls.get("t0"):
-                        t0 = res.bls["t0"]
-                        break
-        except Exception:
-            pass
+    # --- Group events into up to MAX_OBJECTS distinct objects by duration ----
+    clusters = _cluster_events_into_objects(representative_events, duration_tol_h)
+    objects = []
+    for oid, members in enumerate(clusters, start=1):
+        durs = [m["duration_h"] for m in members]
+        pers = [m["bls_period_d"] for m in members]
+        sectors = sorted({m["sector"] for m in members})
+        dur_ok = durations_consistent(durs, tol_h=duration_tol_h)
+        per_ok = periods_consistent(pers)
+        spread = round(max(durs) - min(durs), 4) if durs else None
+        # "Confirmed" requires the same object seen in >=2 sectors with matching
+        # duration and period.
+        confirmed = bool(len(sectors) >= 2 and dur_ok and per_ok)
+        if len(sectors) < 2:
+            note = (
+                f"Seen in only {len(sectors)} sector — needs a second sector to "
+                "cross-confirm duration and period."
+            )
+        elif confirmed:
+            note = (
+                f"Confirmed across {len(sectors)} sectors: matching duration "
+                f"(spread {spread:.3f} h ≤ {duration_tol_h:.3f} h) and period."
+            )
+        else:
+            bits = []
+            if not dur_ok:
+                bits.append(f"duration spread {spread:.3f} h > {duration_tol_h:.3f} h")
+            if not per_ok:
+                bits.append("periods disagree")
+            note = "Inconsistent across sectors: " + "; ".join(bits) + "."
+        objects.append({
+            "object_id": oid,
+            "n_events": len(members),
+            "sectors": sectors,
+            "duration_h_median": round(float(np.median(durs)), 4) if durs else None,
+            "duration_spread_h": spread,
+            "period_d_median": (
+                round(float(np.median([p for p in pers if p])), 5)
+                if any(pers) else None
+            ),
+            "depth_pct_median": round(float(np.median([m["depth_pct"] for m in members])), 4),
+            "durations_consistent": dur_ok,
+            "periods_consistent": per_ok,
+            "confirmed_multisector": confirmed,
+            "members": members,
+            "note": note,
+        })
+
+    n_objects = len(objects)
+    if n_objects == 0:
+        objects_summary = "No repeating events to group into objects."
+    elif n_objects == 1:
+        objects_summary = "One object identified. " + objects[0]["note"]
+    else:
+        dur_list = ", ".join(
+            f"{o['duration_h_median']:.2f} h" for o in objects if o["duration_h_median"]
+        )
+        objects_summary = (
+            f"{n_objects} distinct objects identified by differing transit "
+            f"durations ({dur_list})."
+        )
+
+    # Anchor t0 for any downstream folding.
+    if t0 is None:
+        for _, res in sector_results:
+            if res.bls.get("t0"):
+                t0 = res.bls["t0"]
+                break
 
     # Detection timeline plot
     timeline_plot = _make_timeline_plot(timeline)
@@ -847,13 +1048,20 @@ def run_multisector_analysis(
         "n_sectors_observed": n_total,
         "n_sectors_with_detections": n_with_dip,
         "detection_rate": round(n_with_dip / n_total, 3) if n_total else 0,
+        "max_sectors": MAX_SECTORS,
+        "events_per_sector": EVENTS_PER_SECTOR,
+        "max_objects": MAX_OBJECTS,
+        "duration_tol_h": duration_tol_h,
         "timeline": timeline,
         "period_consensus": period_consensus,
+        "n_objects_detected": n_objects,
+        "objects": objects,
         "timeline_plot": timeline_plot,
         "summary": (
             f"{n_with_dip}/{n_total} sectors show a dip event. "
-            + (f"Consistent period ≈ {period_consensus['value_d']:.4f} d."
-               if period_consensus else "Period not well-constrained.")
+            + (f"Consensus period ≈ {period_consensus['value_d']:.4f} d. "
+               if period_consensus else "Period not well-constrained. ")
+            + objects_summary
         ),
     }
 

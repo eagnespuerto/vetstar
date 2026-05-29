@@ -641,11 +641,14 @@ async def mast_multisector(query: MultisectorQuery):
     if not all_sectors:
         raise HTTPException(404, f"No TESS sectors found for TIC {query.tic_id}.")
 
+    from .pipeline import MAX_SECTORS
+
     if query.sectors:
         wanted = set(int(s) for s in query.sectors)
-        sectors_to_fetch = [s for s in all_sectors if s["sector"] in wanted]
+        sectors_to_fetch = [s for s in all_sectors if s["sector"] in wanted][:MAX_SECTORS]
     else:
-        sectors_to_fetch = all_sectors[:10]
+        # Newest sectors first, capped — most likely to share an ephemeris.
+        sectors_to_fetch = all_sectors[-MAX_SECTORS:]
 
     sector_results = []
     errors = []
