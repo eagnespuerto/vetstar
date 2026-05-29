@@ -561,17 +561,28 @@ async def habitability(query: HabitabilityQuery):
     return _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
 
 
-def _build_report_extras(result) -> dict:
+def _build_report_extras(
+    result,
+    n_sectors_observed: int = 1,
+    n_sectors_with_detections: Optional[int] = None,
+    period_override: Optional[float] = None,
+) -> dict:
     """Server-side recompute of HCI, observables, TLCM and ExoMiner for a
-    finished VettingResult, so the PDF can embed *all current analyses*
-    without the frontend having to forward its in-memory panel state.
+    finished VettingResult, so the PDF (and the multi-sector panel) can embed
+    *all current analyses* without the frontend forwarding its panel state.
+
+    ``n_sectors_observed`` / ``n_sectors_with_detections`` let a multi-sector
+    caller feed the real sector counts into the HCI; ``period_override`` lets a
+    caller (e.g. a multi-sector object) pin the consensus period instead of the
+    single-sector BLS peak.
 
     Every step fails safe: a missing TIC, an offline catalogue, or an
-    ExoMiner error simply omits that block from the PDF.
+    ExoMiner error simply omits that block.
     """
     extras: dict = {"hci_bundle": None, "exominer": None}
     star = result.star
     tic = getattr(star, "tic_id", None)
+    period = period_override or (result.bls.get("period") if result.bls else None)
 
     # --- HCI + observables + TLCM (needs a TIC to query ExoFOP) ---------
     if tic:
@@ -587,16 +598,19 @@ def _build_report_extras(result) -> dict:
                     "_events": result.events,
                 }
             )
-            n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
+            if n_sectors_with_detections is not None:
+                n_det = n_sectors_with_detections
+            else:
+                n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
             hq = HabitabilityQuery(
                 tic_id=tic,
-                orbital_period_d=result.bls.get("period") if result.bls else None,
+                orbital_period_d=period,
                 stellar_teff=star.teff,
                 stellar_radius_sun=star.radius,
                 stellar_mass_sun=getattr(star, "mass", None),
                 R_companion_Rjup=(result.physics or {}).get("R_companion_Rjup"),
                 n_sectors_with_detections=n_det,
-                n_sectors_observed=1,
+                n_sectors_observed=n_sectors_observed,
                 vetting_verdict=enriched_verdict,
             )
             bundle = _habitability_bundle(hq)
@@ -609,7 +623,6 @@ def _build_report_extras(result) -> dict:
     try:
         key = (tic, star.sector) if tic else "__last__"
         cached = _lc_cache.get(key) or _lc_cache.get("__last__")
-        period = result.bls.get("period") if result.bls else None
         t0 = result.bls.get("t0") if result.bls else None
         duration = result.bls.get("duration") if result.bls else None
         if cached and period and duration:
@@ -659,6 +672,8 @@ async def mast_multisector(query: MultisectorQuery):
             info = fetch_spoc_lightcurve(query.tic_id, sec_num)
             parsed = parse_upload(info["path"], info["filename"])
             result = _run_pipeline(parsed, query.detect_threshold, query.detect_min_snr)
+            # Cache the cleaned LC per sector so ExoMiner can reuse it below.
+            _cache_lc(parsed)
             sector_results.append((sec_num, result))
         except Exception as e:
             log.warning("Sector %s failed for TIC %s: %s", sec_num, query.tic_id, e)
@@ -675,6 +690,7 @@ async def mast_multisector(query: MultisectorQuery):
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)
     analysis["sectors_succeeded"] = len(sector_results)
+    analysis["tic_id"] = query.tic_id
 
     analysis["sector_verdicts"] = [
         {
@@ -687,6 +703,35 @@ async def mast_multisector(query: MultisectorQuery):
         }
         for sec, res in sector_results
     ]
+
+    # --- HCI + ExoMiner per identified object --------------------------------
+    # For each object (up to MAX_OBJECTS), pick the sector with its deepest
+    # event as the representative light curve, then recompute HCI (with the
+    # real multi-sector counts) and ExoMiner (from that sector's cached LC),
+    # pinned to the object's consensus period.
+    res_by_sector = {sec: res for sec, res in sector_results}
+    for obj in analysis.get("objects", []):
+        try:
+            members = obj.get("members") or []
+            if not members:
+                continue
+            best = max(members, key=lambda m: m.get("depth_pct", 0.0))
+            rep = res_by_sector.get(best["sector"])
+            if rep is None:
+                continue
+            extras = _build_report_extras(
+                rep,
+                n_sectors_observed=analysis.get("n_sectors_observed", 1),
+                n_sectors_with_detections=len(obj.get("sectors", [])) or None,
+                period_override=obj.get("period_d_median"),
+            )
+            obj["representative_sector"] = best["sector"]
+            obj["hci_bundle"] = extras.get("hci_bundle")
+            obj["exominer"] = extras.get("exominer")
+        except Exception as e:
+            log.warning("Multi-sector HCI/ExoMiner enrich failed for object: %s", e)
+            obj["hci_bundle"] = obj.get("hci_bundle")
+            obj["exominer"] = obj.get("exominer")
 
     return analysis
 
