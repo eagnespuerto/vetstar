@@ -85,6 +85,46 @@ export default function App() {
   const [availableSectors, setAvailableSectors] = useState<SectorInfo[] | null>(null);
   const [sectorLookupLoading, setSectorLookupLoading] = useState(false);
 
+  // Analysis scope chosen up front: single sector vs multi-sector (≤5).
+  const [scope, setScope] = useState<"single" | "multi">("single");
+  // Sectors selected for a multi-sector run (max 5). Empty = backend picks newest 5.
+  const [multiSectors, setMultiSectors] = useState<number[]>([]);
+  const [msData, setMsData] = useState<any>(null);
+  const [msTopLoading, setMsTopLoading] = useState(false);
+
+  const MAX_MULTI_SECTORS = 5;
+  const toggleMultiSector = (s: number) => {
+    setMultiSectors((prev) =>
+      prev.includes(s)
+        ? prev.filter((x) => x !== s)
+        : prev.length >= MAX_MULTI_SECTORS
+        ? prev
+        : [...prev, s]
+    );
+  };
+
+  const runMultisectorTop = async () => {
+    const tic = parseInt(ticInput);
+    if (!tic) {
+      setError("Enter a TIC ID.");
+      return;
+    }
+    setStatus("analyzing");
+    setError(null);
+    setMsData(null);
+    setMsTopLoading(true);
+    try {
+      const data = await fetchMultisector(tic, params, multiSectors);
+      setMsData(data);
+      setStatus("done");
+    } catch (e: any) {
+      setError(e.message || String(e));
+      setStatus("error");
+    } finally {
+      setMsTopLoading(false);
+    }
+  };
+
   const onFile = (f: File) => {
     setFile(f);
     setError(null);
@@ -179,7 +219,7 @@ export default function App() {
       <header className="bg-slate-900 text-white py-4 px-6 shadow">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold">Vetstar Alpha v0.1.2</h1>
+            <h1 className="text-xl font-bold">Vetstar Alpha v0.1.3</h1>
             <p className="text-sm text-slate-300">
               Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector
             </p>
@@ -278,6 +318,36 @@ export default function App() {
               2-min light curve from <code>mast.stsci.edu</code> via{" "}
               <code>astroquery.mast.Observations</code>, then run full vetting.
             </p>
+
+            {/* Analysis scope — choose up front */}
+            <div className="mb-4">
+              <label className="block text-xs text-slate-600 mb-1">Analysis scope</label>
+              <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden">
+                <button
+                  onClick={() => setScope("single")}
+                  className={`px-4 py-1.5 text-sm font-medium ${
+                    scope === "single" ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Single sector
+                </button>
+                <button
+                  onClick={() => setScope("multi")}
+                  className={`px-4 py-1.5 text-sm font-medium border-l border-slate-200 ${
+                    scope === "multi" ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Multi-sector (≤5)
+                </button>
+              </div>
+              {scope === "multi" && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Pick up to {MAX_MULTI_SECTORS} sectors below (or leave blank to use the
+                  newest 5). One representative event per sector is cross-checked for the
+                  same duration and period.
+                </p>
+              )}
+            </div>
             <div className="grid sm:grid-cols-3 gap-3 items-end">
               <div>
                 <label className="block text-xs text-slate-600 mb-1">TIC ID</label>
@@ -318,17 +388,26 @@ export default function App() {
                       TESS-SPOC / QLP = FFI fallback, no centroid).
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {availableSectors.map((si) => (
+                      {availableSectors.map((si) => {
+                        const selected =
+                          scope === "multi"
+                            ? multiSectors.includes(si.sector)
+                            : String(si.sector) === sectorInput;
+                        return (
                         <button
                           key={si.sector}
-                          onClick={() => setSectorInput(String(si.sector))}
+                          onClick={() =>
+                            scope === "multi"
+                              ? toggleMultiSector(si.sector)
+                              : setSectorInput(String(si.sector))
+                          }
                           title={
                             si.providers.length
                               ? `Providers: ${si.providers.join(", ")}`
                               : ""
                           }
                           className={`px-2 py-0.5 rounded font-mono text-xs ${
-                            String(si.sector) === sectorInput
+                            selected
                               ? "bg-blue-600 text-white"
                               : si.providers.includes("SPOC")
                               ? "bg-slate-100 hover:bg-slate-200"
@@ -337,27 +416,44 @@ export default function App() {
                         >
                           S{String(si.sector).padStart(3, "0")}
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
               </div>
             )}
             <div className="flex justify-center gap-3 mt-5">
-              <button
-                onClick={runMastAnalyze}
-                disabled={status === "analyzing" || !ticInput || !sectorInput}
-                className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
-              >
-                {status === "analyzing" ? "Analyzing…" : "Fetch & vet"}
-              </button>
-              <button
-                onClick={runMastReport}
-                disabled={status === "analyzing" || !ticInput || !sectorInput}
-                className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
-              >
-                Fetch & download PDF
-              </button>
+              {scope === "single" ? (
+                <>
+                  <button
+                    onClick={runMastAnalyze}
+                    disabled={status === "analyzing" || !ticInput || !sectorInput}
+                    className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
+                  >
+                    {status === "analyzing" ? "Analyzing…" : "Fetch & vet"}
+                  </button>
+                  <button
+                    onClick={runMastReport}
+                    disabled={status === "analyzing" || !ticInput || !sectorInput}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
+                  >
+                    Fetch & download PDF
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={runMultisectorTop}
+                  disabled={status === "analyzing" || msTopLoading || !ticInput}
+                  className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  {msTopLoading
+                    ? "Running multi-sector…"
+                    : multiSectors.length
+                    ? `Run multi-sector (${multiSectors.length} selected)`
+                    : "Run multi-sector (newest 5)"}
+                </button>
+              )}
             </div>
           </section>
         )}
@@ -378,6 +474,12 @@ export default function App() {
         )}
 
         {result && <ResultsView result={result} />}
+
+        {msData && (
+          <div className="mt-2">
+            <MultisectorPanel data={msData} />
+          </div>
+        )}
       </main>
 
       {result && <ExoMinerPanel result={result} />}
@@ -1211,6 +1313,67 @@ function MultisectorPanel({ data }: { data: any }) {
                 className="w-full rounded border"
               />
             </figure>
+          )}
+
+          {/* Detected objects (up to 2), each cross-confirmed by duration + period */}
+          {data.objects && data.objects.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-700">
+                {data.n_objects_detected} object
+                {data.n_objects_detected === 1 ? "" : "s"} identified
+                <span className="text-xs font-normal text-slate-500">
+                  {" "}(≤{data.events_per_sector} events/sector, ≤{data.max_objects} objects,
+                  duration tolerance ±{data.duration_tol_h} h)
+                </span>
+              </p>
+              {data.objects.map((o: any) => {
+                const ok = o.confirmed_multisector;
+                const single = o.sectors.length < 2;
+                return (
+                  <div
+                    key={o.object_id}
+                    className={`rounded border p-3 text-sm ${
+                      ok
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                        : single
+                        ? "bg-slate-50 border-slate-300 text-slate-700"
+                        : "bg-amber-50 border-amber-300 text-amber-900"
+                    }`}
+                  >
+                    <p className="font-medium">
+                      {ok ? "✓ " : single ? "" : "⚠ "}
+                      Object {o.object_id} — {o.duration_h_median} h ·{" "}
+                      {o.depth_pct_median}% deep · {o.sectors.length} sector
+                      {o.sectors.length === 1 ? "" : "s"}
+                      {o.period_d_median ? ` · P ≈ ${o.period_d_median} d` : ""}
+                    </p>
+                    <p className="text-xs mt-1">{o.note}</p>
+                    <table className="w-full text-xs mt-2">
+                      <thead className="text-left opacity-70">
+                        <tr>
+                          <th className="py-0.5">Sector</th>
+                          <th>t_center</th>
+                          <th>Duration (h)</th>
+                          <th>Depth (%)</th>
+                          <th>Period (d)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {o.members.map((e: any, i: number) => (
+                          <tr key={`${e.sector}-${i}`}>
+                            <td className="py-0.5 font-mono">S{String(e.sector).padStart(3, "0")}</td>
+                            <td className="font-mono">{e.t_center}</td>
+                            <td className="font-mono">{e.duration_h}</td>
+                            <td className="font-mono">{e.depth_pct}</td>
+                            <td className="font-mono">{e.bls_period_d?.toFixed?.(4) ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
           )}
 
           {/* Per-sector table */}

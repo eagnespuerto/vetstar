@@ -81,7 +81,11 @@ export async function fetchHabitability(
   return r.json();
 }
 
-export async function fetchMultisector(ticId: number, params: DetectParams = { threshold: 0.997, minSnr: 4.0 }) {
+export async function fetchMultisector(
+  ticId: number,
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0 },
+  sectors?: number[]
+) {
   const r = await fetch(`${API_BASE}/api/mast/multisector`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -89,6 +93,7 @@ export async function fetchMultisector(ticId: number, params: DetectParams = { t
       tic_id: ticId,
       detect_threshold: params.threshold,
       detect_min_snr: params.minSnr,
+      ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
   if (!r.ok) throw new Error(`Multi-sector fetch failed (${r.status}): ${await r.text()}`);
