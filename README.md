@@ -56,6 +56,24 @@ radius, period, semi-major axis, disposition) and stellar parameters. If
 ExoFOP is unavailable it falls back to the TIC v8 catalog via astroquery.
 All ExoFOP-derived values can be overridden from the request body.
 
+**Light-curve-driven inputs.** Three sub-scores now fall back to direct
+transit observables when catalogue values are missing, so the HCI can be
+computed from the light curve alone:
+
+- **Stellar type** — with no spectroscopic Teff, the host is typed from the
+  transit-derived mean stellar density (Seager & Mallén-Ornelas 2003),
+  inverted against the Pecaut & Mamajek (2013) main-sequence sequence to an
+  approximate spectral type / Teff / radius (assumes a dwarf and a central
+  transit; flagged in the caveats).
+- **Habitable zone** — scored from the semi-major axis in AU when available
+  (catalogue, override, or the TLCM photometric *a/R★ × R★*). When no AU value
+  can be formed, it falls back to the instellation computed directly from the
+  scaled semi-major axis, *S/S⊕ = (Teff/Teff☉)⁴ (215.03 / (a/R★))²*, scored
+  against the Kopparapu et al. (2013/2014) flux boundaries — needing no
+  catalogue luminosity or distance.
+- **Planet size** — with no catalogue radius, *Rp = k × R★* from the radius
+  ratio *k = √depth* and the (catalogue or density-estimated) stellar radius.
+
 ### Predicted Observables for Exoplanets (POE)
 
 Forward-model predicted observables using the NASA Exoplanet Archive POE
@@ -412,6 +430,10 @@ to launch; a browser opens to the app automatically.
   Atmosphere Retention in the Habitable Zone.* arXiv:2605.00170v1.
 - Kopparapu, R. K. et al. (2013, 2014). *Habitable Zone boundaries.*
   ApJ 765, 131; ApJ 787, L29.
+- Seager, S. & Mallén-Ornelas, G. (2003). *A unique solution of planet and
+  star parameters from an extrasolar planet transit light curve.* ApJ 585, 1038.
+- Pecaut, M. J. & Mamajek, E. E. (2013). *Intrinsic colors, temperatures, and
+  bolometric corrections of pre-main-sequence stars.* ApJS 208, 9.
 - Tian, F. et al. (2009). *CO₂ escape from early Mars.*
   Geophys. Res. Lett. 36, L02205.
 - Kite, E. S. & Barnett, M. N. (2020). *Exoplanet secondary atmospheres.*
