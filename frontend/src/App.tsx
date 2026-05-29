@@ -1285,6 +1285,42 @@ function HabitabilityPanel({ data }: { data: any }) {
 }
 
 
+function SharePlot({
+  b64,
+  label,
+  title,
+}: {
+  b64: string | null | undefined;
+  label: string;
+  title: string;
+}) {
+  if (!b64) return null;
+  return (
+    <figure className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <figcaption className="text-xs text-slate-500">{label}</figcaption>
+        <ShareToImgbbButton base64={b64} title={title} label={label} />
+      </div>
+      <img
+        src={`data:image/png;base64,${b64}`}
+        alt={label}
+        className="w-full rounded border"
+        loading="lazy"
+      />
+    </figure>
+  );
+}
+
+const MS_EXOMINER_VIEWS: Array<[string, string]> = [
+  ["global_view", "Global view"],
+  ["local_view", "Local view"],
+  ["secondary_view", "Secondary view"],
+  ["odd_even_view", "Odd vs even"],
+  ["centroid_global_view", "Centroid global"],
+  ["centroid_local_view", "Centroid local"],
+  ["diagnostic_sigmas", "Diagnostic σ"],
+];
+
 function MultisectorPanel({ data }: { data: any }) {
   const [expanded, setExpanded] = useState(true);
   if (!data) return null;
@@ -1303,16 +1339,11 @@ function MultisectorPanel({ data }: { data: any }) {
         <div className="space-y-3">
           {/* Timeline plot */}
           {data.timeline_plot && (
-            <figure>
-              <figcaption className="text-xs text-slate-500 mb-1">
-                Detection timeline across all fetched sectors
-              </figcaption>
-              <img
-                src={`data:image/png;base64,${data.timeline_plot}`}
-                alt="Multi-sector timeline"
-                className="w-full rounded border"
-              />
-            </figure>
+            <SharePlot
+              b64={data.timeline_plot}
+              label="Detection timeline across all fetched sectors"
+              title={`multisector_timeline_TIC${data.tic_id || ""}`}
+            />
           )}
 
           {/* Detected objects (up to 2), each cross-confirmed by duration + period */}
@@ -1370,6 +1401,52 @@ function MultisectorPanel({ data }: { data: any }) {
                         ))}
                       </tbody>
                     </table>
+
+                    {/* HCI for this object */}
+                    {o.hci_bundle && (
+                      <div className="mt-3 rounded bg-white/70 border border-slate-200 p-2">
+                        <p className="text-xs font-semibold text-slate-700">
+                          Habitability Chance Index
+                          {o.hci_bundle.hci
+                            ? ` — ${Math.round(o.hci_bundle.hci.score)}/100 (${o.hci_bundle.hci.tier})`
+                            : ""}
+                          {o.representative_sector
+                            ? ` · from S${String(o.representative_sector).padStart(3, "0")}`
+                            : ""}
+                        </p>
+                        {o.hci_bundle.hci_image && (
+                          <div className="mt-2">
+                            <SharePlot
+                              b64={o.hci_bundle.hci_image}
+                              label="HCI summary"
+                              title={`HCI_obj${o.object_id}_TIC${data.tic_id || ""}`}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ExoMiner views for this object */}
+                    {o.exominer?.plots && (
+                      <div className="mt-3 rounded bg-white/70 border border-slate-200 p-2 space-y-3">
+                        <p className="text-xs font-semibold text-slate-700">
+                          ExoMiner feature views
+                          {o.representative_sector
+                            ? ` · from S${String(o.representative_sector).padStart(3, "0")}`
+                            : ""}
+                        </p>
+                        {MS_EXOMINER_VIEWS.filter(([k]) => o.exominer.plots[k]).map(
+                          ([k, label]) => (
+                            <SharePlot
+                              key={k}
+                              b64={o.exominer.plots[k]}
+                              label={label}
+                              title={`exominer_${k}_obj${o.object_id}_TIC${data.tic_id || ""}`}
+                            />
+                          )
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
