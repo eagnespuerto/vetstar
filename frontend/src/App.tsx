@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   analyze,
   downloadReport,
@@ -18,6 +18,53 @@ import { ShareToImgbbButton, ShareIcon } from "./ShareButton";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
 type Mode = "upload" | "mast";
+
+// Funny-but-relevant loading messages cycled while the user waits.
+const VETTING_LOADING_MSGS = [
+  "Contacting aliens for a second opinion…",
+  "Defusing gamma-ray pulsars…",
+  "Feeding the black holes…",
+  "Folding light curves into tiny paper cranes…",
+  "Asking the star to hold still…",
+  "Bribing photons to arrive on time…",
+  "Untangling odd transits from even ones…",
+  "Running BLS + Lomb-Scargle + centroid + odd/even + secondary tests…",
+  "Politely interrogating the centroid…",
+  "Checking if it's a planet or just a clingy binary…",
+];
+
+const HCI_LOADING_MSGS = [
+  "Measuring the temperature of distant rocks…",
+  "Surveying the habitable zone for vacancy signs…",
+  "Asking ExoFOP if anyone's home…",
+  "Calculating odds of decent weather…",
+  "Consulting the STEHM oracle…",
+  "Checking the Goldilocks paperwork…",
+  "Estimating commute time to the nearest star…",
+  "Sniffing for liquid water…",
+];
+
+function CyclingLoader({
+  messages,
+  intervalMs = 2200,
+  className = "",
+}: {
+  messages: string[];
+  intervalMs?: number;
+  className?: string;
+}) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setI((n) => (n + 1) % messages.length), intervalMs);
+    return () => clearInterval(id);
+  }, [messages, intervalMs]);
+  return (
+    <span className={`inline-flex items-center ${className}`}>
+      <span className="inline-block w-3.5 h-3.5 mr-2 border-2 border-current border-t-transparent rounded-full animate-spin" />
+      {messages[i]}
+    </span>
+  );
+}
 
 const REPO_URL = "https://github.com/eagnespuerto/vetstar";
 
@@ -132,7 +179,7 @@ export default function App() {
       <header className="bg-slate-900 text-white py-4 px-6 shadow">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold">Vetstar: TESS Vetting Studio Alpha</h1>
+            <h1 className="text-xl font-bold">Vetstar Alpha v0.1.2</h1>
             <p className="text-sm text-slate-300">
               Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector
             </p>
@@ -323,8 +370,10 @@ export default function App() {
 
         {status === "analyzing" && (
           <div className="rounded bg-blue-50 border border-blue-200 p-4 text-blue-900">
-            Running BLS + Lomb-Scargle + centroid + odd/even + secondary-eclipse
-            tests… this can take 10–30 seconds for a 2-min cadence sector.
+            <CyclingLoader messages={VETTING_LOADING_MSGS} />
+            <span className="block mt-1 text-xs text-blue-700">
+              This can take 10–30 seconds for a 2-min cadence sector.
+            </span>
           </div>
         )}
 
@@ -731,6 +780,12 @@ function ResultsView({ result }: { result: VettingResult }) {
 
         {hciError && <p className="text-sm text-red-700 mb-2">HCI error: {hciError}</p>}
         {msError && <p className="text-sm text-red-700 mb-2">Multi-sector error: {msError}</p>}
+
+        {hciLoading && (
+          <div className="rounded bg-teal-50 border border-teal-200 p-3 text-teal-900 text-sm mb-2">
+            <CyclingLoader messages={HCI_LOADING_MSGS} />
+          </div>
+        )}
 
         {!hciData && !hciLoading && (
           <p className="text-sm text-slate-500">
