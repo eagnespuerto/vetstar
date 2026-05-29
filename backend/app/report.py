@@ -51,7 +51,7 @@ def _centered(flowable):
     return flowable
 
 
-def build_pdf(result: VettingResult) -> bytes:
+def build_pdf(result: VettingResult, hci_bundle: dict = None, exominer: dict = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -291,10 +291,103 @@ def build_pdf(result: VettingResult) -> bytes:
     else:
         story.append(Paragraph("Physics not available (missing stellar parameters).", body))
 
+    # ------------------------------------------------------------------
+    # Habitability Chance Index (HCI) + observables + TLCM
+    # ------------------------------------------------------------------
+    if hci_bundle and hci_bundle.get("hci"):
+        story.append(PageBreak())
+        _append_hci_section(story, hci_bundle, h2, body)
+
+    # ------------------------------------------------------------------
+    # ExoMiner feature extraction
+    # ------------------------------------------------------------------
+    if exominer:
+        story.append(PageBreak())
+        _append_exominer_section(story, exominer, h2, body)
+
     doc.build(story)
     pdf = buf.getvalue()
     buf.close()
     return pdf
+
+
+# ----------------------------------------------------------------------
+# HCI + ExoMiner PDF sections
+# ----------------------------------------------------------------------
+def _append_hci_section(story, bundle: dict, h2, body):
+    hci = bundle.get("hci") or {}
+    story.append(Paragraph("Habitability Chance Index (HCI)", h2))
+    story.append(
+        Paragraph(
+            f"<b>Score:</b> {_fmt(hci.get('hci'), nd=1)} / 100 &nbsp;&nbsp; "
+            f"<b>Tier:</b> {hci.get('tier', '—')}",
+            body,
+        )
+    )
+
+    # The combined Python-generated summary image (metrics, weightings,
+    # observables and TLCM values in one figure).
+    if bundle.get("hci_image"):
+        story.append(Spacer(1, 0.1 * inch))
+        story.append(_b64_to_image(bundle["hci_image"], aspect=0.82))
+        story.append(Spacer(1, 0.1 * inch))
+
+    # Sub-score breakdown table (in addition to the image, for accessibility).
+    subs = hci.get("sub_scores") or []
+    if subs:
+        rows = [["Component", "Weight", "Sub-score", "Assessment"]]
+        for s in subs:
+            rows.append(
+                [
+                    s.get("name", "—"),
+                    f"{(s.get('weight', 0) or 0) * 100:.0f}%",
+                    f"{(s.get('score', 0) or 0) * 100:.0f}/100",
+                    s.get("label", "—"),
+                ]
+            )
+        t = Table(
+            rows,
+            colWidths=[1.9 * inch, 0.9 * inch, 1.0 * inch, 2.5 * inch],
+        )
+        t.setStyle(_table_style(header=True))
+        story.append(_centered(t))
+
+    # Caveats
+    caveats = hci.get("caveats") or []
+    if caveats:
+        story.append(Spacer(1, 0.1 * inch))
+        story.append(Paragraph("<b>Caveats:</b>", body))
+        for c in caveats:
+            story.append(Paragraph(f"• {c}", body))
+    if hci.get("paper_ref"):
+        story.append(Paragraph(f"<i>Reference: {hci['paper_ref']}</i>", body))
+
+
+def _append_exominer_section(story, exominer: dict, h2, body):
+    story.append(Paragraph("ExoMiner feature extraction", h2))
+    scalars = exominer.get("scalars") or {}
+    if scalars:
+        rows = [[k, _fmt(v, nd=4)] for k, v in scalars.items()]
+        t = Table(rows, colWidths=[2.6 * inch, 3.7 * inch])
+        t.setStyle(_table_style())
+        story.append(_centered(t))
+        story.append(Spacer(1, 0.12 * inch))
+
+    plots = exominer.get("plots") or {}
+    order = [
+        ("global_view", "Global view"),
+        ("local_view", "Local view"),
+        ("secondary_view", "Secondary view"),
+        ("odd_even_view", "Odd / even views"),
+        ("centroid_global_view", "Centroid (global)"),
+        ("centroid_local_view", "Centroid (local)"),
+        ("diagnostic_sigmas", "Diagnostic significances"),
+    ]
+    for key, label in order:
+        if plots.get(key):
+            story.append(Paragraph(f"<b>{label}</b>", body))
+            story.append(_b64_to_image(plots[key], aspect=0.32))
+            story.append(Spacer(1, 0.08 * inch))
 
 
 def _table_style(header=False):

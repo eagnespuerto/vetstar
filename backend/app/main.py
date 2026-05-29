@@ -201,7 +201,13 @@ async def report(
                 detail="ExoFOP metadata-only file. Upload a FITS light curve.",
             )
         result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
-        pdf = build_pdf(result)
+        _cache_lc(parsed)
+        extras = _build_report_extras(result)
+        pdf = build_pdf(
+            result,
+            hci_bundle=extras.get("hci_bundle"),
+            exominer=extras.get("exominer"),
+        )
         tic = result.star.tic_id or uuid.uuid4().hex[:8]
         return Response(
             content=pdf,
@@ -286,7 +292,12 @@ async def mast_analyze(query: MastQuery):
 async def mast_report(query: MastQuery):
     result, info = _mast_fetch_and_analyze(query)
     try:
-        pdf = build_pdf(result)
+        extras = _build_report_extras(result)
+        pdf = build_pdf(
+            result,
+            hci_bundle=extras.get("hci_bundle"),
+            exominer=extras.get("exominer"),
+        )
     except Exception as e:
         raise _handle_exception("build_pdf", e)
     fname = f"vetting_TIC{query.tic_id}_S{query.sector:03d}.pdf"
@@ -329,8 +340,12 @@ class MultisectorQuery(BaseModel):
     detect_min_snr: float = 4.0
 
 
-@app.post("/api/habitability")
-async def habitability(query: HabitabilityQuery):
+def _habitability_bundle(query: HabitabilityQuery) -> dict:
+    """Compute the full HCI + observables + TLCM bundle for a target.
+
+    Factored out of the /api/habitability route so the PDF report flow can
+    reuse exactly the same computation server-side (no frontend plumbing).
+    """
     try:
         exofop = query_exofop(query.tic_id)
     except Exception as e:
@@ -520,6 +535,98 @@ async def habitability(query: HabitabilityQuery):
         "exofop_source": exofop.get("source"),
         "all_tois": tois,
     }
+
+
+def _attach_hci_image(bundle: dict, title: Optional[str] = None) -> dict:
+    """Render the combined HCI/observables/TLCM summary PNG into the bundle."""
+    try:
+        from .hci_image import make_hci_summary_image
+        bundle["hci_image"] = make_hci_summary_image(
+            bundle.get("hci"),
+            bundle.get("observables"),
+            bundle.get("tlcm"),
+            planet=bundle.get("planet"),
+            title=title,
+        )
+    except Exception as e:  # never let image rendering break the response
+        log.warning("HCI summary image failed: %s", e)
+        bundle["hci_image"] = None
+    return bundle
+
+
+@app.post("/api/habitability")
+async def habitability(query: HabitabilityQuery):
+    bundle = _habitability_bundle(query)
+    tic = query.tic_id
+    return _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
+
+
+def _build_report_extras(result) -> dict:
+    """Server-side recompute of HCI, observables, TLCM and ExoMiner for a
+    finished VettingResult, so the PDF can embed *all current analyses*
+    without the frontend having to forward its in-memory panel state.
+
+    Every step fails safe: a missing TIC, an offline catalogue, or an
+    ExoMiner error simply omits that block from the PDF.
+    """
+    extras: dict = {"hci_bundle": None, "exominer": None}
+    star = result.star
+    tic = getattr(star, "tic_id", None)
+
+    # --- HCI + observables + TLCM (needs a TIC to query ExoFOP) ---------
+    if tic:
+        try:
+            enriched_verdict = dict(result.verdict or {})
+            enriched_verdict.update(
+                {
+                    "_depth": (result.events[0]["depth"] if result.events else None),
+                    "_bls_depth": result.bls.get("depth") if result.bls else None,
+                    "_t14_d": result.shape.get("t14_d") if result.shape else None,
+                    "_bls_duration": result.bls.get("duration") if result.bls else None,
+                    "_shape_class": result.shape.get("shape_class") if result.shape else None,
+                    "_events": result.events,
+                }
+            )
+            n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
+            hq = HabitabilityQuery(
+                tic_id=tic,
+                orbital_period_d=result.bls.get("period") if result.bls else None,
+                stellar_teff=star.teff,
+                stellar_radius_sun=star.radius,
+                stellar_mass_sun=getattr(star, "mass", None),
+                R_companion_Rjup=(result.physics or {}).get("R_companion_Rjup"),
+                n_sectors_with_detections=n_det,
+                n_sectors_observed=1,
+                vetting_verdict=enriched_verdict,
+            )
+            bundle = _habitability_bundle(hq)
+            _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
+            extras["hci_bundle"] = bundle
+        except Exception as e:
+            log.warning("Report HCI recompute failed for TIC %s: %s", tic, e)
+
+    # --- ExoMiner (needs the cached light curve + a period) -------------
+    try:
+        key = (tic, star.sector) if tic else "__last__"
+        cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+        period = result.bls.get("period") if result.bls else None
+        t0 = result.bls.get("t0") if result.bls else None
+        duration = result.bls.get("duration") if result.bls else None
+        if cached and period and duration:
+            extras["exominer"] = _run_exominer(
+                t=cached["t"],
+                f=cached["f"],
+                mom_x=cached.get("mom_x"),
+                mom_y=cached.get("mom_y"),
+                period=period,
+                t0=t0 if t0 is not None else 0.0,
+                duration=duration,
+                crowdsap=getattr(star, "crowdsap", None),
+            )
+    except Exception as e:
+        log.warning("Report ExoMiner recompute failed: %s", e)
+
+    return extras
 
 
 @app.post("/api/mast/multisector")
