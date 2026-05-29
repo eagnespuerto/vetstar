@@ -308,6 +308,26 @@ async def mast_report(query: MastQuery):
     )
 
 
+@app.get("/api/mast/download/{tic_id}/{sector}")
+def mast_download_fits(tic_id: int, sector: int):
+    """Download the raw SPOC light-curve FITS for a (TIC, sector).
+
+    Re-runs the MAST fetch; astroquery serves the cached file if it was
+    already downloaded during analysis, so this is cheap on a repeat.
+    """
+    try:
+        info = fetch_spoc_lightcurve(tic_id, sector)
+    except Exception as e:
+        raise HTTPException(
+            502, f"Could not fetch FITS for TIC {tic_id} sector {sector}: {e}"
+        )
+    path = info.get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "FITS file not found on server after fetch.")
+    fname = f"TIC{tic_id}_S{int(sector):03d}.fits"
+    return FileResponse(path, media_type="application/fits", filename=fname)
+
+
 # -------------------------------------------------
 # Habitability + multi-sector endpoints
 # -------------------------------------------------
