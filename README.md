@@ -1,4 +1,6 @@
-# Vetstar: TESS Vetting Studio Alpha
+# Vetstar Alpha v0.1.2
+
+*(TESS / Kepler Vetting Studio)*
 
 A web app for full transit / eclipse vetting of TESS or Kepler light curves,
 with a STEHM-based habitability scoring engine and multi-sector analysis.
@@ -102,6 +104,33 @@ Planet mass from radius is computed with two relations for comparison — Chen &
 The mass-radius spread is propagated into the HCI itself: when only an estimated mass is available, both relations are run, the density check is evaluated for each, and the resulting size-score spread is carried into a reported **HCI range** (e.g. 78.5 with a 69.5-78.5 band). A measured mass (RV) collapses the range to a single value.
 
 The scaled semi-major axis a/Rs is computed two independent ways and cross-checked: from the transit duration (TLCM eq. 70) and from Kepler's third law / stellar density using catalogue M* and R* (a/Rs = (G M* P^2 / 4pi^2 R*^3)^{1/3}). Agreement validates the solution; a large discrepancy flags eccentricity, a grazing transit, dilution, or bad stellar parameters (TLCM Appendix A).
+
+### ExoMiner feature extraction
+
+Replicates the full ExoMiner TFRecord feature set (Valizadegan et al. 2022,
+ApJ 926 120) from the parsed light curve, surfaced in an auto-expanding panel
+below the standard vetting output. Produces seven phase-folded views —
+global (2001-bin), local (201-bin), secondary (phase 0.5), odd-transit,
+even-transit, and global / local centroid-motion views — plus scalar
+diagnostics (period, duration, depth in ppm, transit count, odd/even σ,
+secondary-depth σ, centroid-shift σ, scatter MAD, CROWDSAP, SG-detrend
+window) with σ badges. The panel auto-runs once vetting finishes and can be
+re-run manually. Backed by `POST /api/exominer`, which reads the most-recently
+parsed light-curve arrays from a process-level cache keyed by (TIC, sector).
+
+### Manual dip selector
+
+When the automatic detector skips a dip you can see by eye, drag across the
+interactive light-curve plot to mark a candidate event. The backend
+characterises its depth, duration, U/V shape, and — when centroid moments are
+cached — an on-target test, via `POST /api/manual_dip`.
+
+### Plot sharing (ImgBB)
+
+Every diagnostic and phase-folded plot has a share button that uploads the
+PNG to ImgBB and returns a public link; an "upload all plots" action bundles
+the full set into a single shareable album for pasting into issues or
+collaboration threads.
 
 ### Multi-sector analysis
 
@@ -307,6 +336,8 @@ POST /api/habitability         {tic_id, ...optional overrides}                  
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
 POST /api/mast/multisector     {tic_id, ?sectors, detect_threshold, detect_min_snr} → timeline JSON
+POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
+POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
 ```
@@ -323,12 +354,22 @@ vetstar/
 │   │   ├── parsers.py          FITS + ExoFOP JSON readers
 │   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
 │   │   ├── habitability.py     STEHM-based HCI scoring engine
+│   │   ├── observables.py      POE forward-modelled observables
+│   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
+│   │   ├── rv_fetch.py         Archive-first radial-velocity lookup
+│   │   ├── exominer.py         ExoMiner feature/view extraction
+│   │   ├── tic_catalog.py      TIC v8 catalog helper
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
 │   │   └── report.py           Centered multi-page PDF builder
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx             Tabs, sensitivity panel, results, HCI, multisector
+│   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
+│   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
+│   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
+│   │   ├── imgbb.ts            ImgBB upload client
+│   │   ├── glossary.ts         Term tooltips
 │   │   ├── api.ts              API client
 │   │   └── types.ts            Shared TypeScript types
 │   ├── index.html
