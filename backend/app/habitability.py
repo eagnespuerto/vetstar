@@ -48,6 +48,109 @@ RHO_EARTH_GCC = 5.51
 RHO_ROCKY_REL = 0.6     # >= 0.6 rho_E (~3.3 g/cm^3): rocky-consistent
 RHO_VOLATILE_REL = 0.4  # <  0.4 rho_E (~2.2 g/cm^3): volatile/gas-rich envelope
 
+# Sun's effective temperature (IAU nominal) and Earth's a/R_sun.
+SOLAR_TEFF = 5772.0
+A_EARTH_OVER_RSUN = 215.03   # 1 AU / R_sun
+RSUN_IN_REARTH = 109.18      # R_sun / R_earth
+
+
+# ---------------------------------------------------------------------------
+# Stellar type from the light curve (no spectroscopy needed)
+# ---------------------------------------------------------------------------
+# A transiting planet fixes the mean stellar density directly (Seager &
+# Mallen-Ornelas 2003, ApJ 585, 1038). On the dwarf sequence the mean density
+# is a monotonic function of effective temperature (Pecaut & Mamajek 2013,
+# ApJS 208, 9), so an observed rho_* can be inverted for an approximate
+# spectral type / Teff / radius — the standard "known method" for typing a
+# host star from photometry alone when no spectroscopic Teff is available.
+#
+# Dwarf-sequence anchor points: (spectral type, Teff [K], M [Msun], R [Rsun]).
+_MS_SEQUENCE = [
+    ("A0V", 9700, 2.18, 2.19), ("A5V", 8080, 1.86, 1.79),
+    ("F0V", 7220, 1.61, 1.61), ("F5V", 6510, 1.33, 1.33),
+    ("G0V", 5930, 1.06, 1.06), ("G2V", 5772, 1.00, 1.00),
+    ("G8V", 5490, 0.93, 0.91), ("K0V", 5280, 0.87, 0.85),
+    ("K3V", 4830, 0.78, 0.75), ("K5V", 4410, 0.68, 0.66),
+    ("K7V", 4070, 0.58, 0.61), ("M0V", 3850, 0.57, 0.59),
+    ("M2V", 3550, 0.44, 0.44), ("M3V", 3400, 0.37, 0.39),
+    ("M4V", 3200, 0.23, 0.26), ("M5V", 3030, 0.16, 0.20),
+]
+# (rho/rho_sun, Teff, M, R, sptype), ascending in density.
+_MS_BY_RHO = sorted(
+    ((m / r ** 3, teff, m, r, sp) for sp, teff, m, r in _MS_SEQUENCE),
+    key=lambda x: x[0],
+)
+
+
+def estimate_stellar_from_density(rho_sun: Optional[float]) -> Optional[dict]:
+    """
+    Invert a transit-derived mean stellar density (solar units) for an
+    estimated main-sequence spectral type, Teff, mass and radius.
+
+    Interpolates the Pecaut & Mamajek (2013) dwarf sequence in log(rho).
+    Density is single-valued in Teff only on the main sequence, so the result
+    is flagged as extrapolated outside the tabulated range.
+    """
+    if not rho_sun or rho_sun <= 0:
+        return None
+    rows = _MS_BY_RHO
+    xs = [math.log10(r[0]) for r in rows]
+    x = math.log10(rho_sun)
+    extrapolated = x < xs[0] or x > xs[-1]
+    if x <= xs[0]:
+        _, teff, mass, rad, sp = rows[0]
+    elif x >= xs[-1]:
+        _, teff, mass, rad, sp = rows[-1]
+    else:
+        for i in range(1, len(rows)):
+            if x <= xs[i]:
+                f = (x - xs[i - 1]) / (xs[i] - xs[i - 1])
+                _, t0, m0, r0, sp0 = rows[i - 1]
+                _, t1, m1, r1, sp1 = rows[i]
+                teff = t0 + f * (t1 - t0)
+                mass = m0 + f * (m1 - m0)
+                rad = r0 + f * (r1 - r0)
+                sp = sp0 if f < 0.5 else sp1
+                break
+    return {
+        "teff": round(teff),
+        "sptype": sp,
+        "radius_sun": round(rad, 3),
+        "mass_sun": round(mass, 3),
+        "rho_sun": rho_sun,
+        "extrapolated": extrapolated,
+        "method": ("transit density -> main-sequence type "
+                   "(Seager & Mallen-Ornelas 2003; Pecaut & Mamajek 2013)"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Habitable-zone flux boundaries (Kopparapu et al. 2013/2014)
+# ---------------------------------------------------------------------------
+# Seff(Teff) = S0 + a t + b t^2 + c t^3 + d t^4, with t = Teff - 5780 K.
+_KOPP_SEFF = {
+    "recent_venus":       (1.776, 2.136e-4, 2.533e-8, -1.332e-11, -3.097e-15),
+    "runaway_greenhouse": (1.107, 1.332e-4, 1.580e-8, -8.308e-12, -1.931e-15),
+    "maximum_greenhouse": (0.356, 6.171e-5, 1.698e-9, -3.198e-12, -5.575e-16),
+    "early_mars":         (0.320, 5.547e-5, 1.526e-9, -2.874e-12, -5.011e-16),
+}
+
+
+def kopparapu_seff(teff: float, kind: str) -> float:
+    s0, a, b, c, d = _KOPP_SEFF[kind]
+    t = teff - 5780.0
+    return s0 + a * t + b * t ** 2 + c * t ** 3 + d * t ** 4
+
+
+def insolation_from_a_over_rs(a_over_rs: float, teff: float) -> float:
+    """
+    Instellation in Earth units straight from the scaled semi-major axis:
+        S/S_earth = (Teff/Teff_sun)^4 (a_earth/R_sun)^2 / (a/Rs)^2
+    Both a/Rs and (via the transit) Teff are light-curve observables, so this
+    needs no catalogue luminosity or distance.
+    """
+    return (teff / SOLAR_TEFF) ** 4 * (A_EARTH_OVER_RSUN / a_over_rs) ** 2
+
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -89,6 +192,8 @@ class HabitabilityResult:
     hci_high: Optional[float] = None
     sub_scores: list = field(default_factory=list)
     caveats: list = field(default_factory=list)
+    stellar_estimate: Optional[dict] = None
+    insolation_searth: Optional[float] = None
     paper_ref: str = "Hill et al. (2026), arXiv:2605.00170 — STEHM"
 
     def to_dict(self) -> dict:
@@ -163,6 +268,38 @@ def _score_planet_size(rp: Optional[float], mp_earth: Optional[float] = None,
     return base
 
 
+def _score_habitable_zone_insolation(a_over_rs, teff, teff_estimated=False) -> SubScore:
+    """HZ score from instellation (a/Rs + Teff) against Kopparapu flux limits."""
+    w = 0.25
+    s_in = insolation_from_a_over_rs(a_over_rs, teff)
+    rv = kopparapu_seff(teff, "recent_venus")
+    rg = kopparapu_seff(teff, "runaway_greenhouse")
+    mg = kopparapu_seff(teff, "maximum_greenhouse")
+    em = kopparapu_seff(teff, "early_mars")
+    src = " (Teff from transit density)" if teff_estimated else ""
+    base = (f"S={s_in:.2f} S⊕ from a/Rs={a_over_rs:.1f}{src}; Kopparapu flux HZ "
+            f"spans {em:.2f}–{rv:.2f} S⊕ for Teff={teff:.0f} K.")
+    if s_in > rv:
+        return SubScore("Habitable zone", 0.05, w, "Too hot",
+                        base + " Inside the recent-Venus limit — runaway greenhouse.")
+    if s_in < em:
+        return SubScore("Habitable zone", 0.10, w, "Too cold",
+                        base + " Beyond the early-Mars limit — surface water likely frozen.")
+    if s_in > rg:   # recent-Venus .. runaway: optimistic warm edge
+        frac = (rv - s_in) / max(rv - rg, 1e-6)
+        return SubScore("Habitable zone", 0.30 + 0.25 * frac, w, "Warm edge (OHZ)",
+                        base + " Between recent-Venus and runaway-greenhouse limits.")
+    if s_in < mg:   # max-greenhouse .. early-Mars: optimistic cool edge
+        frac = (s_in - em) / max(mg - em, 1e-6)
+        return SubScore("Habitable zone", 0.65 + 0.30 * frac, w, "Cool edge (OHZ)",
+                        base + " Between max-greenhouse and early-Mars limits; "
+                        "outer-HZ retention is favoured (STEHM §5.5).")
+    frac = (s_in - mg) / max(rg - mg, 1e-6)   # 0 at outer, 1 at inner
+    s = 0.75 + 0.20 * (1 - abs(frac - 0.5) * 2)
+    return SubScore("Habitable zone", min(s, 1.0), w, "Conservative HZ",
+                    base + " Inside the conservative HZ — best case for liquid water.")
+
+
 def _score_habitable_zone(a_au, teff, rstar, mstar) -> SubScore:
     w = 0.25
     if a_au is None:
@@ -201,29 +338,35 @@ def _score_habitable_zone(a_au, teff, rstar, mstar) -> SubScore:
                     f"Best-case for liquid surface water.")
 
 
-def _score_stellar_type(teff: Optional[float]) -> SubScore:
+def _score_stellar_type(teff: Optional[float], source: Optional[str] = None,
+                        sptype: Optional[str] = None) -> SubScore:
     w = 0.15
     if teff is None:
         return SubScore("Stellar type", 0.5, w, "Unknown",
                         "Stellar Teff unavailable — cannot assess XUV environment.")
-    if teff >= 5000 and teff < 6000:
-        return SubScore("Stellar type", 0.90, w, "G dwarf (solar analog)",
-                        f"Teff={teff:.0f} K — exactly the regime STEHM was calibrated for.")
-    if teff >= 6000 and teff <= 7500:
-        return SubScore("Stellar type", 0.80, w, "F dwarf",
-                        f"Teff={teff:.0f} K (F-dwarf). STEHM results broadly transferable.")
-    if teff >= 3700 and teff < 5000:
-        return SubScore("Stellar type", 0.65, w, "K dwarf",
-                        f"Teff={teff:.0f} K (K-dwarf). Modestly higher XUV than Sun; "
-                        f"safe-size boundary may shift slightly upward.")
-    if teff < 3700:
-        return SubScore("Stellar type", 0.30, w, "M dwarf",
-                        f"Teff={teff:.0f} K (M-dwarf). STEHM is not calibrated for "
-                        f"M-dwarf XUV histories. Non-thermal escape and flares can "
-                        f"substantially worsen atmosphere retention (Hill et al. 2026 §6).")
-    return SubScore("Stellar type", 0.40, w, "Hot star",
-                    f"Teff={teff:.0f} K — hotter than F. Intense radiation and "
-                    f"short main-sequence lifetime reduce habitability prospects.")
+    if 5000 <= teff < 6000:
+        score, label, expl = (0.90, "G dwarf (solar analog)",
+            f"Teff={teff:.0f} K — exactly the regime STEHM was calibrated for.")
+    elif 6000 <= teff <= 7500:
+        score, label, expl = (0.80, "F dwarf",
+            f"Teff={teff:.0f} K (F-dwarf). STEHM results broadly transferable.")
+    elif 3700 <= teff < 5000:
+        score, label, expl = (0.65, "K dwarf",
+            f"Teff={teff:.0f} K (K-dwarf). Modestly higher XUV than Sun; "
+            f"safe-size boundary may shift slightly upward.")
+    elif teff < 3700:
+        score, label, expl = (0.30, "M dwarf",
+            f"Teff={teff:.0f} K (M-dwarf). STEHM is not calibrated for M-dwarf XUV "
+            f"histories. Non-thermal escape and flares can substantially worsen "
+            f"atmosphere retention (Hill et al. 2026 §6).")
+    else:
+        score, label, expl = (0.40, "Hot star",
+            f"Teff={teff:.0f} K — hotter than F. Intense radiation and short "
+            f"main-sequence lifetime reduce habitability prospects.")
+    if source:
+        tag = f"{sptype}, " if sptype else ""
+        expl += f" [{tag}estimated from {source}]"
+    return SubScore("Stellar type", score, w, label, expl)
 
 
 def _score_toi_disposition(disposition: Optional[str], toi: Optional[str]) -> SubScore:
@@ -309,19 +452,72 @@ def compute_hci(
     n_sectors_with_detections: int = 1,
     n_sectors_observed: int = 1,
     mass_estimates_earth: Optional[list] = None,
+    a_over_rs: Optional[float] = None,
+    radius_ratio_k: Optional[float] = None,
+    stellar_density_rho_sun: Optional[float] = None,
 ) -> HabitabilityResult:
+    # --- Resolve effective stellar parameters -----------------------------
+    # Prefer catalogue/spectroscopic values. When Teff or R* is missing, type
+    # the star from the transit-derived mean density (main-sequence assumption)
+    # so the stellar-type, HZ, and planet-size terms still have a real basis.
+    teff_eff = planet.stellar_teff
+    rstar_eff = planet.stellar_radius_sun
+    teff_estimated = planet.stellar_teff is None
+    rstar_estimated = planet.stellar_radius_sun is None
+    stellar_est = None
+    if (teff_eff is None or rstar_eff is None) and stellar_density_rho_sun:
+        stellar_est = estimate_stellar_from_density(stellar_density_rho_sun)
+        if stellar_est:
+            if teff_eff is None:
+                teff_eff = stellar_est["teff"]
+            if rstar_eff is None:
+                rstar_eff = stellar_est["radius_sun"]
+
+    # --- Effective planet radius: Rp = k x R* when no radius is given ------
+    rp_eff = planet.radius_earth
+    rp_from_ratio = False
+    if rp_eff is None and radius_ratio_k and rstar_eff:
+        rp_eff = radius_ratio_k * rstar_eff * RSUN_IN_REARTH
+        rp_from_ratio = True
+
+    # --- Build sub-scores --------------------------------------------------
+    size_sub = _score_planet_size(rp_eff, planet.mass_earth,
+                                  planet.mass_source, mass_estimates_earth)
+    if rp_from_ratio:
+        size_sub.explanation += (
+            f" Radius derived from k=Rp/R★={radius_ratio_k:.3f} × "
+            f"R★={rstar_eff:.2f} R⊙ ⇒ {rp_eff:.2f} R⊕"
+            + (" (R★ estimated from transit density)." if rstar_estimated else "."))
+
+    # Prefer the catalogue/derived semi-major axis in AU; fall back to the
+    # instellation from a/Rs (a direct transit observable) when no a_au exists.
+    if planet.semi_major_axis_au:
+        hz_sub = _score_habitable_zone(
+            planet.semi_major_axis_au, teff_eff, rstar_eff, planet.stellar_mass_sun)
+    elif a_over_rs and teff_eff:
+        hz_sub = _score_habitable_zone_insolation(
+            a_over_rs, teff_eff, teff_estimated=teff_estimated)
+    else:
+        hz_sub = _score_habitable_zone(
+            planet.semi_major_axis_au, teff_eff, rstar_eff, planet.stellar_mass_sun)
+
+    star_sub = _score_stellar_type(
+        teff_eff,
+        source="transit density" if (stellar_est and teff_estimated) else None,
+        sptype=stellar_est["sptype"] if stellar_est else None,
+    )
+
     subs = [
-        _score_planet_size(planet.radius_earth, planet.mass_earth,
-                           planet.mass_source, mass_estimates_earth),
-        _score_habitable_zone(
-            planet.semi_major_axis_au, planet.stellar_teff,
-            planet.stellar_radius_sun, planet.stellar_mass_sun,
-        ),
-        _score_stellar_type(planet.stellar_teff),
+        size_sub,
+        hz_sub,
+        star_sub,
         _score_toi_disposition(planet.disposition, planet.toi_number),
         _score_vetting_flags(vetting_verdict),
         _score_multisector(n_sectors_with_detections, n_sectors_observed),
     ]
+
+    insol = (insolation_from_a_over_rs(a_over_rs, teff_eff)
+             if (a_over_rs and teff_eff) else None)
 
     total_w = sum(s.weight for s in subs)
     hci = sum(s.score * s.weight for s in subs) / total_w * 100
@@ -369,10 +565,25 @@ def compute_hci(
             "Only one TESS sector observed. Period is unconstrained — "
             "cannot verify periodicity or consistent transit timing."
         )
-    if planet.radius_earth is None:
+    if rp_eff is None:
         caveats.append(
             "Planet radius unknown — STEHM size threshold (0.8 R⊕) could not be "
             "evaluated. A neutral placeholder is used for this component."
+        )
+    elif planet.radius_earth is None and rp_from_ratio:
+        caveats.append(
+            "Planet radius was derived from the transit radius ratio k=√depth × R★ "
+            "rather than a catalogue value; it inherits any error in R★ and assumes "
+            "a non-grazing, flat-bottomed transit."
+        )
+    if stellar_est and teff_estimated:
+        ex = " (outside the tabulated dwarf range)" if stellar_est.get("extrapolated") else ""
+        caveats.append(
+            "No spectroscopic Teff — stellar type was inferred from the transit-derived "
+            f"mean density (ρ★≈{stellar_density_rho_sun:.2f} ρ⊙ ⇒ ~{stellar_est['sptype']}, "
+            f"Teff≈{stellar_est['teff']} K{ex}), assuming a main-sequence star and a "
+            "central transit (b=0). A subgiant/giant or grazing geometry biases this; "
+            "ρ★ from duration is an upper bound when b is unknown."
         )
     caveats.append(
         "STEHM models a pure CO₂ stagnant-lid planet as a best-case for atmosphere "
@@ -388,4 +599,6 @@ def compute_hci(
         hci_high=round(hci_high, 1) if hci_high is not None else None,
         sub_scores=[asdict(s) for s in subs],
         caveats=caveats,
+        stellar_estimate=stellar_est if (stellar_est and (teff_estimated or rstar_estimated)) else None,
+        insolation_searth=round(insol, 4) if insol is not None else None,
     )

@@ -482,6 +482,9 @@ async def habitability(query: HabitabilityQuery):
         n_sectors_with_detections=query.n_sectors_with_detections,
         n_sectors_observed=query.n_sectors_observed,
         mass_estimates_earth=mass_estimates,
+        a_over_rs=tlcm_geo.get("a_over_rs"),
+        radius_ratio_k=tlcm_geo.get("radius_ratio_k"),
+        stellar_density_rho_sun=tlcm_geo.get("stellar_density_rho_sun"),
     )
 
     # POE predicted observables for this candidate (insolation, RV, etc.)
