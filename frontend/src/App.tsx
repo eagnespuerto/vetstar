@@ -1407,8 +1407,8 @@ function MultisectorPanel({ data }: { data: any }) {
                       <div className="mt-3 rounded bg-white/70 border border-slate-200 p-2">
                         <p className="text-xs font-semibold text-slate-700">
                           Habitability Chance Index
-                          {o.hci_bundle.hci
-                            ? ` — ${Math.round(o.hci_bundle.hci.score)}/100 (${o.hci_bundle.hci.tier})`
+                          {o.hci_bundle.hci && o.hci_bundle.hci.hci != null
+                            ? ` — ${Math.round(o.hci_bundle.hci.hci)}/100 (${o.hci_bundle.hci.tier})`
                             : ""}
                           {o.representative_sector
                             ? ` · from S${String(o.representative_sector).padStart(3, "0")}`
