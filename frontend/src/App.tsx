@@ -984,6 +984,7 @@ function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSourc
 
 function HabitabilityPanel({ data }: { data: any }) {
   const [expanded, setExpanded] = useState(false);
+  const [imgOpen, setImgOpen] = useState(false);
   const hci = data.hci;
   if (!hci) return null;
 
@@ -1134,6 +1135,45 @@ function HabitabilityPanel({ data }: { data: any }) {
                 <p key={i}>• {c}</p>
               ))}
               <p className="mt-1 italic">Ref: {hci.paper_ref}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Python-generated HCI summary image — metrics, weightings,
+          observables & TLCM values in one shareable figure. */}
+      {data.hci_image && (
+        <div className="border-t pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={() => setImgOpen(!imgOpen)}
+              className="text-left text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1"
+            >
+              <span>{imgOpen ? "▲" : "▼"}</span>
+              {imgOpen ? "Hide" : "Show"} HCI summary image
+            </button>
+            {imgOpen && (
+              <ShareToImgbbButton
+                base64={data.hci_image}
+                title={`HCI_summary_TIC${data.planet?.tic_id || data.planet?.toi_number || ""}`}
+                label="HCI summary"
+              />
+            )}
+          </div>
+          {imgOpen && (
+            <div className="mt-2">
+              <img
+                src={`data:image/png;base64,${data.hci_image}`}
+                alt="HCI summary (metrics, weightings, observables, TLCM)"
+                className="w-full rounded border"
+              />
+              <a
+                href={`data:image/png;base64,${data.hci_image}`}
+                download="hci_summary.png"
+                className="inline-block mt-1 text-xs text-blue-600 hover:underline"
+              >
+                Download image (PNG)
+              </a>
             </div>
           )}
         </div>
