@@ -1,4 +1,4 @@
-# Vetstar Alpha v0.1.2
+# Vetstar Alpha v0.1.3
 
 *(TESS / Kepler Vetting Studio)*
 
@@ -30,7 +30,15 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 - **Multi-event diagnostic plots**: full light curve with all events shaded
   and numbered, multi-panel zoom grid showing depth + duration + SNR per
   event, centroid behaviour, BLS and Lomb-Scargle periodograms
-- **PDF report** for archiving (centered layout, multi-page)
+- **PDF report** for archiving (centered layout, multi-page). The report is
+  self-contained: in addition to the vetting tables and diagnostic plots, it
+  now also embeds the **Habitability Chance Index** (with the combined HCI
+  summary image — see below), the **predicted observables (POE)**, the
+  **TLCM** transit-geometry values, and the full **ExoMiner** feature set
+  (scalars + diagnostic views). These extra analyses are recomputed
+  server-side at report time, so a single click yields a report covering
+  every analysis the studio offers (each block is skipped gracefully if the
+  underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
 
 ### Habitability Chance Index (HCI)
 
@@ -73,6 +81,15 @@ computed from the light curve alone:
   catalogue luminosity or distance.
 - **Planet size** — with no catalogue radius, *Rp = k × R★* from the radius
   ratio *k = √depth* and the (catalogue or density-estimated) stellar radius.
+
+**HCI summary image (shareable).** Each HCI run also returns a single
+Python-generated PNG (`hci_image`) that gathers, in one figure, the headline
+score and tier, the six sub-score **metrics with their weightings**, and
+side-by-side tables of the **predicted observables (POE)** and the **TLCM**
+geometry values. The HCI panel keeps its interactive breakdown unchanged and
+adds a collapsible **"Show HCI summary image"** section with a one-click
+**Share** button (uploads to ImgBB for a link / Markdown / BBCode) and a PNG
+download link. The same image is embedded on the HCI page of the PDF report.
 
 ### Predicted Observables for Exoplanets (POE)
 
@@ -145,21 +162,43 @@ cached — an on-target test, via `POST /api/manual_dip`.
 
 ### Plot sharing (ImgBB)
 
-Every diagnostic and phase-folded plot has a share button that uploads the
-PNG to ImgBB and returns a public link; an "upload all plots" action bundles
-the full set into a single shareable album for pasting into issues or
-collaboration threads.
+Every generated image — the diagnostic and phase-folded plots, the HCI
+summary image, the ExoMiner views, and the multi-sector timeline / per-object
+HCI / per-object ExoMiner views — has a share button that uploads the PNG to
+ImgBB and returns a public link (with Markdown and BBCode embeds); an "upload
+all plots" action bundles the full set into a single shareable album for
+pasting into issues or collaboration threads.
 
 ### Multi-sector analysis
 
-Fetches all available TESS sectors for a TIC from MAST (up to 10), runs
-the vetting pipeline on each, and produces:
+Chosen up front (a **Single sector / Multi-sector** toggle on the MAST card,
+no need to run a single sector first). Fetches up to **5** TESS sectors for a
+TIC from MAST — your selected sectors, capped to 5, or the newest 5 by
+default — runs the vetting pipeline on each, and produces:
 
 - A **detection timeline** bar chart (red = dip detected, grey = no dip)
   showing detection consistency across sectors
+- **Object identification** — the **2 deepest events per sector** are pooled
+  and grouped by transit duration into **up to 2 distinct objects**. Each
+  object is **cross-confirmed** when it appears in ≥2 sectors with the *same
+  transit duration* (within a ±0.05 h tolerance, `DURATION_MATCH_TOL_H`) and
+  the *same period*. This separates, e.g., a real repeating planet from a
+  second signal of different duration in the same target.
 - A **per-sector verdict table** with event counts, BLS period, and SDE
 - A **period consensus** estimate from sectors where BLS SDE > 6
+- **Per-object HCI + ExoMiner** — for each identified object the pipeline
+  recomputes the **Habitability Chance Index** (using the real multi-sector
+  detection counts and the object's consensus period) and the full **ExoMiner**
+  feature views, taken from the sector showing that object's deepest event.
 - Automatic **HCI score update** with real multi-sector counts
+
+Every image in the multi-sector panel — the detection timeline, each object's
+HCI summary, and each ExoMiner view — has its own **Share** button (ImgBB
+link / Markdown / BBCode).
+
+The sector cap, events-per-sector, and object cap are tunable constants
+(`MAX_SECTORS`, `EVENTS_PER_SECTOR`, `MAX_OBJECTS`) at the top of
+`pipeline.py`.
 
 ### MAST integration
 
@@ -199,6 +238,8 @@ of a cryptic error.
 Use the **Upload file** or **Fetch from MAST** tab. For MAST, enter a TIC
 ID and click "List sectors" first to see which sectors have downloadable
 data. Sectors shown with an amber background are FFI-only (no SPOC 2-min).
+On the MAST tab a **Single sector / Multi-sector (≤5)** toggle lets you
+choose the analysis scope up front (see Step 5 for multi-sector).
 
 ### Step 2 — adjust detection sensitivity (optional)
 
@@ -237,8 +278,8 @@ This means:
 Click **Run vetting** (Upload tab) or **Fetch & vet** (MAST tab). Analysis
 takes 10–30 seconds. You'll see:
 
-- A **verdict banner** (planet candidate / EB candidate / blend / ambiguous)
-  with confidence
+- A **verdict banner** (planet candidate / large planet candidate / EB
+  candidate / blend / ambiguous) with confidence
 - **Stellar parameters** and **light curve summary**
 - **Diagnostic plots**: full detrended light curve with all events shaded
   (primary in red, others in orange, each numbered), a zoom grid showing
@@ -265,28 +306,55 @@ computes the Habitability Chance Index. The score panel shows:
 
 ### Step 5 — multi-sector analysis
 
-Click **Multi-sector analysis** next to the HCI button. The app fetches
-up to 10 TESS sectors from MAST, runs the full pipeline on each, and
-displays:
+Pick **Multi-sector (≤5)** in the scope toggle on the MAST card (you can do
+this from the start — no single-sector run required). Optionally click up to
+5 sectors to include, or leave blank for the newest 5. Click **Run
+multi-sector**. The app fetches the sectors, runs the full pipeline on each,
+and displays:
 
 - A **detection timeline** bar chart across sectors
+- **Up to 2 identified objects**, each shown with its median duration, depth,
+  period, the sectors it appears in, and a confirmed / mismatch banner from
+  the same-duration (±0.05 h) and same-period cross-check
+- For **each object**, its **HCI score + summary image** and full **ExoMiner
+  feature views**, recomputed from the sector with that object's deepest event
 - A **per-sector verdict table** with event counts and BLS results
 - A **period consensus** from consistent BLS peaks
 - The **HCI score automatically updates** with the real sector counts
 
+Every image in the panel (timeline, HCI summaries, ExoMiner views) has a
+**Share** button.
+
 ### Step 6 — download PDF
 
 Click **Download PDF report** or **Fetch & download PDF** for a centered
-multi-page PDF with the verdict, all tables, and diagnostic plots.
+multi-page PDF with the verdict, all vetting tables, diagnostic plots, the
+HCI summary (including the combined HCI/observables/TLCM image), and the
+ExoMiner feature set.
 
 
 ## Verdict logic
 
-1. Implied companion radius > 2.5 R_Jup → **eclipsing binary candidate**.
-2. Secondary eclipse detected or odd/even depths differ > 3σ → **EB**.
+Evaluated in order:
+
+1. Implied companion radius **> 4.0 R_Jup** (`COMPANION_EB_HARD_RJUP`) →
+   **eclipsing binary candidate** (unambiguously stellar / brown-dwarf sized).
+2. Secondary eclipse detected, or odd/even depths differ > 3σ → **EB**.
 3. Centroid offset > 3σ → **likely blend** (background eclipsing binary).
-4. Planet-sized companion implied → **planet candidate**.
-5. Else → **ambiguous** or **no signal** based on BLS SDE.
+4. Implied radius **between the ~2.2 R_Jup planetary cap and 4.0 R_Jup** with
+   *no* corroborating eclipse signature → **large planet candidate (RV needed
+   to exclude a brown dwarf)**. A borderline-large radius is no longer treated
+   as proof of an EB on its own — matching the behaviour of more mature vetting
+   pipelines. An eclipse signature or an RV mass is required to confirm an EB.
+5. Planet-sized companion implied (< 2.2 R_Jup) → **planet candidate**.
+6. Else → **ambiguous** or **no signal** based on BLS SDE.
+
+Transit-duration consistency feeds in as a supporting signal: durations that
+agree across events to within ±0.05 h (`DURATION_MATCH_TOL_H`) reinforce a
+single real transit, while larger variation raises a `duration_inconsistent`
+caution (possible blend or multiple signals). The companion-size cap
+(`COMPANION_PLANET_CAP_RJUP`, `COMPANION_EB_HARD_RJUP`) and duration tolerance
+are tunable constants in `pipeline.py`.
 
 
 ## Report bugs or contribute
@@ -346,14 +414,14 @@ python app.py --api-only           # API only, no SPA
 
 ```
 POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=  → JSON
-POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=  → PDF
+POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=  → PDF (incl. HCI + ExoMiner)
 GET  /api/mast/sectors/{tic}                                                        → sector list
 POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr}   → JSON
-POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF
-POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON
+POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF (incl. HCI + ExoMiner)
+POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors, detect_threshold, detect_min_snr} → timeline JSON
+POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
 GET  /api/health                                                                    → {"status":"ok"}
@@ -376,13 +444,14 @@ vetstar/
 │   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
 │   │   ├── rv_fetch.py         Archive-first radial-velocity lookup
 │   │   ├── exominer.py         ExoMiner feature/view extraction
+│   │   ├── hci_image.py        HCI summary image (metrics + weightings + observables + TLCM)
 │   │   ├── tic_catalog.py      TIC v8 catalog helper
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
 │   │   └── report.py           Centered multi-page PDF builder
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx             Tabs, sensitivity panel, results, HCI, multisector
+│   │   ├── App.tsx             Tabs, single/multi-sector scope toggle, sensitivity panel, results, HCI, multisector
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
 │   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
 │   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
