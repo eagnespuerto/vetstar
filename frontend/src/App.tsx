@@ -5,6 +5,7 @@ import {
   fetchHabitability,
   fetchMultisector,
   fetchRadialVelocity,
+  fitsDownloadUrl,
   mastAnalyze,
   mastReport,
   mastSectors,
@@ -755,6 +756,15 @@ function ResultsView({ result }: { result: VettingResult }) {
           <strong>Data source:</strong>{" "}
           <code>{result.mast.author}</code> ({Math.round(result.mast.exptime ?? 0)} s
           cadence) &middot; <span className="font-mono text-xs">{result.mast.filename}</span>
+          {result.star?.tic_id != null && result.star?.sector != null && (
+            <a
+              href={fitsDownloadUrl(result.star.tic_id, result.star.sector)}
+              className="ml-3 inline-block px-2 py-0.5 rounded bg-slate-700 text-white text-xs font-medium hover:bg-slate-800 no-underline"
+              download
+            >
+              ↓ Download FITS
+            </a>
+          )}
           {result.mast.fallback && (
             <span className="block mt-1 text-xs">
               SPOC 2-min wasn't available for this TIC+sector. Falling back to{" "}
@@ -1463,6 +1473,7 @@ function MultisectorPanel({ data }: { data: any }) {
                   <th>Verdict</th>
                   <th>BLS period (d)</th>
                   <th>SDE</th>
+                  <th>FITS</th>
                 </tr>
               </thead>
               <tbody>
@@ -1485,6 +1496,20 @@ function MultisectorPanel({ data }: { data: any }) {
                     </td>
                     <td className="text-center font-mono">{v.bls_period_d?.toFixed(4) ?? "—"}</td>
                     <td className="text-center">{v.bls_sde?.toFixed(1) ?? "—"}</td>
+                    <td className="text-center">
+                      {data.tic_id != null ? (
+                        <a
+                          href={fitsDownloadUrl(data.tic_id, v.sector)}
+                          className="text-blue-600 hover:underline"
+                          download
+                          title={`Download TIC ${data.tic_id} S${String(v.sector).padStart(3, "0")} FITS`}
+                        >
+                          ↓
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

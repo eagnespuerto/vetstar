@@ -1,5 +1,10 @@
 export const API_BASE = import.meta.env.VITE_API_URL || "";
 
+/** Direct download URL for the raw SPOC light-curve FITS of a (TIC, sector). */
+export function fitsDownloadUrl(ticId: number, sector: number): string {
+  return `${API_BASE}/api/mast/download/${ticId}/${sector}`;
+}
+
 export interface DetectParams {
   threshold: number;   // 0.95..0.999
   minSnr: number;      // 1..20
