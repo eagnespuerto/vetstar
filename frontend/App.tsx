@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   analyze,
   downloadReport,
   fetchHabitability,
+  fetchObservables,
   fetchMultisector,
   fetchRadialVelocity,
   fitsDownloadUrl,
@@ -893,6 +894,9 @@ function ResultsView({ result }: { result: VettingResult }) {
       {/* Manual tiny-dip selector */}
       <ManualDipSelector result={result} />
 
+      {/* Observables, parameters & TLCM — standalone, independent of HCI */}
+      <ObservablesSection result={result} />
+
       {/* Habitability Chance Index */}
       <section className="bg-white rounded-lg shadow p-5">
         <div className="flex items-center justify-between mb-3">
@@ -941,7 +945,6 @@ function ResultsView({ result }: { result: VettingResult }) {
         )}
 
         {hciData && <HabitabilityPanel data={hciData} />}
-        {hciData?.observables && <ObservablesPanel obs={hciData.observables} tlcm={hciData.tlcm} aSource={hciData.semi_major_axis_source} result={result} />}
         {hciData && <RVPanel ticId={result.star.tic_id} periodD={result.bls?.period ?? null} mstar={hciData?.planet?.stellar_mass_sun ?? null} onUseMass={(m) => runHci(m)} massInHci={hciData?.planet?.mass_earth ?? null} massSource={hciData?.planet?.mass_source ?? null} />}
         {multisectorData && <MultisectorPanel data={multisectorData} />}
       </section>
@@ -1046,6 +1049,111 @@ function RVPanel({ ticId, periodD, mstar, onUseMass, massInHci, massSource }: { 
         </div>
       )}
     </div>
+  );
+}
+
+function ObservablesSection({ result }: { result: VettingResult }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
+  const ranRef = useRef(false);
+
+  useEffect(() => {
+    if (ranRef.current) return;
+    ranRef.current = true;
+    compute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function compute() {
+    setLoading(true);
+    setError(null);
+    try {
+      // Same verdict-derived hints the HCI path feeds to /api/observables.
+      const vv: Record<string, any> = {
+        _bls_period: result.bls?.period ?? null,
+        _period: result.bls?.period ?? null,
+        _depth: result.physics?.observed_depth ?? result.events?.[0]?.depth ?? null,
+        _bls_depth: result.bls?.depth ?? null,
+        _t14_d: result.shape?.t14_d ?? null,
+        _bls_duration: result.bls?.duration ?? null,
+        _shape_class: result.shape?.shape_class ?? null,
+        _R_companion_Rjup: result.physics?.R_companion_Rjup ?? null,
+        _events: result.events,
+      };
+      const obs = await fetchObservables({
+        tic_id: result.star.tic_id ?? undefined,
+        stellar_teff: result.star.teff ?? undefined,
+        stellar_radius_sun: result.star.radius ?? undefined,
+        stellar_mass_sun: result.star.mass ?? undefined,
+        orbital_period_d: result.bls?.period ?? undefined,
+        rp_rjup: result.physics?.R_companion_Rjup ?? undefined,
+        transit_depth_frac: result.physics?.observed_depth ?? result.bls?.depth ?? undefined,
+        vetting_verdict: vv,
+      });
+      setData(obs);
+    } catch (e: any) {
+      setError(e?.message ?? "Observables request failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="bg-white rounded-lg shadow p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="font-bold text-slate-800">Observables, parameters &amp; TLCM</h3>
+          <p className="text-xs text-slate-400">
+            POE forward model, transit geometry, and ExoFOP-TESS TOI parameters — independent of HCI
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!loading && (
+            <button onClick={compute} className="text-xs text-slate-500 hover:text-slate-800 underline">
+              Re-run
+            </button>
+          )}
+          <button
+            onClick={() => setExpanded((x) => !x)}
+            className="text-slate-400 hover:text-slate-700 text-sm"
+            aria-label={expanded ? "Collapse" : "Expand"}
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <>
+          {loading && (
+            <div className="rounded bg-slate-50 border border-slate-200 p-3 text-sm">
+              <CyclingLoader
+                messages={[
+                  "Forward-modelling observables…",
+                  "Working out the transit geometry…",
+                  "Mapping ExoFOP TOI fields…",
+                ]}
+              />
+            </div>
+          )}
+          {!loading && error && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+              {error}
+            </p>
+          )}
+          {!loading && !error && data && (
+            <ObservablesPanel
+              obs={data}
+              tlcm={data.tlcm}
+              aSource={data.semi_major_axis_source}
+              result={result}
+            />
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
