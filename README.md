@@ -39,7 +39,8 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 - **BTJD → BJD epoch helper**: a guide just below the verdict reminds you that
   TESS times are in BTJD and ExoFOP expects BJD (BJD = BTJD + 2,457,000), and
   shows the candidate's own epoch converted.
-- **ExoFOP-TESS TOI parameters**: the observables tab lays out the full ExoFOP
+- **ExoFOP-TESS TOI parameters**: a standalone observables section (separate
+  from HCI) lays out the full ExoFOP
   TOI submission parameter set — the four required fields (period, epoch in
   BJD, depth in ppm, duration in hours) plus inclination, impact parameter,
   Rp/R★, a/R★, radius, mass, equilibrium temperature, insolation, stellar
@@ -135,14 +136,17 @@ objects:
   (distance permitting)
 - **Predicted transit depth**
 
-Results are surfaced in the Habitability panel and folded into the HCI
-(semi-major axis derived from period feeds the habitable-zone sub-score) and
-the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
+Results appear in their own **Observables, parameters & TLCM** section
+(directly below the diagnostic tests, independent of the HCI panel — it
+auto-computes with the results, so you can read off the transit parameters
+without ever running the habitability score). They are also folded into the
+HCI (semi-major axis derived from period feeds the habitable-zone sub-score)
+and the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
 `transit_depth_pred_pct`).
 
 ### ExoFOP-TESS TOI parameters
 
-Below the POE/TLCM block the observables tab assembles the full **ExoFOP-TESS
+Below the POE/TLCM block, the same section assembles the full **ExoFOP-TESS
 TOI parameter set**, in submission order, mapping the studio's measured and
 derived quantities to the fields ExoFOP expects. The four **required** fields
 are flagged with `***`:
@@ -371,6 +375,8 @@ takes 10–30 seconds. You'll see:
 
 - A **verdict banner** (planet candidate / large planet candidate / EB
   candidate / blend / ambiguous) with confidence
+- A **BTJD → BJD** conversion guide just below the verdict, with this
+  candidate's epoch converted for you
 - **Stellar parameters** and **light curve summary**
 - **Diagnostic plots**: full detrended light curve with all events shaded
   (primary in red, others in orange, each numbered), a zoom grid showing
@@ -381,6 +387,9 @@ takes 10–30 seconds. You'll see:
 - **Event table** listing every dip with timing and depth
 - A **Target field** panel with the FFI cutout (auto-loads), showing the
   target and aperture on the sky
+- An **Observables, parameters & TLCM** section (auto-loads) with the POE
+  forward model, the TLCM transit geometry, and the ExoFOP-TESS TOI parameter
+  table — all independent of the habitability score below
 
 ### Step 4 — compute habitability score
 
@@ -556,7 +565,7 @@ vetstar/
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx             Tabs, single/multi-sector scope toggle, sensitivity panel, results, HCI, multisector
+│   │   ├── App.tsx             Tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
 │   │   ├── FfiCutoutPanel.tsx   TESScut FFI cutout panel (auto-loads under results)
 │   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
