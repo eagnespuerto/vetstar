@@ -208,7 +208,7 @@ def run_bls(
     }
 
 
-def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
+def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> list:
     """Direct event detection — finds discrete dips regardless of period.
 
     Uses a two-pass approach:
@@ -222,9 +222,22 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
     fixed 0.997 threshold. The adaptive approach catches it. For a noisy
     star the fixed threshold still acts as a floor.
 
-    Each candidate event must also pass the per-event SNR check (depth
-    must exceed min_snr × scatter) to reject noise wiggles that happen to
-    cross the threshold on individual points.
+    Each candidate event must also pass a per-event SNR check. That check
+    uses the *integrated* significance of the dip, not a single point:
+
+        snr = mean_in_transit_depth × sqrt(n_points) / scatter
+
+    The sqrt(n) factor is essential. A real but shallow transit on a noisy
+    star can have a per-point depth ≈ the scatter (point SNR ≈ 1) yet still
+    be hugely significant once you average over the dozens of in-transit
+    points (integrated SNR ≈ 10). The old check divided a single point's
+    depth by the scatter, so it threw away every shallow-on-noisy transit —
+    e.g. an 0.8%-deep, ~5 h transit on a star with 0.53% point scatter
+    scored ~1.5 and was rejected despite being a clear, repeating signal.
+
+    Contiguous in-dip stretches separated by only a few points (median-filter
+    noise can briefly lift the smoothed flux back over the threshold mid-dip)
+    are bridged via ``max_gap`` so one transit yields one event, not two.
     """
     fs = median_filter(f, size=21)
     baseline = float(np.nanmedian(fs))
@@ -250,6 +263,23 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
     effective_threshold = max(threshold, adaptive_threshold)
 
     in_dip = fs < effective_threshold
+
+    # Bridge short gaps: fill runs of <= max_gap "out" points that sit between
+    # two "in" stretches, so median-filter noise doesn't split one transit.
+    if max_gap > 0:
+        i = 0
+        n = len(in_dip)
+        while i < n:
+            if not in_dip[i]:
+                start = i
+                while i < n and not in_dip[i]:
+                    i += 1
+                # gap is [start, i); bridge only if flanked on both sides
+                if 0 < start and i < n and (i - start) <= max_gap:
+                    in_dip[start:i] = True
+            else:
+                i += 1
+
     events = []
     i = 0
     while i < len(t):
@@ -259,11 +289,16 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
                 i += 1
             end = i
             if end - start >= min_pts:
+                seg = f[start:end]
+                n_pts = end - start
                 seg_min = float(fs[start:end].min())
-                depth = float(baseline - seg_min)
-                # Per-event SNR check (depth vs scatter)
-                snr = depth / scatter if scatter > 0 else 0.0
-                if snr >= min_snr:
+                depth = float(baseline - seg_min)              # max depth (reporting)
+                mean_depth = float(baseline - np.nanmean(seg))  # avg depth (significance)
+                # Integrated SNR: average dip depth grows in significance with
+                # sqrt(number of in-transit points). This is what lets a shallow
+                # transit on a noisy star clear the bar.
+                snr = mean_depth * np.sqrt(n_pts) / scatter if scatter > 0 else 0.0
+                if snr >= min_snr and mean_depth > 0:
                     events.append(
                         {
                             "t_start": float(t[start]),
@@ -272,7 +307,7 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0) -> list:
                             "min_flux": seg_min,
                             "depth": depth,
                             "depth_snr": float(snr),
-                            "n_points": int(end - start),
+                            "n_points": int(n_pts),
                         }
                     )
         else:
