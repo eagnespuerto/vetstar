@@ -1,11 +1,12 @@
 # Vetstar Alpha v0.1.3
 
-*(TESS / Kepler Vetting Studio)*
+*(TESS Vetting Studio)*
 
-A web app for full transit / eclipse vetting of TESS or Kepler light curves,
-with a STEHM-based habitability scoring engine and multi-sector analysis.
-Upload a SPOC FITS file (or pull one from MAST by TIC + sector) and receive
-a complete vetting report with PDF export — no install required.
+A web app for full transit / eclipse vetting of TESS light curves (legacy
+Kepler files are also accepted), with a STEHM-based habitability scoring
+engine and multi-sector analysis. Upload a SPOC FITS file (or pull one from
+MAST by TIC + sector) and receive a complete vetting report with PDF export
+— no install required.
 
 **Live at <https://vetstar.onrender.com>**
 
@@ -26,19 +27,31 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 - **Secondary eclipse search** at phase 0.5
 - **Transit shape analysis** (U vs V, ingress / egress / flat-bottom durations)
 - **Physics-based companion sizing** with CROWDSAP dilution correction
+- **Target field — FFI cutout**: a Full-Frame-Image thumbnail of the patch
+  of sky the light curve came from, fetched from MAST's **TESScut** service
+  and rendered with an asinh / percentile stretch (the same scaling
+  `astrocut` uses). The target is marked with a red **+** and the photometric
+  aperture is outlined in yellow — a quick eyeball check for a bright
+  neighbour or background eclipsing binary blended into the aperture (see
+  [Example output](#example-output)). Auto-loads in its own panel below the
+  results and is embedded in the PDF.
 - **Automated verdict**: planet candidate / EB candidate / blend / ambiguous
 - **Multi-event diagnostic plots**: full light curve with all events shaded
   and numbered, multi-panel zoom grid showing depth + duration + SNR per
   event, centroid behaviour, BLS and Lomb-Scargle periodograms
-- **PDF report** for archiving (centered layout, multi-page). The report is
-  self-contained: in addition to the vetting tables and diagnostic plots, it
-  now also embeds the **Habitability Chance Index** (with the combined HCI
-  summary image — see below), the **predicted observables (POE)**, the
-  **TLCM** transit-geometry values, and the full **ExoMiner** feature set
-  (scalars + diagnostic views). These extra analyses are recomputed
-  server-side at report time, so a single click yields a report covering
-  every analysis the studio offers (each block is skipped gracefully if the
-  underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
+- **PDF report** for archiving — a clean, consistent multi-page layout: every
+  page carries the same header band and a footer with page numbers, tables
+  share one zebra-striped style, section headings stay attached to their
+  content (no orphaned headings across page breaks), and embedded plots keep
+  their true aspect ratio. The report is self-contained: alongside the vetting
+  tables and diagnostic plots it embeds the **FFI cutout**, the **Habitability
+  Chance Index** (with the combined HCI summary image — see below), the
+  **predicted observables (POE)**, the **TLCM** transit-geometry values, and
+  the full **ExoMiner** feature set (scalars + diagnostic views). These extra
+  analyses are recomputed server-side at report time, so a single click yields
+  a report covering every analysis the studio offers (each block is skipped
+  gracefully if the underlying data — e.g. a TIC ID for ExoFOP — is
+  unavailable).
 
 ### Habitability Chance Index (HCI)
 
@@ -223,12 +236,40 @@ is unavailable for FFI products.
 
 The fetcher uses multiple name-resolution strategies (literal TIC name →
 TIC catalog coordinate cone search → MAST object resolver) with
-retry-and-exponential-backoff on transient MAST errors.
+retry-and-exponential-backoff on transient MAST errors. Because MAST's
+name/coordinate searches actually return a small cone around the target,
+results are **filtered to the exact requested TIC** (by `target_name`) before
+a product is chosen — otherwise a close neighbour in the same crowded TESS
+field could be downloaded instead of the intended star.
 
 If a very recent sector has observation metadata in MAST's catalog but the
 SPOC/QLP pipeline hasn't finished processing the light curves yet, the app
 returns a clear message explaining the data-availability timeline instead
 of a cryptic error.
+
+
+## Example output
+
+A few representative outputs (illustrative — generated from a TESS-like
+target):
+
+**FFI cutout of the target field.** The target sits at the centre (red +),
+with the photometric aperture outlined in yellow. Here a fainter neighbour is
+visible to the upper-left — exactly the kind of nearby source that can dilute
+a transit or, if it's the real variable, masquerade as one on the target.
+
+![TESS FFI cutout of the target, target marked with a red plus and aperture outlined in yellow](docs/images/ffi_cutout_example.png)
+
+**PDF report — cover page.** Verdict banner, stellar parameters, and the
+light-curve summary, with the running header band and page footer that repeat
+on every page.
+
+![PDF report cover page showing the verdict, stellar parameters and light curve summary tables](docs/images/pdf_report_cover.png)
+
+**PDF report — target field page.** The FFI cutout and the detrended light
+curve, each kept at its true aspect ratio.
+
+![PDF report page showing the embedded FFI cutout above the detrended light curve](docs/images/pdf_report_field.png)
 
 
 ## How to use the app
@@ -250,8 +291,12 @@ sliders:
   absolute floor for flagging dips. The label updates to show the
   equivalent percent depth ("flag dips deeper than 0.30%").
 
-- **Minimum SNR** (default `4σ`, range `1σ`–`10σ`) — dip depth must
-  exceed this multiple of the star's local photometric scatter.
+- **Minimum SNR** (default `4σ`, range `1σ`–`10σ`) — the *integrated*
+  significance a dip must reach. Significance is measured over the whole
+  event, not a single point: `mean depth × √(in-transit points) / scatter`.
+  The √N factor is what lets a shallow transit on a noisy star qualify —
+  e.g. an 0.8%-deep, ~5 h transit on a star with 0.5% point scatter has a
+  per-point SNR near 1 but an integrated SNR around 10.
 
 **How the adaptive detection works.** The pipeline computes the star's
 actual scatter (MAD of out-of-dip points) and sets an adaptive threshold:
@@ -264,7 +309,10 @@ This means:
 - **Shallow dips on quiet stars** (like a 0.06% transit on a star with
   0.02% scatter): the adaptive threshold (e.g. `1.0 − 3×0.0002 = 0.9994`)
   catches them — the old fixed threshold couldn't.
-- **Pure noise**: the per-event SNR check rejects spurious crossings.
+- **Pure noise**: the integrated per-event SNR check rejects spurious
+  crossings — a one- or two-point dip can't accumulate enough significance.
+  Contiguous in-dip stretches split only by a few noisy points are bridged,
+  so one transit is reported as one event rather than several fragments.
 
 **Rule of thumb:**
 
@@ -288,6 +336,8 @@ takes 10–30 seconds. You'll see:
 - **Test tables**: BLS, Lomb-Scargle, centroid, odd/even, secondary
   eclipse, transit shape, physical interpretation
 - **Event table** listing every dip with timing and depth
+- A **Target field** panel with the FFI cutout (auto-loads), showing the
+  target and aperture on the sky
 
 ### Step 4 — compute habitability score
 
@@ -327,9 +377,10 @@ Every image in the panel (timeline, HCI summaries, ExoMiner views) has a
 
 ### Step 6 — download PDF
 
-Click **Download PDF report** or **Fetch & download PDF** for a centered
-multi-page PDF with the verdict, all vetting tables, diagnostic plots, the
-HCI summary (including the combined HCI/observables/TLCM image), and the
+Click **Download PDF report** or **Fetch & download PDF** for a clean
+multi-page PDF (repeating header band + page-numbered footer) with the
+verdict, all vetting tables, diagnostic plots, the FFI cutout, the HCI
+summary (including the combined HCI/observables/TLCM image), and the
 ExoMiner feature set.
 
 
@@ -423,6 +474,7 @@ POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_ve
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
 POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
+POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
@@ -444,15 +496,17 @@ vetstar/
 │   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
 │   │   ├── rv_fetch.py         Archive-first radial-velocity lookup
 │   │   ├── exominer.py         ExoMiner feature/view extraction
+│   │   ├── ffi_cutout.py       TESScut FFI cutout fetch + render (astrocut-style stretch)
 │   │   ├── hci_image.py        HCI summary image (metrics + weightings + observables + TLCM)
 │   │   ├── tic_catalog.py      TIC v8 catalog helper
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
-│   │   └── report.py           Centered multi-page PDF builder
+│   │   └── report.py           Clean multi-page PDF builder (running header/footer, unified tables)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx             Tabs, single/multi-sector scope toggle, sensitivity panel, results, HCI, multisector
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
+│   │   ├── FfiCutoutPanel.tsx   TESScut FFI cutout panel (auto-loads under results)
 │   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
 │   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
 │   │   ├── imgbb.ts            ImgBB upload client
