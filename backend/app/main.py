@@ -56,16 +56,35 @@ _lc_cache: dict = {}
 _ffi_cache: dict = {}
 
 
-def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15):
+def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float = 45.0):
     """Return a TESScut FFI cutout dict for the target, fetching once and
-    caching by (tic_id, sector). Fails soft (returns None)."""
+    caching by (tic_id, sector). Fails soft (returns None). The TESScut
+    fetch is bounded by a timeout and run in a worker thread so a slow or
+    stuck MAST request can never hang the request and trip a gateway 502."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     from .ffi_cutout import make_ffi_cutout
 
     key = (tic_id, sector)
     if key in _ffi_cache:
         return _ffi_cache[key]
-    cutout = make_ffi_cutout(ra=ra, dec=dec, sector=sector, tic_id=tic_id, size_px=size_px)
-    _ffi_cache[key] = cutout  # cache None too, to avoid retrying a dead lookup
+
+    cutout = None
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(
+                make_ffi_cutout, ra=ra, dec=dec, sector=sector,
+                tic_id=tic_id, size_px=size_px,
+            )
+            cutout = fut.result(timeout=timeout_s)
+    except FutureTimeout:
+        log.warning("FFI cutout timed out after %.0fs for TIC %s S%s", timeout_s, tic_id, sector)
+        cutout = None  # don't cache a timeout — a retry may succeed
+        return None
+    except Exception as e:
+        log.warning("FFI cutout error for TIC %s S%s: %s", tic_id, sector, e)
+        cutout = None
+
+    _ffi_cache[key] = cutout  # cache success or a clean "no cutout" (None)
     return cutout
 
 
@@ -875,9 +894,9 @@ class FfiCutoutRequest(BaseModel):
 
 @app.post("/api/ffi_cutout")
 def api_ffi_cutout(req: FfiCutoutRequest):
-    """Return a rendered TESScut FFI cutout for the target. Returns
-    ``{"available": False, "reason": ...}`` rather than erroring when the
-    cutout can't be produced, so the panel can show a friendly message."""
+    """Return a rendered TESScut FFI cutout for the target. Always returns
+    HTTP 200 — on any failure it returns ``{"available": False, "reason": ...}``
+    so the panel shows a friendly message instead of a hard error."""
     try:
         cutout = _get_ffi_cutout(
             req.tic_id, req.sector, req.ra, req.dec, size_px=req.size_px
@@ -887,12 +906,16 @@ def api_ffi_cutout(req: FfiCutoutRequest):
                 "available": False,
                 "reason": (
                     "No FFI cutout available — TESScut may not cover this "
-                    "sector/position yet, or MAST was unreachable."
+                    "sector/position yet, or the request to MAST timed out."
                 ),
             }
         return {"available": True, **cutout}
     except Exception as e:
-        raise _handle_exception("ffi_cutout", e)
+        log.warning("FFI cutout endpoint failed: %s", e)
+        return {
+            "available": False,
+            "reason": "FFI cutout could not be generated right now. Please try again.",
+        }
 
 
 # -------------------------------------------------

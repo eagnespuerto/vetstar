@@ -146,8 +146,14 @@ def make_ffi_cutout(
     sector: Optional[int] = None,
     tic_id: Optional[int] = None,
     size_px: int = _DEFAULT_SIZE_PX,
+    max_frames: int = 400,
 ) -> Optional[dict]:
     """Fetch a TESScut FFI cutout at (ra, dec) for ``sector`` and render it.
+
+    Memory-conscious: the cutout is downloaded to a temp file and read with
+    ``memmap``, and the median image is built from at most ``max_frames``
+    evenly-spaced good cadences — so we never hold the full sector cube
+    (which can be ~80 MB and OOM a small instance) in RAM at once.
 
     Returns ``{"image": <base64 png>, "size_px": int, "n_frames": int,
     "sector": int|None}`` or ``None`` if the cutout could not be produced.
@@ -155,44 +161,63 @@ def make_ffi_cutout(
     if ra is None or dec is None:
         log.info("FFI cutout skipped: no coordinates")
         return None
+
+    import shutil
+    import tempfile
+
+    tmpdir = None
     try:
+        import numpy as _np
         from astropy.coordinates import SkyCoord
-        from astropy import units as u
+        from astropy.io import fits
         from astroquery.mast import Tesscut
 
         coord = SkyCoord(float(ra), float(dec), unit="deg")
-        kwargs = {"coordinates": coord, "size": int(size_px)}
+        tmpdir = tempfile.mkdtemp(prefix="ffi_")
+        kwargs = {"coordinates": coord, "size": int(size_px), "path": tmpdir, "inflate": True}
         if sector is not None:
             kwargs["sector"] = int(sector)
-        hdulists = Tesscut.get_cutouts(**kwargs)
-        if not hdulists:
-            log.info("TESScut returned no cutouts for (%.4f, %.4f) S%s", ra, dec, sector)
-            return None
 
-        hdul = hdulists[0]
-        data = hdul[1].data
-        flux = np.asarray(data["FLUX"])          # (n_time, ny, nx)
-        quality = None
-        for q in ("QUALITY", "DQUALITY"):
-            if q in data.columns.names:
-                quality = np.asarray(data[q])
-                break
-        aperture = None
-        try:
-            aperture = np.asarray(hdul[2].data)
-        except Exception:
-            pass
+        manifest = Tesscut.download_cutouts(**kwargs)
+        if manifest is None or len(manifest) == 0 or "Local Path" not in manifest.colnames:
+            log.info("TESScut returned no cutout file for (%.4f, %.4f) S%s", ra, dec, sector)
+            return None
+        path = str(manifest["Local Path"][0])
+
+        with fits.open(path, memmap=True) as hdul:
+            data = hdul[1].data
+            n = len(data)
+            quality = None
+            for q in ("QUALITY", "DQUALITY"):
+                if q in data.columns.names:
+                    quality = _np.asarray(data[q])
+                    break
+            good = _np.where(quality == 0)[0] if quality is not None else _np.arange(n)
+            if good.size == 0:
+                good = _np.arange(n)
+            if good.size > max_frames:
+                good = good[_np.linspace(0, good.size - 1, max_frames).astype(int)]
+            # Fancy-indexing a memmapped column loads only the selected rows.
+            flux = _np.asarray(data["FLUX"][good], dtype=float)
+            aperture = None
+            try:
+                aperture = _np.asarray(hdul[2].data)
+            except Exception:
+                pass
 
         image = render_cutout_png(
-            flux, aperture=aperture, quality=quality,
+            flux, aperture=aperture, quality=None,
             tic_id=tic_id, sector=sector, ra=ra, dec=dec,
         )
         return {
             "image": image,
             "size_px": int(size_px),
-            "n_frames": int(flux.shape[0]) if flux.ndim == 3 else 1,
+            "n_frames": int(good.size),
             "sector": int(sector) if sector is not None else None,
         }
     except Exception as e:  # network, missing sector, parse error — all soft.
         log.warning("FFI cutout failed for (%.4f, %.4f) S%s: %s", ra, dec, sector, e)
         return None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
