@@ -36,6 +36,16 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   [Example output](#example-output)). Auto-loads in its own panel below the
   results and is embedded in the PDF.
 - **Automated verdict**: planet candidate / EB candidate / blend / ambiguous
+- **BTJD → BJD epoch helper**: a guide just below the verdict reminds you that
+  TESS times are in BTJD and ExoFOP expects BJD (BJD = BTJD + 2,457,000), and
+  shows the candidate's own epoch converted.
+- **ExoFOP-TESS TOI parameters**: the observables tab lays out the full ExoFOP
+  TOI submission parameter set — the four required fields (period, epoch in
+  BJD, depth in ppm, duration in hours) plus inclination, impact parameter,
+  Rp/R★, a/R★, radius, mass, equilibrium temperature, insolation, stellar
+  density, semi-major axis, eccentricity, and RV semi-amplitude — mapped from
+  the measured and derived quantities and ready to copy into ExoFOP. The same
+  table is included in the PDF.
 - **Multi-event diagnostic plots**: full light curve with all events shaded
   and numbered, multi-panel zoom grid showing depth + duration + SNR per
   event, centroid behaviour, BLS and Lomb-Scargle periodograms
@@ -46,12 +56,16 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   their true aspect ratio. The report is self-contained: alongside the vetting
   tables and diagnostic plots it embeds the **FFI cutout**, the **Habitability
   Chance Index** (with the combined HCI summary image — see below), the
-  **predicted observables (POE)**, the **TLCM** transit-geometry values, and
-  the full **ExoMiner** feature set (scalars + diagnostic views). These extra
-  analyses are recomputed server-side at report time, so a single click yields
-  a report covering every analysis the studio offers (each block is skipped
-  gracefully if the underlying data — e.g. a TIC ID for ExoFOP — is
-  unavailable).
+  **predicted observables (POE)**, the **TLCM** transit-geometry values, the
+  **ExoFOP TOI parameters** table, and the full **ExoMiner** feature set
+  (scalars + diagnostic views). These extra analyses are recomputed
+  server-side at report time, so a single click yields a report covering every
+  analysis the studio offers (each block is skipped gracefully if the
+  underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
+- **Multi-sector PDF report**: the multi-sector panel can export its own PDF
+  in the same clean format — an overview, the target FFI cutout, the detection
+  timeline, a per-sector verdict table, and a full section (HCI summary,
+  ExoFOP TOI parameters, ExoMiner) for each identified object.
 
 ### Habitability Chance Index (HCI)
 
@@ -125,6 +139,26 @@ Results are surfaced in the Habitability panel and folded into the HCI
 (semi-major axis derived from period feeds the habitable-zone sub-score) and
 the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
 `transit_depth_pred_pct`).
+
+### ExoFOP-TESS TOI parameters
+
+Below the POE/TLCM block the observables tab assembles the full **ExoFOP-TESS
+TOI parameter set**, in submission order, mapping the studio's measured and
+derived quantities to the fields ExoFOP expects. The four **required** fields
+are flagged with `***`:
+
+- **Orbital Period** (days) — BLS period
+- **Transit Epoch** (BJD) — pipeline `t0`, converted **BTJD → BJD** (+2,457,000)
+- **Transit Depth** (ppm) — observed (dilution-corrected where available) depth
+- **Transit Duration** (hrs) — fitted T14
+
+…followed by inclination, impact parameter *b*, Rp/R★, a/R★, radius (R⊕),
+mass (M⊕), **equilibrium temperature** (Teq = 278.3·S^¼ K), insolation,
+fitted stellar density, semi-major axis, eccentricity, and RV semi-amplitude.
+Quantities a transit-only fit can't constrain (argument of periastron, time of
+periastron) are shown as "—". Non-required values are forward-model estimates,
+not fitted parameters, and are labelled as such. The identical table is
+embedded in both the single-sector and multi-sector PDF reports.
 
 ### Transit geometry & absolute masses (TLCM)
 
@@ -208,6 +242,15 @@ default — runs the vetting pipeline on each, and produces:
 Every image in the multi-sector panel — the detection timeline, each object's
 HCI summary, and each ExoMiner view — has its own **Share** button (ImgBB
 link / Markdown / BBCode).
+
+A **Download multi-sector PDF** button on the panel exports the whole analysis
+as a PDF in the same clean format as the single-sector report: an overview
+(sectors observed / with detections, consensus period), the target FFI cutout,
+the detection timeline, the per-sector verdict table, and a full section per
+identified object — its summary, HCI summary image, **ExoFOP TOI parameters**
+(epoch taken from the object's deepest member), and ExoMiner views — plus a
+list of any sectors that failed to fetch. The report re-runs the analysis on
+the same sectors the panel displayed, so the PDF always matches the screen.
 
 The sector cap, events-per-sector, and object cap are tunable constants
 (`MAX_SECTORS`, `EVENTS_PER_SECTOR`, `MAX_OBJECTS`) at the top of
@@ -373,15 +416,23 @@ and displays:
 - The **HCI score automatically updates** with the real sector counts
 
 Every image in the panel (timeline, HCI summaries, ExoMiner views) has a
-**Share** button.
+**Share** button, and a **Download multi-sector PDF** button exports the whole
+analysis (see Step 6).
 
 ### Step 6 — download PDF
 
 Click **Download PDF report** or **Fetch & download PDF** for a clean
 multi-page PDF (repeating header band + page-numbered footer) with the
 verdict, all vetting tables, diagnostic plots, the FFI cutout, the HCI
-summary (including the combined HCI/observables/TLCM image), and the
-ExoMiner feature set.
+summary (including the combined HCI/observables/TLCM image), the **ExoFOP TOI
+parameters** table, and the ExoMiner feature set.
+
+From the multi-sector panel, **Download multi-sector PDF** produces the same
+clean format for the whole run: overview, target FFI cutout, detection
+timeline, per-sector verdicts, and a per-object section (HCI summary, ExoFOP
+TOI parameters, ExoMiner). It re-runs the analysis on the displayed sectors,
+so the file matches what's on screen — expect a short build time for several
+sectors.
 
 
 ## Verdict logic
@@ -465,14 +516,15 @@ python app.py --api-only           # API only, no SPA
 
 ```
 POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=  → JSON
-POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=  → PDF (incl. HCI + ExoMiner)
+POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=  → PDF (incl. HCI + ExoFOP + ExoMiner)
 GET  /api/mast/sectors/{tic}                                                        → sector list
 POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr}   → JSON
-POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF (incl. HCI + ExoMiner)
+POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF (incl. HCI + ExoFOP + ExoMiner)
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
 POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
+POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
@@ -492,7 +544,7 @@ vetstar/
 │   │   ├── parsers.py          FITS + ExoFOP JSON readers
 │   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
 │   │   ├── habitability.py     STEHM-based HCI scoring engine
-│   │   ├── observables.py      POE forward-modelled observables
+│   │   ├── observables.py      POE forward-modelled observables + ExoFOP TOI parameter mapping
 │   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
 │   │   ├── rv_fetch.py         Archive-first radial-velocity lookup
 │   │   ├── exominer.py         ExoMiner feature/view extraction
@@ -500,7 +552,7 @@ vetstar/
 │   │   ├── hci_image.py        HCI summary image (metrics + weightings + observables + TLCM)
 │   │   ├── tic_catalog.py      TIC v8 catalog helper
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
-│   │   └── report.py           Clean multi-page PDF builder (running header/footer, unified tables)
+│   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
