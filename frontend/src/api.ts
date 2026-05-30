@@ -193,6 +193,38 @@ export async function runExominer(req: ExominerRequest): Promise<ExominerResult>
   return r.json();
 }
 
+// ---------- FFI cutout --------------------------------------------------
+
+export interface FfiCutoutResult {
+  available: boolean;
+  reason?: string;
+  image?: string; // base64 PNG (no data-URI prefix)
+  size_px?: number;
+  n_frames?: number;
+  sector?: number | null;
+}
+
+export interface FfiCutoutRequest {
+  ra: number;
+  dec: number;
+  sector?: number;
+  tic_id?: number;
+  size_px?: number;
+}
+
+export async function runFfiCutout(req: FfiCutoutRequest): Promise<FfiCutoutResult> {
+  const r = await fetch(`${API_BASE}/api/ffi_cutout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`FFI cutout failed (${r.status}): ${text}`);
+  }
+  return r.json();
+}
+
 // ---------- Manual tiny-dip selector -----------------------------------
 
 export interface ManualDip {
