@@ -711,6 +711,41 @@ def _build_report_extras(
 
 @app.post("/api/mast/multisector")
 async def mast_multisector(query: MultisectorQuery):
+    analysis, _rep_star = _run_mast_multisector(query)
+    return analysis
+
+
+@app.post("/api/mast/multisector/report")
+async def mast_multisector_report(query: MultisectorQuery):
+    """Build a multi-sector PDF report — same clean layout as the
+    single-sector report, with an overview, per-sector verdicts, and a full
+    section (HCI summary, ExoFOP TOI parameters, ExoMiner) per identified
+    object."""
+    from .report import build_multisector_pdf
+
+    analysis, rep_star = _run_mast_multisector(query)
+    try:
+        ffi = None
+        if rep_star is not None and getattr(rep_star, "ra", None) is not None:
+            ffi = _get_ffi_cutout(
+                query.tic_id, getattr(rep_star, "sector", None),
+                rep_star.ra, rep_star.dec,
+            )
+        pdf = build_multisector_pdf(analysis, ffi_cutout=ffi)
+    except Exception as e:
+        raise _handle_exception("build_multisector_pdf", e)
+
+    fname = f"vetting_TIC{query.tic_id}_multisector.pdf"
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _run_mast_multisector(query: MultisectorQuery):
+    """Fetch + analyse multiple sectors for a TIC. Returns
+    ``(analysis_dict, representative_star)``. Used by both the JSON endpoint
+    and the PDF report endpoint so they stay in lock-step."""
     from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
 
     try:
@@ -800,7 +835,8 @@ async def mast_multisector(query: MultisectorQuery):
             obj["hci_bundle"] = obj.get("hci_bundle")
             obj["exominer"] = obj.get("exominer")
 
-    return analysis
+    rep_star = sector_results[0][1].star if sector_results else None
+    return analysis, rep_star
 
 
 # -------------------------------------------------

@@ -197,37 +197,9 @@ def _make_decorator(title_line, sub_line):
 # ----------------------------------------------------------------------
 # Build
 # ----------------------------------------------------------------------
-def build_pdf(
-    result: VettingResult,
-    hci_bundle: dict = None,
-    exominer: dict = None,
-    ffi_cutout: dict = None,
-) -> bytes:
-    buf = io.BytesIO()
-
-    star = result.star
-    v = result.verdict
-    title_line = "TESS Vetting Report"
-    sub_line = f"TIC {star.tic_id}" if star.tic_id else ""
-
-    doc = BaseDocTemplate(
-        buf,
-        pagesize=letter,
-        leftMargin=LMARGIN, rightMargin=RMARGIN,
-        topMargin=TMARGIN, bottomMargin=BMARGIN,
-        title=f"Vetting report TIC {star.tic_id}",
-    )
-    frame = Frame(
-        LMARGIN, BMARGIN, CONTENT_W, PAGE_H - TMARGIN - BMARGIN,
-        leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
-    )
-    decorate = _make_decorator(title_line, sub_line)
-    doc.addPageTemplates([
-        PageTemplate(id="main", frames=[frame], onPage=decorate)
-    ])
-
+def _build_styles():
     base = getSampleStyleSheet()
-    styles = {
+    return {
         "h1": ParagraphStyle("h1", parent=base["Heading1"], alignment=TA_CENTER,
                              textColor=INK, fontSize=18, spaceAfter=2),
         "h2": ParagraphStyle("h2", parent=base["Heading2"], alignment=TA_LEFT,
@@ -243,6 +215,43 @@ def build_pdf(
         "caption": ParagraphStyle("caption", parent=base["BodyText"], alignment=TA_CENTER,
                                   textColor=MUTED, fontSize=8, spaceBefore=2, spaceAfter=8),
     }
+
+
+def _make_doc(buf, title_line, sub_line, pdf_title):
+    """A BaseDocTemplate with the standard header-band + page-numbered footer
+    page template — shared by the single-sector and multi-sector reports so
+    they look identical."""
+    doc = BaseDocTemplate(
+        buf, pagesize=letter,
+        leftMargin=LMARGIN, rightMargin=RMARGIN,
+        topMargin=TMARGIN, bottomMargin=BMARGIN, title=pdf_title,
+    )
+    frame = Frame(
+        LMARGIN, BMARGIN, CONTENT_W, PAGE_H - TMARGIN - BMARGIN,
+        leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
+    )
+    doc.addPageTemplates([
+        PageTemplate(id="main", frames=[frame],
+                     onPage=_make_decorator(title_line, sub_line))
+    ])
+    return doc
+
+
+def build_pdf(
+    result: VettingResult,
+    hci_bundle: dict = None,
+    exominer: dict = None,
+    ffi_cutout: dict = None,
+) -> bytes:
+    buf = io.BytesIO()
+
+    star = result.star
+    v = result.verdict
+    title_line = "TESS Vetting Report"
+    sub_line = f"TIC {star.tic_id}" if star.tic_id else ""
+
+    doc = _make_doc(buf, title_line, sub_line, f"Vetting report TIC {star.tic_id}")
+    styles = _build_styles()
     body = styles["body"]
     story = []
 
@@ -457,6 +466,25 @@ def build_pdf(
         story.append(PageBreak())
         _append_hci_section(story, hci_bundle, styles)
 
+    # ---------------- ExoFOP TOI parameters ----------------
+    if hci_bundle and (hci_bundle.get("observables") or hci_bundle.get("tlcm")):
+        story.append(PageBreak())
+        _append_exofop_section(
+            story,
+            period_d=(result.bls.get("period") if result.bls else None),
+            t0_btjd=(result.bls.get("t0") if result.bls else None),
+            depth_frac=(result.physics.get("observed_depth")
+                        if result.physics.get("available")
+                        else (result.bls.get("depth") if result.bls else None)),
+            duration_h=(result.shape.get("t14_hours")
+                        if result.shape.get("available")
+                        else ((result.bls.get("duration") * 24.0)
+                              if result.bls and result.bls.get("duration") else None)),
+            observables=hci_bundle.get("observables"),
+            tlcm=hci_bundle.get("tlcm"),
+            styles=styles,
+        )
+
     # ---------------- ExoMiner ----------------
     if exominer:
         story.append(PageBreak())
@@ -537,3 +565,198 @@ def _append_exominer_section(story, exominer: dict, styles):
                 _b64_image(plots[key], max_height=3.0 * inch),
             ]))
             story.append(Spacer(1, 0.08 * inch))
+
+
+# ----------------------------------------------------------------------
+# ExoFOP-TESS TOI parameters
+# ----------------------------------------------------------------------
+def _fmt_exofop(value, unit):
+    """Format an ExoFOP parameter value with a sensible precision per unit."""
+    if value is None:
+        return "—"
+    if unit == "BJD":
+        return f"{value:.5f}"          # full BJD, keep decimals (no sci notation)
+    if unit == "ppm":
+        return f"{value:.1f}"
+    if unit in ("days", "hrs", "K", "AU"):
+        return f"{value:.4f}"
+    if unit == "m/s":
+        return f"{value:.3f}"
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    return str(value)
+
+
+def _append_exofop_section(story, *, period_d, t0_btjd, depth_frac, duration_h,
+                           observables, tlcm, styles, heading="ExoFOP-TESS TOI parameters"):
+    """Build the ExoFOP TOI parameter table from measured + derived values.
+    The transit epoch is converted BTJD → BJD (BJD = BTJD + 2,457,000)."""
+    from .observables import exofop_param_rows
+
+    body = styles["body"]
+    rows = exofop_param_rows(
+        period_d=period_d, t0_btjd=t0_btjd, depth_frac=depth_frac,
+        duration_h=duration_h, observables=observables, tlcm=tlcm,
+    )
+    table_rows = [["Parameter", "Value", "Unit"]]
+    for r in rows:
+        label = r["label"] + (" ***" if r["required"] else "")
+        table_rows.append([label, _fmt_exofop(r["value"], r["unit"]), r["unit"] or "—"])
+    tbl = _data_table(table_rows, [3.1 * inch, CONTENT_W - 4.0 * inch, 0.9 * inch])
+
+    note = Paragraph(
+        "Values formatted for ExoFOP-TESS TOI entry. <b>***</b> marks the four "
+        "required fields. The transit epoch is reported in <b>BJD</b> "
+        "(BJD = BTJD + 2,457,000); other quantities are derived from the "
+        "predicted-observables and TLCM analyses and should be treated as "
+        "estimates, not fitted values.",
+        styles["caption"],
+    )
+    story += _section(heading, tbl, note, styles=styles)
+
+
+# ----------------------------------------------------------------------
+# Multi-sector report
+# ----------------------------------------------------------------------
+def build_multisector_pdf(analysis: dict, ffi_cutout: dict = None) -> bytes:
+    """Render a multi-sector analysis dict to a PDF, using the same layout
+    (header band, footer, unified tables, sections) as the single-sector
+    report."""
+    buf = io.BytesIO()
+    tic = analysis.get("tic_id")
+    title_line = "TESS Vetting Report — Multi-sector"
+    sub_line = f"TIC {tic}" if tic else ""
+    doc = _make_doc(buf, title_line, sub_line, f"Multi-sector report TIC {tic}")
+    styles = _build_styles()
+    body = styles["body"]
+    story = []
+
+    # ---------------- Cover ----------------
+    story.append(Paragraph(title_line, styles["h1"]))
+    if tic:
+        story.append(Paragraph(f"TIC {tic}", styles["center"]))
+    story.append(Paragraph(
+        f"Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", styles["center"]))
+    story.append(Spacer(1, 0.1 * inch))
+    if analysis.get("summary"):
+        story.append(Paragraph(analysis["summary"], body))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # ---------------- Overview ----------------
+    pc = analysis.get("period_consensus") or {}
+    overview = [
+        ["Sectors observed", _fmt(analysis.get("n_sectors_observed"), nd=0)],
+        ["Sectors with detections", _fmt(analysis.get("n_sectors_with_detections"), nd=0)],
+        ["Detection rate", _fmt(analysis.get("detection_rate"), nd=3)],
+        ["Sectors attempted / succeeded",
+         f"{analysis.get('sectors_attempted', '—')} / {analysis.get('sectors_succeeded', '—')}"],
+        ["Consensus period (d)", _fmt(pc.get("value_d"), nd=5) if pc else "—"],
+        ["Objects identified", _fmt(analysis.get("n_objects_detected"), nd=0)],
+    ]
+    story += _section("Overview", _kv_table(overview), styles=styles)
+    story.append(Spacer(1, 0.12 * inch))
+
+    # ---------------- FFI cutout (target field) ----------------
+    if ffi_cutout and ffi_cutout.get("image"):
+        story += _section(
+            "Target field — FFI cutout",
+            _b64_image(ffi_cutout["image"], max_width=3.3 * inch, max_height=3.3 * inch),
+            Paragraph("TESScut FFI cutout centred on the target (red +).", styles["caption"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+
+    # ---------------- Detection timeline ----------------
+    if analysis.get("timeline_plot"):
+        story += _section(
+            "Detection timeline",
+            _b64_image(analysis["timeline_plot"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.12 * inch))
+
+    # ---------------- Per-sector verdicts ----------------
+    sv = analysis.get("sector_verdicts") or []
+    if sv:
+        rows = [["Sector", "Category", "Verdict", "Events", "BLS P (d)", "SDE"]]
+        for s in sv:
+            rows.append([
+                _fmt(s.get("sector"), nd=0),
+                str(s.get("category", "—")),
+                str(s.get("verdict", "—")),
+                _fmt(s.get("n_events"), nd=0),
+                _fmt(s.get("bls_period_d"), nd=4),
+                _fmt(s.get("bls_sde"), nd=2),
+            ])
+        story += _section(
+            "Per-sector verdicts",
+            _data_table(rows, [0.7 * inch, 1.0 * inch, CONTENT_W - 4.4 * inch,
+                               0.7 * inch, 1.1 * inch, 0.9 * inch]),
+            styles=styles,
+        )
+
+    # ---------------- Identified objects ----------------
+    for i, obj in enumerate(analysis.get("objects", []), 1):
+        story.append(PageBreak())
+        oid = obj.get("object_id", i)
+        story.append(Paragraph(f"Object {oid}", styles["h2"]))
+        story.append(HRFlowable(width="100%", thickness=1.1, color=ACCENT,
+                                spaceBefore=1, spaceAfter=6, lineCap="round"))
+        if obj.get("note"):
+            story.append(Paragraph(obj["note"], body))
+
+        members = obj.get("members") or []
+        sectors = obj.get("sectors") or []
+        obj_rows = [
+            ["Sectors detected", ", ".join(str(s) for s in sectors) or "—"],
+            ["Consensus period (d)", _fmt(obj.get("period_d_median"), nd=5)],
+            ["Median depth (%)", _fmt(obj.get("depth_pct_median"), nd=4)],
+            ["Median duration (h)", _fmt(obj.get("duration_h_median"), nd=3)],
+            ["Confirmed multi-sector?", _fmt(obj.get("confirmed_multisector"))],
+        ]
+        story.append(Spacer(1, 0.04 * inch))
+        story.append(_kv_table(obj_rows))
+
+        bundle = obj.get("hci_bundle") or {}
+        if bundle.get("hci"):
+            story.append(Spacer(1, 0.1 * inch))
+            _append_hci_section(story, bundle, styles)
+
+        if bundle.get("observables") or bundle.get("tlcm"):
+            # Use the deepest member's epoch (BTJD) as the transit epoch.
+            best = max(members, key=lambda m: m.get("depth_pct", 0.0)) if members else {}
+            story.append(Spacer(1, 0.1 * inch))
+            _append_exofop_section(
+                story,
+                period_d=obj.get("period_d_median"),
+                t0_btjd=best.get("t_center"),
+                depth_frac=(obj.get("depth_pct_median") / 100.0
+                            if obj.get("depth_pct_median") is not None else None),
+                duration_h=obj.get("duration_h_median"),
+                observables=bundle.get("observables"),
+                tlcm=bundle.get("tlcm"),
+                styles=styles,
+                heading=f"ExoFOP-TESS TOI parameters — Object {oid}",
+            )
+
+        if obj.get("exominer"):
+            story.append(Spacer(1, 0.1 * inch))
+            _append_exominer_section(story, obj["exominer"], styles)
+
+    # ---------------- Errors ----------------
+    errors = analysis.get("errors") or []
+    if errors:
+        story.append(Spacer(1, 0.14 * inch))
+        err_rows = [["Sector", "Error"]]
+        for e in errors:
+            err_rows.append([_fmt(e.get("sector"), nd=0), str(e.get("error", "—"))[:90]])
+        story += _section(
+            "Sector fetch errors",
+            _data_table(err_rows, [0.9 * inch, CONTENT_W - 0.9 * inch]),
+            styles=styles,
+        )
+
+    doc.build(story)
+    pdf = buf.getvalue()
+    buf.close()
+    return pdf

@@ -410,3 +410,78 @@ def compute_observables(
         )
 
     return res
+
+
+# ----------------------------------------------------------------------
+# ExoFOP-TESS TOI parameter mapping
+# ----------------------------------------------------------------------
+# BTJD (TESS Barycentric Julian Date) is BJD - 2457000.0. ExoFOP wants the
+# transit epoch in full BJD, so any pipeline t0 (which is in BTJD) must have
+# 2,457,000 added back before submission.
+BTJD_OFFSET = 2_457_000.0
+
+
+def _g(d, *path, default=None):
+    """Safe nested getter: _g(obs, 'orbit', 'semi_major_axis_au')."""
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict) or cur.get(k) is None:
+            return default
+        cur = cur[k]
+    return cur
+
+
+def eq_temperature_k(insolation_searth):
+    """Planet equilibrium temperature (K) from insolation, Bond albedo = 0.
+    Teq = 278.3 K * S^(1/4) with S in Earth insolation units."""
+    if insolation_searth is None or insolation_searth <= 0:
+        return None
+    return 278.3 * (insolation_searth ** 0.25)
+
+
+def exofop_param_rows(
+    *,
+    period_d=None,
+    t0_btjd=None,
+    depth_frac=None,
+    duration_h=None,
+    observables=None,
+    tlcm=None,
+):
+    """Build the ordered list of ExoFOP-TESS TOI parameters from the pipeline's
+    measured values plus the predicted-observables / TLCM bundles.
+
+    Returns a list of dicts: ``{"label", "value", "unit", "required"}``.
+    ``value`` is a float (or None when not derivable, e.g. argument of
+    periastron for a transit-only fit). Formatting is left to the caller.
+    The transit epoch is converted from BTJD to full BJD.
+    """
+    obs = observables or {}
+    tl = tlcm or {}
+
+    period = period_d if period_d is not None else _g(obs, "orbit", "orbital_period_d")
+    epoch_bjd = (t0_btjd + BTJD_OFFSET) if t0_btjd is not None else None
+    depth_ppm = (depth_frac * 1.0e6) if depth_frac is not None else None
+    insol = obs.get("insolation_searth")
+
+    rows = [
+        {"label": "Orbital Period", "unit": "days", "required": True, "value": period},
+        {"label": "Transit Epoch", "unit": "BJD", "required": True, "value": epoch_bjd},
+        {"label": "Transit Depth", "unit": "ppm", "required": True, "value": depth_ppm},
+        {"label": "Transit Duration", "unit": "hrs", "required": True, "value": duration_h},
+        {"label": "Inclination", "unit": "deg", "required": False, "value": tl.get("inclination_deg")},
+        {"label": "Impact Parameter b", "unit": "", "required": False, "value": tl.get("impact_parameter_b")},
+        {"label": "R_planet/R_star", "unit": "", "required": False, "value": tl.get("radius_ratio_k")},
+        {"label": "a/R_star", "unit": "", "required": False, "value": tl.get("a_over_rs")},
+        {"label": "Radius", "unit": "R_Earth", "required": False, "value": _g(obs, "planet", "rp_earth")},
+        {"label": "Mass", "unit": "M_Earth", "required": False, "value": _g(obs, "planet", "mp_earth")},
+        {"label": "Equilibrium Temperature", "unit": "K", "required": False, "value": eq_temperature_k(insol)},
+        {"label": "Insolation Flux", "unit": "Flux_Earth", "required": False, "value": insol},
+        {"label": "Fitted Stellar Density", "unit": "g/cm^3", "required": False, "value": tl.get("stellar_density_gcc")},
+        {"label": "Semi-major Axis", "unit": "AU", "required": False, "value": _g(obs, "orbit", "semi_major_axis_au")},
+        {"label": "Eccentricity", "unit": "", "required": False, "value": _g(obs, "orbit", "eccentricity", default=0.0)},
+        {"label": "Argument of Periastron \u03c9", "unit": "deg", "required": False, "value": None},
+        {"label": "Time of Periastron", "unit": "BJD", "required": False, "value": None},
+        {"label": "Velocity Semi-amplitude", "unit": "m/s", "required": False, "value": _g(obs, "radial_velocity", "K_ms")},
+    ]
+    return rows
