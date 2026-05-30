@@ -105,6 +105,25 @@ export async function fetchMultisector(
   return r.json();
 }
 
+export async function multisectorReport(
+  ticId: number,
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0 },
+  sectors?: number[]
+): Promise<Blob> {
+  const r = await fetch(`${API_BASE}/api/mast/multisector/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tic_id: ticId,
+      detect_threshold: params.threshold,
+      detect_min_snr: params.minSnr,
+      ...(sectors && sectors.length ? { sectors } : {}),
+    }),
+  });
+  if (!r.ok) throw new Error(`Multi-sector report failed (${r.status}): ${await r.text()}`);
+  return r.blob();
+}
+
 export async function mastReport(ticId: number, sector: number, params: DetectParams = DEFAULT_PARAMS): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/mast/report`, {
     method: "POST",

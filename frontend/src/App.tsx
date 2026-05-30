@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   analyze,
   downloadReport,
   fetchHabitability,
+  fetchObservables,
   fetchMultisector,
   fetchRadialVelocity,
   fitsDownloadUrl,
   mastAnalyze,
   mastReport,
   mastSectors,
+  multisectorReport,
   type SectorInfo,
   type DetectParams,
 } from "./api";
@@ -815,7 +817,30 @@ function ResultsView({ result }: { result: VettingResult }) {
         )}
       </section>
 
-      {/* Star + Summary */}
+      {/* BTJD → BJD conversion guide */}
+      <section className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-slate-700">
+        <div className="flex items-center gap-2 font-semibold text-sky-800">
+          <span>🕑</span> Convert BTJD → BJD
+        </div>
+        <p className="mt-1">
+          TESS times (including the transit epoch <code>t0</code> in this
+          report) are in <strong>BTJD</strong>. ExoFOP-TESS expects the transit
+          epoch in full <strong>BJD</strong>. Convert with:
+        </p>
+        <p className="mt-2 font-mono text-slate-900 bg-white border border-sky-200 rounded px-3 py-2">
+          BJD = BTJD + 2,457,000
+        </p>
+        {result.bls?.t0 != null && (
+          <p className="mt-2 text-xs text-slate-600">
+            For this candidate: t0 = {Number(result.bls.t0).toFixed(5)} BTJD
+            {"  →  "}
+            <span className="font-mono text-slate-900">
+              {(Number(result.bls.t0) + 2457000).toFixed(5)} BJD
+            </span>
+          </p>
+        )}
+      </section>
+
       <div className="grid md:grid-cols-2 gap-4">
         <KV title="Stellar parameters" data={result.star} />
         <KV title="Light curve summary" data={result.summary} />
@@ -869,6 +894,9 @@ function ResultsView({ result }: { result: VettingResult }) {
       {/* Manual tiny-dip selector */}
       <ManualDipSelector result={result} />
 
+      {/* Observables, parameters & TLCM — standalone, independent of HCI */}
+      <ObservablesSection result={result} />
+
       {/* Habitability Chance Index */}
       <section className="bg-white rounded-lg shadow p-5">
         <div className="flex items-center justify-between mb-3">
@@ -917,7 +945,6 @@ function ResultsView({ result }: { result: VettingResult }) {
         )}
 
         {hciData && <HabitabilityPanel data={hciData} />}
-        {hciData?.observables && <ObservablesPanel obs={hciData.observables} tlcm={hciData.tlcm} aSource={hciData.semi_major_axis_source} />}
         {hciData && <RVPanel ticId={result.star.tic_id} periodD={result.bls?.period ?? null} mstar={hciData?.planet?.stellar_mass_sun ?? null} onUseMass={(m) => runHci(m)} massInHci={hciData?.planet?.mass_earth ?? null} massSource={hciData?.planet?.mass_source ?? null} />}
         {multisectorData && <MultisectorPanel data={multisectorData} />}
       </section>
@@ -1025,7 +1052,112 @@ function RVPanel({ ticId, periodD, mstar, onUseMass, massInHci, massSource }: { 
   );
 }
 
-function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSource?: string }) {
+function ObservablesSection({ result }: { result: VettingResult }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
+  const ranRef = useRef(false);
+
+  useEffect(() => {
+    if (ranRef.current) return;
+    ranRef.current = true;
+    compute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function compute() {
+    setLoading(true);
+    setError(null);
+    try {
+      // Same verdict-derived hints the HCI path feeds to /api/observables.
+      const vv: Record<string, any> = {
+        _bls_period: result.bls?.period ?? null,
+        _period: result.bls?.period ?? null,
+        _depth: result.physics?.observed_depth ?? result.events?.[0]?.depth ?? null,
+        _bls_depth: result.bls?.depth ?? null,
+        _t14_d: result.shape?.t14_d ?? null,
+        _bls_duration: result.bls?.duration ?? null,
+        _shape_class: result.shape?.shape_class ?? null,
+        _R_companion_Rjup: result.physics?.R_companion_Rjup ?? null,
+        _events: result.events,
+      };
+      const obs = await fetchObservables({
+        tic_id: result.star.tic_id ?? undefined,
+        stellar_teff: result.star.teff ?? undefined,
+        stellar_radius_sun: result.star.radius ?? undefined,
+        stellar_mass_sun: result.star.mass ?? undefined,
+        orbital_period_d: result.bls?.period ?? undefined,
+        rp_rjup: result.physics?.R_companion_Rjup ?? undefined,
+        transit_depth_frac: result.physics?.observed_depth ?? result.bls?.depth ?? undefined,
+        vetting_verdict: vv,
+      });
+      setData(obs);
+    } catch (e: any) {
+      setError(e?.message ?? "Observables request failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="bg-white rounded-lg shadow p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="font-bold text-slate-800">Observables, parameters &amp; TLCM</h3>
+          <p className="text-xs text-slate-400">
+            POE forward model, transit geometry, and ExoFOP-TESS TOI parameters — independent of HCI
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!loading && (
+            <button onClick={compute} className="text-xs text-slate-500 hover:text-slate-800 underline">
+              Re-run
+            </button>
+          )}
+          <button
+            onClick={() => setExpanded((x) => !x)}
+            className="text-slate-400 hover:text-slate-700 text-sm"
+            aria-label={expanded ? "Collapse" : "Expand"}
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <>
+          {loading && (
+            <div className="rounded bg-slate-50 border border-slate-200 p-3 text-sm">
+              <CyclingLoader
+                messages={[
+                  "Forward-modelling observables…",
+                  "Working out the transit geometry…",
+                  "Mapping ExoFOP TOI fields…",
+                ]}
+              />
+            </div>
+          )}
+          {!loading && error && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+              {error}
+            </p>
+          )}
+          {!loading && !error && data && (
+            <ObservablesPanel
+              obs={data}
+              tlcm={data.tlcm}
+              aSource={data.semi_major_axis_source}
+              result={result}
+            />
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any; aSource?: string; result?: any }) {
   if (!obs) return null;
   const hz = obs.habitable_zone || {};
   const fmt = (v: any, d = 4) =>
@@ -1062,6 +1194,42 @@ function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSourc
     ["Absolute mass from RV (M♃)", rv.mp_mjup !== undefined ? fmt(rv.mp_mjup, 4) : "— (needs RV K)"],
   ];
   const showTlcm = tl.radius_ratio_k != null || tl.a_over_rs != null || tl.a_over_rs_dynamical != null;
+
+  // ExoFOP-TESS TOI parameters: pipeline-measured values + derived observables.
+  // Transit epoch is converted BTJD → BJD (BJD = BTJD + 2,457,000).
+  const t0btjd = result?.bls?.t0;
+  const depthFrac = result?.physics?.observed_depth ?? result?.bls?.depth;
+  const durationH = result?.shape?.t14_hours ?? (result?.bls?.duration != null ? result.bls.duration * 24 : null);
+  const insol = obs.insolation_searth;
+  const teq = insol != null && insol > 0 ? 278.3 * Math.pow(insol, 0.25) : null;
+  const efmt = (v: any, unit: string) => {
+    if (v === null || v === undefined) return "—";
+    if (unit === "BJD") return Number(v).toFixed(5);
+    if (unit === "ppm") return Number(v).toFixed(1);
+    if (unit === "m/s") return Number(v).toFixed(3);
+    return typeof v === "number" ? Number(v.toPrecision(5)) : String(v);
+  };
+  const exofopRows: { label: string; value: any; unit: string; req: boolean }[] = [
+    { label: "Orbital Period", unit: "days", req: true, value: result?.bls?.period ?? obs.orbit?.orbital_period_d },
+    { label: "Transit Epoch", unit: "BJD", req: true, value: t0btjd != null ? t0btjd + 2457000 : null },
+    { label: "Transit Depth", unit: "ppm", req: true, value: depthFrac != null ? depthFrac * 1e6 : null },
+    { label: "Transit Duration", unit: "hrs", req: true, value: durationH },
+    { label: "Inclination", unit: "deg", req: false, value: tl.inclination_deg },
+    { label: "Impact Parameter b", unit: "", req: false, value: tl.impact_parameter_b },
+    { label: "R_planet/R_star", unit: "", req: false, value: tl.radius_ratio_k },
+    { label: "a/R_star", unit: "", req: false, value: tl.a_over_rs },
+    { label: "Radius", unit: "R_Earth", req: false, value: obs.planet?.rp_earth },
+    { label: "Mass", unit: "M_Earth", req: false, value: obs.planet?.mp_earth },
+    { label: "Equilibrium Temperature", unit: "K", req: false, value: teq },
+    { label: "Insolation Flux", unit: "Flux_Earth", req: false, value: insol },
+    { label: "Fitted Stellar Density", unit: "g/cm³", req: false, value: tl.stellar_density_gcc },
+    { label: "Semi-major Axis", unit: "AU", req: false, value: obs.orbit?.semi_major_axis_au },
+    { label: "Eccentricity", unit: "", req: false, value: obs.orbit?.eccentricity ?? 0 },
+    { label: "Argument of Periastron ω", unit: "deg", req: false, value: null },
+    { label: "Time of Periastron", unit: "BJD", req: false, value: null },
+    { label: "Velocity Semi-amplitude", unit: "m/s", req: false, value: obs.radial_velocity?.K_ms },
+  ];
+
   return (
     <div className="rounded-lg border border-slate-300 bg-white p-4 space-y-2">
       <div className="flex items-center justify-between">
@@ -1095,6 +1263,36 @@ function ObservablesPanel({ obs, tlcm, aSource }: { obs: any; tlcm?: any; aSourc
       {obs.orbit?.derivation && obs.orbit.derivation !== "as supplied" && (
         <p className="text-xs text-slate-500">{obs.orbit.derivation}.</p>
       )}
+
+      {/* ExoFOP-TESS TOI parameters for submission */}
+      <div className="pt-2 border-t mt-2">
+        <div className="flex items-center justify-between">
+          <h4 className="font-bold text-slate-800">ExoFOP-TESS TOI parameters</h4>
+          <span className="text-xs text-slate-400">*** = required for submission</span>
+        </div>
+        <p className="text-xs text-slate-500 mt-1">
+          Transit epoch in BJD (BTJD + 2,457,000). Non-required fields are
+          derived estimates from the observables / TLCM analyses.
+        </p>
+        <table className="w-full text-sm mt-2">
+          <thead className="text-left text-slate-500 border-b">
+            <tr><th className="py-1 font-medium">Parameter</th><th className="py-1 font-medium">Value</th><th className="py-1 font-medium">Unit</th></tr>
+          </thead>
+          <tbody>
+            {exofopRows.map((r) => (
+              <tr key={r.label} className="border-b border-slate-100">
+                <td className="py-1 text-slate-600">
+                  {r.label}
+                  {r.req && <span className="text-sky-600 font-bold"> ***</span>}
+                </td>
+                <td className="py-1 mono text-slate-900">{efmt(r.value, r.unit)}</td>
+                <td className="py-1 text-slate-400">{r.unit || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       {[...(obs.caveats || []), ...((tlcm && tlcm.caveats) || [])].length > 0 && (
         <ul className="text-xs text-slate-500 list-disc pl-4 space-y-0.5">
           {[...(obs.caveats || []), ...((tlcm && tlcm.caveats) || [])].map((c: string, i: number) => <li key={i}>{c}</li>)}
@@ -1343,17 +1541,46 @@ const MS_EXOMINER_VIEWS: Array<[string, string]> = [
 
 function MultisectorPanel({ data }: { data: any }) {
   const [expanded, setExpanded] = useState(true);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfErr, setPdfErr] = useState<string | null>(null);
   if (!data) return null;
+
+  const downloadPdf = async () => {
+    if (!data.tic_id) return;
+    setPdfBusy(true);
+    setPdfErr(null);
+    try {
+      const sectors: number[] = (data.sector_verdicts || [])
+        .map((s: any) => s.sector)
+        .filter((s: any) => s != null);
+      const blob = await multisectorReport(data.tic_id, undefined, sectors);
+      triggerDownload(blob, `vetting_TIC${data.tic_id}_multisector.pdf`);
+    } catch (e: any) {
+      setPdfErr(e?.message || String(e));
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   return (
     <div className="mt-4 border-t pt-4 space-y-3">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full text-left font-semibold text-slate-700 flex items-center gap-1 text-sm"
-      >
-        <span>{expanded ? "▲" : "▼"}</span>
-        🔭 Multi-sector analysis — {data.summary}
-      </button>
+      <div className="flex items-center justify-between gap-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-left font-semibold text-slate-700 flex items-center gap-1 text-sm"
+        >
+          <span>{expanded ? "▲" : "▼"}</span>
+          🔭 Multi-sector analysis — {data.summary}
+        </button>
+        <button
+          onClick={downloadPdf}
+          disabled={pdfBusy}
+          className="shrink-0 text-xs px-3 py-1.5 bg-slate-700 text-white rounded hover:bg-slate-800 disabled:bg-slate-300 transition"
+        >
+          {pdfBusy ? "Building…" : "Download multi-sector PDF"}
+        </button>
+      </div>
+      {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
 
       {expanded && (
         <div className="space-y-3">
