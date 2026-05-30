@@ -78,6 +78,35 @@ def safe_get(row, key, default=None):
 
 
 # -------------------------------------------------
+# Restrict an observation table to a single TIC
+# -------------------------------------------------
+
+def _match_tic(obs, tic_id: int):
+    """Filter a MAST observation table to rows whose ``target_name`` is the
+    requested TIC. MAST's ``objectname``/coordinate searches resolve to a
+    cone (objectname uses a ~0.2 deg default radius), so the raw result can
+    include *neighbouring* stars in the same TESS field. Without this filter
+    the product picker can download a neighbour's light curve instead of the
+    requested target. Matching is by integer value so it is tolerant of
+    formats like ``"TIC 260937089"``, ``"260937089"``, or zero-padding."""
+    import numpy as _np
+
+    def as_int(v):
+        if v is None:
+            return None
+        s = str(v).upper().replace("TIC", "").strip()
+        try:
+            return int(s)
+        except (TypeError, ValueError):
+            return None
+
+    keep = [as_int(safe_get(o, "target_name")) == int(tic_id) for o in obs]
+    if any(keep):
+        return obs[_np.array(keep)]
+    return obs  # no target_name match (alias case) — leave caller to fall back
+
+
+# -------------------------------------------------
 # Observation search (multi-strategy)
 # -------------------------------------------------
 
@@ -101,8 +130,12 @@ def find_observations(tic_id: int, sector: Optional[int] = None):
     try:
         obs = retry(q1, name=f"query by TIC name (sector={sector})")
         if len(obs) > 0:
-            log.info(f"Found {len(obs)} observations via TIC name")
-            return obs
+            # objectname resolves to a ~0.2 deg cone, so the result can
+            # include neighbours — keep only the requested TIC.
+            obs = _match_tic(obs, tic_id)
+            if len(obs) > 0:
+                log.info(f"Found {len(obs)} observations via TIC name")
+                return obs
     except RuntimeError as e:
         log.warning(f"TIC name lookup failed: {e}")
         obs = None
@@ -140,7 +173,10 @@ def find_observations(tic_id: int, sector: Optional[int] = None):
 
     obs = retry(q_cone, name="cone search")
     log.info(f"Found {len(obs)} observations via cone search at ({ra:.4f}, {dec:.4f})")
-    return obs
+    # Prefer rows belonging to the requested TIC; the 30" cone can still
+    # catch a close neighbour. Falls back to the raw cone if nothing matches
+    # by target_name (e.g. the object is archived under an alias).
+    return _match_tic(obs, tic_id)
 
 
 # -------------------------------------------------
