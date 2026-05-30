@@ -51,6 +51,23 @@ app.add_middleware(
 # -------------------------------------------------
 _lc_cache: dict = {}
 
+# FFI cutout cache so the on-screen panel and the PDF don't each hit TESScut.
+# Keyed by (tic_id, sector). Process-local.
+_ffi_cache: dict = {}
+
+
+def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15):
+    """Return a TESScut FFI cutout dict for the target, fetching once and
+    caching by (tic_id, sector). Fails soft (returns None)."""
+    from .ffi_cutout import make_ffi_cutout
+
+    key = (tic_id, sector)
+    if key in _ffi_cache:
+        return _ffi_cache[key]
+    cutout = make_ffi_cutout(ra=ra, dec=dec, sector=sector, tic_id=tic_id, size_px=size_px)
+    _ffi_cache[key] = cutout  # cache None too, to avoid retrying a dead lookup
+    return cutout
+
 
 def _cache_lc(parsed: dict) -> None:
     """Store cleaned LC arrays after a successful parse so ExoMiner can
@@ -207,6 +224,7 @@ async def report(
             result,
             hci_bundle=extras.get("hci_bundle"),
             exominer=extras.get("exominer"),
+            ffi_cutout=extras.get("ffi_cutout"),
         )
         tic = result.star.tic_id or uuid.uuid4().hex[:8]
         return Response(
@@ -297,6 +315,7 @@ async def mast_report(query: MastQuery):
             result,
             hci_bundle=extras.get("hci_bundle"),
             exominer=extras.get("exominer"),
+            ffi_cutout=extras.get("ffi_cutout"),
         )
     except Exception as e:
         raise _handle_exception("build_pdf", e)
@@ -599,7 +618,7 @@ def _build_report_extras(
     Every step fails safe: a missing TIC, an offline catalogue, or an
     ExoMiner error simply omits that block.
     """
-    extras: dict = {"hci_bundle": None, "exominer": None}
+    extras: dict = {"hci_bundle": None, "exominer": None, "ffi_cutout": None}
     star = result.star
     tic = getattr(star, "tic_id", None)
     period = period_override or (result.bls.get("period") if result.bls else None)
@@ -658,6 +677,15 @@ def _build_report_extras(
             )
     except Exception as e:
         log.warning("Report ExoMiner recompute failed: %s", e)
+
+    # --- FFI cutout (needs coordinates; fetched/cached from TESScut) -----
+    try:
+        if getattr(star, "ra", None) is not None and getattr(star, "dec", None) is not None:
+            extras["ffi_cutout"] = _get_ffi_cutout(
+                tic, star.sector, star.ra, star.dec
+            )
+    except Exception as e:
+        log.warning("Report FFI cutout failed: %s", e)
 
     return extras
 
@@ -832,6 +860,39 @@ def api_exominer(req: ExominerRequest):
         return result
     except Exception as e:
         raise _handle_exception("exominer", e)
+
+
+# -------------------------------------------------
+# FFI cutout endpoint (on-screen panel)
+# -------------------------------------------------
+class FfiCutoutRequest(BaseModel):
+    ra: float
+    dec: float
+    sector: Optional[int] = None
+    tic_id: Optional[int] = None
+    size_px: int = 15
+
+
+@app.post("/api/ffi_cutout")
+def api_ffi_cutout(req: FfiCutoutRequest):
+    """Return a rendered TESScut FFI cutout for the target. Returns
+    ``{"available": False, "reason": ...}`` rather than erroring when the
+    cutout can't be produced, so the panel can show a friendly message."""
+    try:
+        cutout = _get_ffi_cutout(
+            req.tic_id, req.sector, req.ra, req.dec, size_px=req.size_px
+        )
+        if not cutout:
+            return {
+                "available": False,
+                "reason": (
+                    "No FFI cutout available — TESScut may not cover this "
+                    "sector/position yet, or MAST was unreachable."
+                ),
+            }
+        return {"available": True, **cutout}
+    except Exception as e:
+        raise _handle_exception("ffi_cutout", e)
 
 
 # -------------------------------------------------
