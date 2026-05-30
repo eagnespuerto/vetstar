@@ -55,8 +55,9 @@ export default function FfiCutoutPanel({ result }: { result: VettingResult }) {
   }
 
   return (
-    <section className="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+    <div className="max-w-6xl mx-auto px-6 mb-6">
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
         <div>
           <h2 className="text-sm font-semibold text-slate-700">
             Target field — TESS FFI cutout
@@ -122,13 +123,14 @@ export default function FfiCutoutPanel({ result }: { result: VettingResult }) {
               <img
                 src={`data:image/png;base64,${data.image}`}
                 alt="TESS FFI cutout of the target"
-                className="mx-auto max-w-sm w-full rounded border shadow-sm"
+                className="mx-auto block h-auto w-full max-w-[320px] rounded border shadow-sm object-contain"
                 loading="lazy"
               />
             </figure>
           )}
         </div>
       )}
-    </section>
+      </section>
+    </div>
   );
 }
