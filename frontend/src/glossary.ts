@@ -104,7 +104,7 @@ export const GLOSSARY: Record<string, string> = {
   "R_companion_Rjup":
     "Estimated radius of the transiting companion in Jupiter radii (R_Jup). Planets are < ~2.2 R_Jup; anything larger is likely a star.",
   "category":
-    "Physical classification based on the companion size: planet-sized (< 2.2 R_Jup), brown dwarf, M-dwarf, or stellar.",
+    "In the Physical Interpretation section: classification based on companion size (planet-sized < 2.2 R_Jup, brown dwarf, M-dwarf, or stellar). In the Verdict section: top-level signal class (planet_candidate, eclipsing_binary, background_blend, ambiguous, or no_signal).",
   "is_planet_candidate":
     "Whether the implied companion radius is consistent with a planet (< 2.2 R_Jup).",
   "M_star_estimated_Msun":
@@ -191,6 +191,114 @@ export const GLOSSARY: Record<string, string> = {
     "Two stars orbiting each other, where one periodically passes in front of the other as seen from Earth. Their eclipses can mimic planetary transits but are usually deeper and show odd/even depth differences or secondary eclipses.",
   "background blend":
     "When a faint eclipsing binary near the target star falls within the same TESS pixel, its eclipses get mixed into the target's light curve, creating a false transit signal. The centroid test catches these.",
+
+  // --- Generic test-result fields (appear in most KV tables) ---
+  "available":
+    "Whether this test could be run on the data. False usually means the input was missing something the test needs (e.g. no centroid moments, too few transits) — see the accompanying 'reason'.",
+  "reason":
+    "A short explanation of why a test was not run, or extra context about its result.",
+  "detected":
+    "Whether the test found a significant signal (true = yes). For the secondary-eclipse search, true means a dip was found near phase 0.5, which is a red flag for an eclipsing binary.",
+  "n_odd":
+    "Number of odd-numbered transits used in the odd/even depth comparison.",
+  "n_even":
+    "Number of even-numbered transits used in the odd/even depth comparison.",
+
+  // --- Verdict object ---
+  "headline":
+    "One-line summary of what the pipeline thinks this signal is.",
+  "confidence":
+    "How sure the pipeline is in its verdict, from 0 to 1. Higher = more confident.",
+  "flags":
+    "Short tags describing which automated tests fired (e.g. 'centroid_shift', 'secondary_detected', 'odd_even_diff').",
+  "reasons":
+    "Plain-English bullet points explaining why the pipeline reached this verdict.",
+
+  // --- Star / ExoFOP extras ---
+  "distance":
+    "Distance to the star in parsecs (1 pc ≈ 3.26 light-years). Usually from Gaia parallax.",
+  "toi_number":
+    "The TESS Object of Interest number assigned by the TESS pipeline (e.g. 700.01).",
+  "period_d":
+    "Orbital period in days.",
+  "depth_ppm":
+    "Transit depth in parts per million (ppm). 10,000 ppm = 1% dimming.",
+  "duration_hr":
+    "Transit duration in hours.",
+  "radius_earth":
+    "Companion radius in Earth radii (R⊕). Earth = 1.0, Neptune ≈ 3.9, Jupiter ≈ 11.2.",
+  "semi_major_axis_au":
+    "Average orbital distance in astronomical units (AU). 1 AU = Earth–Sun distance.",
+  "sectors":
+    "List of TESS sectors in which this target was observed.",
+
+  // --- Light-curve event fields ---
+  "t_start":
+    "Time (BTJD) when a detected dip event begins.",
+  "t_end":
+    "Time (BTJD) when a detected dip event ends.",
+  "duration_d":
+    "Duration of an individual dip event in days.",
+  "min_flux":
+    "Minimum (faintest) brightness reached during a dip event, as a fraction of the baseline.",
+
+  // --- Multi-sector consensus ---
+  "object_id":
+    "Internal identifier the pipeline assigns to a candidate that appears consistently across multiple sectors.",
+  "n_sectors_observed":
+    "How many TESS sectors of data were searched for this target.",
+  "n_sectors_with_detections":
+    "Number of sectors in which at least one dip event was detected.",
+  "detection_rate":
+    "Fraction of sectors with at least one detection (n_sectors_with_detections / n_sectors_observed).",
+  "durations_consistent":
+    "Whether the transit duration is consistent across sectors. True = supports a real periodic signal.",
+  "periods_consistent":
+    "Whether the BLS period is consistent across sectors. True = supports a real periodic signal.",
+  "confirmed_multisector":
+    "True if the same candidate was detected with consistent duration and period in multiple TESS sectors.",
+  "bls_period_d":
+    "BLS-derived orbital period for this sector, in days.",
+  "bls_sde":
+    "BLS Signal Detection Efficiency for this sector (see 'sde').",
+  "deepest_depth_pct":
+    "Depth of the deepest dip event in this sector, expressed as a percentage.",
+  "depth_pct":
+    "Dip depth as a percentage of baseline brightness.",
+  "depth_pct_median":
+    "Median dip depth across sectors, as a percentage.",
+  "duration_h":
+    "Dip duration in hours.",
+  "duration_h_median":
+    "Median dip duration across sectors, in hours.",
+  "duration_spread_h":
+    "Range (max – min) of dip durations across sectors, in hours. Small spread = consistent signal.",
+  "t_center":
+    "Time (BTJD) at the midpoint of a dip event.",
+  "n_events":
+    "Number of dip events detected.",
+  "has_dip":
+    "Whether at least one dip event was detected in this sector.",
+  "value_d":
+    "A best-estimate value, in days (e.g. consensus period across sectors).",
+  "std_d":
+    "Standard deviation of that value across sectors, in days. Smaller = more consistent.",
+
+  // --- TOI dispositions (extras) ---
+  "KP":
+    "Known Planet — a previously confirmed planet rediscovered by TESS.",
+  "FA":
+    "False Alarm — a TOI that was a statistical fluctuation rather than a real astrophysical signal.",
+  "APC":
+    "Ambiguous Planet Candidate — passes some vetting tests but fails or is inconclusive on others.",
+
+  // --- Habitability extras ---
+  "AU":
+    "Astronomical Unit — the average Earth–Sun distance (about 150 million km). Used to describe orbital sizes.",
+  "S_eff":
+    "Stellar flux received at the planet, relative to Earth (Earth = 1.0). Values near 1 are most Earth-like.",
+  "equilibrium_temperature":
+    "The temperature a planet would have if it absorbed all incoming starlight and re-radiated it uniformly (in Kelvin). Earth's is ~255 K; the surface is warmer due to greenhouse gases.",
 };
 
 /**
