@@ -2200,20 +2200,65 @@ import { GLOSSARY, lookupTerm } from "./glossary";
  */
 function Tip({ term, children }: { term: string; children?: React.ReactNode }) {
   const def = lookupTerm(term);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [offsetX, setOffsetX] = useState(0);
+
+  // Recompute horizontal offset whenever the tooltip becomes visible so that
+  // it stays within the viewport even if the trigger sits near a screen edge.
+  useEffect(() => {
+    if (!visible) return;
+    const trigger = triggerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!trigger || !tooltip) return;
+
+    const margin = 8;
+    const tRect = trigger.getBoundingClientRect();
+    const tipRect = tooltip.getBoundingClientRect();
+    const viewportW = window.innerWidth;
+
+    // Tooltip is centered on the trigger by default. Its left edge sits at
+    // (trigger center - tipWidth/2). Compute the shift needed to keep both
+    // edges inside [margin, viewportW - margin].
+    const centerX = tRect.left + tRect.width / 2;
+    const desiredLeft = centerX - tipRect.width / 2;
+    let shift = 0;
+    if (desiredLeft < margin) {
+      shift = margin - desiredLeft;
+    } else if (desiredLeft + tipRect.width > viewportW - margin) {
+      shift = viewportW - margin - tipRect.width - desiredLeft;
+    }
+    setOffsetX(shift);
+  }, [visible]);
+
   if (!def) return <>{children || term}</>;
+
+  const show = () => setVisible(true);
+  const hide = () => setVisible(false);
+
   return (
-    <span className="group relative inline">
+    <span
+      className="relative inline"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+      ref={triggerRef}
+    >
       <span className="border-b border-dotted border-slate-400 cursor-help">
         {children || term}
       </span>
       <span
-        className="
-          pointer-events-none absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2
+        ref={tooltipRef}
+        style={{ transform: `translateX(calc(-50% + ${offsetX}px))` }}
+        className={`
+          pointer-events-none absolute z-50 bottom-full left-1/2 mb-2
           w-72 max-w-[90vw] p-2.5 rounded-lg shadow-lg
           bg-slate-900 text-white text-xs leading-relaxed
-          opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
           transition-opacity duration-150
-        "
+          ${visible ? "opacity-100" : "opacity-0"}
+        `}
         role="tooltip"
       >
         <strong className="text-emerald-300">{term}</strong>
