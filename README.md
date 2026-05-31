@@ -15,6 +15,13 @@ wake up (free-tier cold start); after that it runs normally.
 
 Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 
+> **In-depth scientific documentation:** see
+> [docs/SCIENCE.md](docs/SCIENCE.md) for a full mathematical / algorithmic
+> walkthrough of the pipeline — detection, periodograms, transit geometry
+> (TLCM), POE forward model, RV mass function, HCI scoring, ExoMiner views,
+> and FFI rendering, with every governing equation rendered as a LaTeX
+> image.
+
 
 ## What it does
 
@@ -672,6 +679,12 @@ PyInstaller bundles everything into one binary (~180–230 MB). Double-click
 to launch; a browser opens to the app automatically.
 
 ### References
+
+For a full mathematical walkthrough of each stage of the pipeline —
+adaptive detection, BLS / Lomb-Scargle, transit geometry (TLCM),
+predicted observables (POE), RV mass function, HCI scoring, ExoMiner
+features, and FFI rendering — with every equation rendered as a LaTeX
+image, see [docs/SCIENCE.md](docs/SCIENCE.md).
 
 - Hill, M. L., Kane, S. R., Foley, B. J., & Schaefer, L. K. (2026).
   *Smaller Than Earth Habitability Model (STEHM): The Lower Size Limit for
