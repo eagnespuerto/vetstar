@@ -144,6 +144,26 @@ HCI (semi-major axis derived from period feeds the habitable-zone sub-score)
 and the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
 `transit_depth_pred_pct`).
 
+**Stellar-parameter backfill chain.** Faint TIC targets often have empty
+ExoFOP and TIC v8 entries (only Tmag), which would otherwise leave most of
+the POE panel as em-dashes. `/api/observables` walks four backfill layers
+so the panel stays useful:
+
+1. **ExoFOP-TESS** stellar entry (skipping the leading provenance header so
+   targets whose data live in a follow-up row, like TIC 330014070, are
+   parsed correctly).
+2. **TIC v8** via `astroquery.mast.Catalogs`.
+3. **Gaia DR3** via Vizier (`I/355/gaiadr3`) — a 3 ″ cone around the TIC
+   sky position picks up Teff/logg/distance from GSP-Phot (and FLAME radius
+   when present), with parallax inversion as a distance fallback. This is
+   typically what unlocks the angular quantities (HZ in mas, astrometric Δθ,
+   max projected separation) for faint targets.
+4. **Pecaut & Mamajek (2013) main sequence** as a final synthetic fallback:
+   when only Teff is known, interpolate the dwarf sequence in Teff for R★
+   and M★; when even Teff is missing, invert the TLCM-derived ρ★ (Seager &
+   Mallén-Ornelas 2003) against the same table. Both estimates are flagged
+   in the response `caveats` so the UI shows where the values came from.
+
 ### ExoFOP-TESS TOI parameters
 
 Below the POE/TLCM block, the same section assembles the full **ExoFOP-TESS
@@ -391,6 +411,11 @@ This means:
   crossings — a one- or two-point dip can't accumulate enough significance.
   Contiguous in-dip stretches split only by a few noisy points are bridged,
   so one transit is reported as one event rather than several fragments.
+- **Real data gaps**: the detector is gap-aware. Sample-to-sample jumps
+  larger than ~5× the median cadence (e.g. the mid-sector downlink outage)
+  are flagged, points within the median-filter half-window of either edge
+  are excluded from `in_dip`, and event runs cannot span a gap — so a
+  multi-day outage no longer registers as a single very wide "dip".
 
 **Rule of thumb:**
 
@@ -598,6 +623,7 @@ vetstar/
 │   │   ├── ffi_cutout.py       TESScut FFI cutout fetch + render (astrocut-style stretch)
 │   │   ├── hci_image.py        HCI summary image (metrics + weightings + observables + TLCM)
 │   │   ├── tic_catalog.py      TIC v8 catalog helper
+│   │   ├── gaia_catalog.py     Gaia DR3 stellar-parameter backfill (Vizier cone search)
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
 │   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt
