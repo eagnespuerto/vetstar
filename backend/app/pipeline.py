@@ -24,6 +24,200 @@ from scipy.ndimage import median_filter
 
 
 # ----------------------------------------------------------------------
+# External catalog cross-match (Gaia DR3 + SIMBAD)
+# ----------------------------------------------------------------------
+# Cone-search radius for matching a TIC position to a Gaia DR3 / SIMBAD
+# entry. TESS pixels are ~21", so a few arcsec is plenty for an unambiguous
+# match on the target star itself without dragging in nearby blends.
+CROSSMATCH_RADIUS_ARCSEC = 5.0
+
+# SIMBAD object-type prefixes that we treat as "known" classifications. The
+# value is the verdict headline we substitute in when one is matched.
+# Order matters: planet host beats binary beats variable, because a confirmed
+# exoplanet host is the more specific (and more useful) label.
+_SIMBAD_OTYPE_MAP = [
+    # Exoplanet-related
+    ("Pl",  "Known Planet"),         # confirmed exoplanet
+    ("Pl?", "Known Planet Candidate"),
+    # Eclipsing binaries
+    ("EB*", "Known Eclipsing Binary"),
+    ("Al*", "Known Eclipsing Binary (Algol)"),
+    ("bL*", "Known Eclipsing Binary (β Lyr)"),
+    ("WU*", "Known Eclipsing Binary (W UMa)"),
+    # Other binaries
+    ("SB*", "Known Spectroscopic Binary"),
+    ("**",  "Known Multiple Star"),
+    # Variables
+    ("RR*", "Known RR Lyrae Variable"),
+    ("Ce*", "Known Cepheid Variable"),
+    ("dS*", "Known δ Scuti Variable"),
+    ("Mi*", "Known Mira Variable"),
+    ("V*",  "Known Variable Star"),
+    ("CV*", "Known Cataclysmic Variable"),
+]
+
+
+def _gaia_nss_description(nss_flag) -> Optional[str]:
+    """Translate a Gaia DR3 `non_single_star` integer into a human label.
+
+    The DR3 field is a bitmask: 1=astrometric, 2=spectroscopic, 4=eclipsing.
+    Combinations (e.g. 3 = astrometric+spectroscopic) are common. Returns
+    None when the flag is 0 / missing (Gaia has no NSS solution).
+    """
+    try:
+        flag = int(nss_flag)
+    except (TypeError, ValueError):
+        return None
+    if flag <= 0:
+        return None
+    parts = []
+    if flag & 1:
+        parts.append("astrometric")
+    if flag & 2:
+        parts.append("spectroscopic")
+    if flag & 4:
+        parts.append("eclipsing")
+    return ("Gaia DR3 NSS solution: " + " + ".join(parts)) if parts else None
+
+
+def crossmatch_known_object(
+    ra: Optional[float],
+    dec: Optional[float],
+    radius_arcsec: float = CROSSMATCH_RADIUS_ARCSEC,
+) -> dict:
+    """Cone-search Gaia DR3 and SIMBAD for a known object at (ra, dec).
+
+    Returns ``{"available": False, ...}`` when coordinates are missing or
+    every external query fails (offline, timeout, service down) — the
+    caller should leave the pipeline verdict untouched in that case.
+
+    A successful match returns:
+        {
+          "available": True,
+          "matched":   True/False,
+          "headline":  "Known Eclipsing Binary" | ...   (only if matched)
+          "name":      "TIC 12345 / HD 6789"            (only if matched)
+          "description": "Gaia DR3 NSS: eclipsing; SIMBAD otype EB*"
+          "sources":   ["Gaia DR3", "SIMBAD"],
+          "distance_arcsec": 0.7,
+        }
+    """
+    if ra is None or dec is None or not np.isfinite(ra) or not np.isfinite(dec):
+        return {"available": False, "reason": "no coordinates"}
+
+    # Lazy imports so a missing/offline astroquery doesn't break unit tests
+    # of the rest of the pipeline.
+    try:
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+    except Exception as exc:  # pragma: no cover
+        return {"available": False, "reason": f"astropy import failed: {exc}"}
+
+    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    radius = radius_arcsec * u.arcsec
+
+    sources_tried = []
+    gaia_match = None
+    simbad_match = None
+
+    # ----- Gaia DR3 ----------------------------------------------------
+    try:
+        from astroquery.gaia import Gaia
+        sources_tried.append("Gaia DR3")
+        Gaia.ROW_LIMIT = 5
+        # gaiadr3.gaia_source contains non_single_star; we also pull the
+        # in_qso_candidates / in_galaxy_candidates flags so we can flag
+        # non-stellar matches.
+        adql = (
+            "SELECT TOP 1 source_id, ra, dec, phot_g_mean_mag, "
+            "non_single_star, "
+            "DISTANCE(POINT('ICRS', ra, dec), "
+            f"POINT('ICRS', {ra}, {dec})) * 3600 AS dist_arcsec "
+            "FROM gaiadr3.gaia_source "
+            f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
+            f"CIRCLE('ICRS', {ra}, {dec}, {radius_arcsec / 3600.0})) "
+            "ORDER BY dist_arcsec ASC"
+        )
+        job = Gaia.launch_job_async(adql)
+        tbl = job.get_results()
+        if len(tbl) > 0:
+            row = tbl[0]
+            nss_desc = _gaia_nss_description(row["non_single_star"])
+            gaia_match = {
+                "source_id": int(row["source_id"]),
+                "dist_arcsec": float(row["dist_arcsec"]),
+                "g_mag": float(row["phot_g_mean_mag"]) if row["phot_g_mean_mag"] is not None else None,
+                "nss_flag": int(row["non_single_star"]) if row["non_single_star"] is not None else 0,
+                "nss_description": nss_desc,
+            }
+    except Exception as exc:  # network/service issue: keep going
+        gaia_match = {"error": str(exc)}
+
+    # ----- SIMBAD ------------------------------------------------------
+    try:
+        from astroquery.simbad import Simbad
+        sources_tried.append("SIMBAD")
+        sb = Simbad()
+        sb.TIMEOUT = 15
+        sb.add_votable_fields("otype", "ids")
+        tbl = sb.query_region(coord, radius=radius)
+        if tbl is not None and len(tbl) > 0:
+            row = tbl[0]
+            main_id = str(row["MAIN_ID"]) if "MAIN_ID" in row.colnames else None
+            otype = str(row["OTYPE"]) if "OTYPE" in row.colnames else ""
+            ids = str(row["IDS"]) if "IDS" in row.colnames else ""
+            simbad_match = {
+                "main_id": main_id,
+                "otype": otype,
+                "ids": ids,
+            }
+    except Exception as exc:
+        simbad_match = {"error": str(exc)}
+
+    # ----- Decide whether this counts as a "known" classification -----
+    headline = None
+    description_bits = []
+    name_bits = []
+
+    if simbad_match and "otype" in simbad_match:
+        otype = simbad_match["otype"]
+        for prefix, label in _SIMBAD_OTYPE_MAP:
+            if otype.startswith(prefix):
+                headline = label
+                description_bits.append(f"SIMBAD object type '{otype}'")
+                break
+        if simbad_match.get("main_id"):
+            name_bits.append(simbad_match["main_id"])
+
+    if gaia_match and gaia_match.get("nss_description"):
+        # Gaia NSS solution always implies binarity. Only upgrade the
+        # headline if SIMBAD didn't already give us something more
+        # specific (e.g. confirmed planet host).
+        if headline is None or headline.startswith("Known Variable"):
+            headline = "Known Binary"
+        description_bits.append(gaia_match["nss_description"])
+        name_bits.append(f"Gaia DR3 {gaia_match['source_id']}")
+
+    matched = headline is not None
+    out = {
+        "available": True,
+        "matched": matched,
+        "sources_tried": sources_tried,
+        "gaia": gaia_match,
+        "simbad": simbad_match,
+    }
+    if matched:
+        out["headline"] = headline
+        out["name"] = " / ".join(name_bits) if name_bits else None
+        out["description"] = "; ".join(description_bits)
+        # Closest-match distance (Gaia is sub-arcsec accurate; SIMBAD has
+        # no distance in this minimal query, so prefer Gaia's).
+        if gaia_match and "dist_arcsec" in gaia_match:
+            out["distance_arcsec"] = gaia_match["dist_arcsec"]
+    return out
+
+
+# ----------------------------------------------------------------------
 # Tolerances
 # ----------------------------------------------------------------------
 # How far two transit/eclipse durations may differ (in HOURS) and still be
@@ -107,6 +301,7 @@ class VettingResult:
     shape: dict = field(default_factory=dict)
     physics: dict = field(default_factory=dict)
     verdict: dict = field(default_factory=dict)
+    known_object: dict = field(default_factory=dict)  # Gaia/SIMBAD crossmatch
     plots: dict = field(default_factory=dict)  # name -> base64 PNG
 
     def to_dict(self) -> dict:
@@ -891,6 +1086,30 @@ def run_full_vetting(
         bls_sde=bls["sde"],
     )
 
+    # External catalog cross-match. If the target sits on top of a known
+    # binary / planet host / variable, that classification supersedes
+    # whatever the light-curve verdict says — the published literature is
+    # always more authoritative than a single-sector vet.
+    known = crossmatch_known_object(star.ra, star.dec)
+    if known.get("matched"):
+        verdict["original_headline"] = verdict.get("headline")
+        verdict["original_category"] = verdict.get("category")
+        verdict["headline"] = known["headline"]
+        verdict["category"] = "known_object"
+        verdict["confidence"] = 0.99
+        match_reason = (
+            f"Catalog override: {known['headline']}"
+            + (f" — {known['name']}" if known.get("name") else "")
+            + (f" ({known['description']})" if known.get("description") else "")
+            + (
+                f" at {known['distance_arcsec']:.2f}\" from target"
+                if known.get("distance_arcsec") is not None else ""
+            )
+            + "."
+        )
+        verdict.setdefault("reasons", []).insert(0, match_reason)
+        verdict.setdefault("flags", []).append("known_object_override")
+
     # Plots
     plots = make_plots(
         t_c, f_c, fe_c, mom_x, mom_y, events, primary_event, bls.get("_periodogram"), ls
@@ -919,6 +1138,7 @@ def run_full_vetting(
         shape=shape,
         physics=physics,
         verdict=verdict,
+        known_object=known,
         plots=plots,
     )
 
