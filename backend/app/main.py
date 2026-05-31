@@ -441,13 +441,39 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
     tois = exofop.get("tois", [])
 
     # ExoFOP often returns empty stellar fields, and FFI/QLP headers lack
-    # TEFF/RADIUS/LOGG. Backfill from TIC v8 so POE/physics/density can run.
-    # Never let a catalogue hiccup take down the endpoint.
+    # TEFF/RADIUS/LOGG. Walk the same backfill chain /api/observables uses
+    # so the HCI bundle (and therefore the PDF report) gets the same
+    # populated stellar parameters as the standalone observables panel.
     try:
         from .tic_catalog import backfill_star
         star, _used_tic = backfill_star(star, query.tic_id)
     except Exception as e:
         log.warning("TIC v8 backfill failed for TIC %s: %s", query.tic_id, e)
+    gaia_used = False
+    try:
+        from .gaia_catalog import backfill_star_gaia
+        star, gaia_used = backfill_star_gaia(star, star.get("ra"), star.get("dec"))
+    except Exception as e:
+        log.warning("Gaia DR3 backfill failed for TIC %s: %s", query.tic_id, e)
+
+    # Teff -> Pecaut & Mamajek main-sequence fallback for missing R*/M*.
+    # Runs before PlanetCandidate is built so TLCM (which needs R*) and the
+    # downstream POE call both see the estimated values, and before density
+    # is computed because density-from-Teff is much more reliable than the
+    # b=0 density inversion for faint K/M dwarfs.
+    teff_for_est = (query.stellar_teff or star.get("teff"))
+    rstar_known = (query.stellar_radius_sun or star.get("radius")) is not None
+    mstar_known = (query.stellar_mass_sun or star.get("mass")) is not None
+    stellar_estimate_used = None
+    if teff_for_est and (not rstar_known or not mstar_known):
+        from .habitability import estimate_stellar_from_teff
+        est = estimate_stellar_from_teff(teff_for_est)
+        if est:
+            if not rstar_known:
+                star["radius"] = est["radius_sun"]
+            if not mstar_known:
+                star["mass"] = est["mass_sun"]
+            stellar_estimate_used = est
 
     best_toi = None
     for t in tois:
@@ -570,6 +596,23 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
         mstar_sun=planet.stellar_mass_sun,
     ).to_dict()
 
+    # Density-driven MS fallback for the case where even Teff was missing
+    # (i.e. neither catalogues nor the Teff fallback above produced R*/M*).
+    # Mirrors the rule used in /api/observables.
+    density_estimate_used = None
+    rho_sun = tlcm_geo.get("stellar_density_rho_sun")
+    if (rho_sun
+            and planet.stellar_radius_sun is None
+            and planet.stellar_mass_sun is None
+            and planet.stellar_teff is None):
+        from .habitability import estimate_stellar_from_density
+        dens_est = estimate_stellar_from_density(rho_sun)
+        if dens_est:
+            planet.stellar_radius_sun = dens_est["radius_sun"]
+            planet.stellar_mass_sun = dens_est["mass_sun"]
+            planet.stellar_teff = dens_est["teff"]
+            density_estimate_used = dens_est
+
     a_source = "exofop/override"
     if planet.semi_major_axis_au is None and tlcm_geo.get("a_au_photometric"):
         # Prefer the photometric a — independent of the catalogue stellar mass.
@@ -615,6 +658,27 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
         semi_major_axis_au=planet.semi_major_axis_au,
         rp_earth=planet.radius_earth,
     ).to_dict()
+
+    # Surface the backfill provenance in the POE caveats so the PDF report
+    # shows the same "estimated from Teff" / "distance from Gaia" notes the
+    # standalone observables panel does.
+    if gaia_used:
+        poe.setdefault("caveats", []).append(
+            "Distance / Teff backfilled from Gaia DR3 (GSP-Phot)."
+        )
+    if stellar_estimate_used:
+        poe.setdefault("caveats", []).append(
+            f"Catalogues had only Teff for this target; R*={stellar_estimate_used['radius_sun']} Rsun "
+            f"and M*={stellar_estimate_used['mass_sun']} Msun were estimated from Teff using "
+            f"{stellar_estimate_used['method']} ({stellar_estimate_used['sptype']})."
+        )
+    if density_estimate_used:
+        poe.setdefault("caveats", []).append(
+            f"No catalogue Teff; R*={density_estimate_used['radius_sun']} Rsun, "
+            f"M*={density_estimate_used['mass_sun']} Msun and Teff={density_estimate_used['teff']} K "
+            f"were inferred from the transit-derived stellar density "
+            f"(Seager & Mallen-Ornelas 2003 + Pecaut & Mamajek 2013, {density_estimate_used['sptype']})."
+        )
 
     return {
         "hci": hci_result.to_dict(),
