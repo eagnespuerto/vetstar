@@ -1091,6 +1091,23 @@ async def observables(query: ObservablesQuery):
         except Exception as e:
             log.warning("ExoFOP lookup failed for TIC %s: %s", query.tic_id, e)
 
+    # Last-resort fallback: if Teff is the only stellar parameter we have
+    # (common for faint TIC targets — e.g. TIC 330014070, where both ExoFOP
+    # and TIC v8 carry only Tmag), estimate R* and M* from the Pecaut &
+    # Mamajek main-sequence relation so the observables panel can populate
+    # luminosity, HZ, insolation, RV K, etc. The values are flagged as
+    # estimates via a caveat in the response.
+    stellar_estimate_used = None
+    if teff is not None and (rstar is None or mstar is None):
+        from .habitability import estimate_stellar_from_teff
+        est = estimate_stellar_from_teff(teff)
+        if est:
+            if rstar is None:
+                rstar = est["radius_sun"]
+            if mstar is None:
+                mstar = est["mass_sun"]
+            stellar_estimate_used = est
+
     # Auto-detected: harvest period / depth / Rp from a vetting verdict blob.
     # SPOC DV-fitted values (DVT) take precedence over BLS estimates so the
     # standalone observables panel shows the same cleaner a/Rs and semi-major
@@ -1167,6 +1184,13 @@ async def observables(query: ObservablesQuery):
     out["tlcm"] = tlcm
     out["semi_major_axis_source"] = a_source
     out["exofop_source"] = exofop_source
+    if stellar_estimate_used:
+        out["stellar_estimate"] = stellar_estimate_used
+        out["caveats"].append(
+            f"Catalogues had only Teff for this target; R*={stellar_estimate_used['radius_sun']} Rsun "
+            f"and M*={stellar_estimate_used['mass_sun']} Msun were estimated from Teff using "
+            f"{stellar_estimate_used['method']} ({stellar_estimate_used['sptype']})."
+        )
     return out
 
 

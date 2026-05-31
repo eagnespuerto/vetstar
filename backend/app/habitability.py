@@ -82,6 +82,41 @@ _MS_BY_RHO = sorted(
 )
 
 
+def estimate_stellar_from_teff(teff_k: Optional[float]) -> Optional[dict]:
+    """
+    Interpolate Pecaut & Mamajek (2013) dwarf sequence in Teff to estimate
+    main-sequence radius and mass when the catalogues are silent (e.g. faint
+    TIC targets with only Tmag filled in). Returns None if Teff is missing.
+    """
+    if not teff_k or teff_k <= 0:
+        return None
+    rows = sorted(_MS_SEQUENCE, key=lambda r: r[1])  # ascending Teff
+    teffs = [r[1] for r in rows]
+    extrapolated = teff_k < teffs[0] or teff_k > teffs[-1]
+    if teff_k <= teffs[0]:
+        sp, _, mass, rad = rows[0]
+    elif teff_k >= teffs[-1]:
+        sp, _, mass, rad = rows[-1]
+    else:
+        for i in range(1, len(rows)):
+            if teff_k <= teffs[i]:
+                f = (teff_k - teffs[i - 1]) / (teffs[i] - teffs[i - 1])
+                sp0, _, m0, r0 = rows[i - 1]
+                sp1, _, m1, r1 = rows[i]
+                mass = m0 + f * (m1 - m0)
+                rad = r0 + f * (r1 - r0)
+                sp = sp0 if f < 0.5 else sp1
+                break
+    return {
+        "teff": round(teff_k),
+        "sptype": sp,
+        "radius_sun": round(rad, 3),
+        "mass_sun": round(mass, 3),
+        "extrapolated": extrapolated,
+        "method": "Teff -> main-sequence (Pecaut & Mamajek 2013)",
+    }
+
+
 def estimate_stellar_from_density(rho_sun: Optional[float]) -> Optional[dict]:
     """
     Invert a transit-derived mean stellar density (solar units) for an
