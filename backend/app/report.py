@@ -739,6 +739,35 @@ def build_multisector_pdf(analysis: dict, ffi_cutout: dict = None) -> bytes:
         )
         story.append(Spacer(1, 0.12 * inch))
 
+    # ---------------- SPOC DV phase-fold (DVT) ----------------
+    _dvt_tce = (analysis.get("dvt") or {}).get("tce") if analysis.get("dvt") else None
+    if _dvt_tce and _dvt_tce.get("phase_fold_plot"):
+        _dvt_cap_parts = ["Phase-folded data (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)."]
+        _dvt_fitted: list[str] = []
+        if _dvt_tce.get("period_d") is not None:
+            _dvt_fitted.append(f"P = {_fmt(_dvt_tce['period_d'], nd=6)} d")
+        if _dvt_tce.get("duration_h") is not None:
+            _dvt_fitted.append(f"T&#8321;&#8324; = {_fmt(_dvt_tce['duration_h'], nd=4)} h")
+        if _dvt_tce.get("depth_ppm") is not None:
+            _dvt_fitted.append(f"depth = {_fmt(_dvt_tce['depth_ppm'], nd=0)} ppm")
+        if _dvt_tce.get("a_over_rs") is not None:
+            _dvt_fitted.append(f"a/R&#8902; = {_fmt(_dvt_tce['a_over_rs'], nd=4)} (ARAT)")
+        if _dvt_tce.get("impact_b") is not None:
+            _dvt_fitted.append(f"b = {_fmt(_dvt_tce['impact_b'], nd=3)}")
+        if _dvt_fitted:
+            _dvt_cap_parts.append("Fitted: " + ", ".join(_dvt_fitted) + ".")
+        _dvt_cap_parts.append(
+            "One SPOC DV run spans all processed sectors; the fit is therefore "
+            "the multi-sector ephemeris."
+        )
+        story += _section(
+            "SPOC DV phase-fold",
+            _b64_image(_dvt_tce["phase_fold_plot"]),
+            Paragraph("  ".join(_dvt_cap_parts), styles["caption"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.12 * inch))
+
     # ---------------- Per-sector verdicts ----------------
     sv = analysis.get("sector_verdicts") or []
     if sv:

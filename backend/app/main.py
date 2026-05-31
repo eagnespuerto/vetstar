@@ -238,12 +238,24 @@ async def report(
             )
         result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
         _cache_lc(parsed)
-        extras = _build_report_extras(result)
+        # Opportunistic SPOC DVT fetch — adds the DV phase-fold image and
+        # fitted geometry when the TIC has been processed by SPOC DV.
+        dvt = None
+        if result.star.tic_id:
+            try:
+                from .dvt_fetch import fetch_dvt
+                dvt = fetch_dvt(result.star.tic_id, result.star.sector)
+            except Exception as _e:
+                log.warning("DVT fetch skipped for upload TIC %s: %s",
+                            result.star.tic_id, _e)
+                dvt = None
+        extras = _build_report_extras(result, dvt=dvt)
         pdf = build_pdf(
             result,
             hci_bundle=extras.get("hci_bundle"),
             exominer=extras.get("exominer"),
             ffi_cutout=extras.get("ffi_cutout"),
+            dvt=dvt,
         )
         tic = result.star.tic_id or uuid.uuid4().hex[:8]
         return Response(
