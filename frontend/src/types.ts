@@ -41,6 +41,34 @@ export interface MastInfo {
   tried?: string[];
 }
 
+/** One TCE (Threshold Crossing Event) from a TESS SPOC DVT file. */
+export interface DvtTce {
+  tce_index: number;
+  period_d?: number | null;
+  duration_h?: number | null;
+  epoch_btjd?: number | null;
+  depth_ppm?: number | null;
+  depth_frac?: number | null;
+  /** SPOC DV-fitted impact parameter b (replaces b=0 assumption). */
+  impact_b?: number | null;
+  /** SPOC DV-fitted a/R★ from the ARAT header keyword. */
+  a_over_rs?: number | null;
+  inclination_deg?: number | null;
+  rprs?: number | null;
+  snr?: number | null;
+  n_transits?: number | null;
+  /** Base64 PNG: phase-folded data + SPOC transit model overlay. */
+  phase_fold_plot?: string;
+}
+
+/** Parsed DVT summary returned by /api/mast/analyze. */
+export interface DvtResult {
+  available: boolean;
+  star: Record<string, number | null>;
+  tce: DvtTce;
+  n_tces: number;
+}
+
 export interface VettingResult {
   star: StarInfo;
   summary: Record<string, number>;
@@ -55,6 +83,8 @@ export interface VettingResult {
   verdict: Verdict;
   plots: Record<string, string>;
   mast?: MastInfo;
+  /** SPOC DVT fitted parameters (only present for MAST-fetched results). */
+  dvt?: DvtResult | null;
   /** Downsampled cleaned light curve for the manual dip selector. */
   lightcurve?: { t: number[]; f: number[] };
 }

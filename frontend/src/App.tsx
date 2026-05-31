@@ -14,7 +14,7 @@ import {
   type SectorInfo,
   type DetectParams,
 } from "./api";
-import type { VettingResult } from "./types";
+import type { VettingResult, DvtResult } from "./types";
 import ExoMinerPanel from "./ExoMinerPanel";
 import FfiCutoutPanel from "./FfiCutoutPanel";
 import ManualDipSelector from "./ManualDipSelector";
@@ -681,8 +681,7 @@ function ResultsView({ result }: { result: VettingResult }) {
     if (!result.star.tic_id) return;
     setHciLoading(true); setHciError(null);
     try {
-      // Enrich the verdict with depth info so the backend can derive
-      // R_companion when the pipeline's physics block was unavailable.
+      const dvtTce = result.dvt?.tce;
       const enrichedVerdict = {
         ...result.verdict,
         _depth: result.events?.[0]?.depth ?? null,
@@ -691,12 +690,18 @@ function ResultsView({ result }: { result: VettingResult }) {
         _bls_duration: result.bls?.duration ?? null,
         _shape_class: result.shape?.shape_class ?? null,
         _events: result.events,
+        // DVT-fitted parameters let the backend use SPOC's b and a/R★
+        _dvt_period_d:   dvtTce?.period_d   ?? null,
+        _dvt_duration_h: dvtTce?.duration_h ?? null,
+        _dvt_depth_frac: dvtTce?.depth_frac ?? null,
+        _dvt_impact_b:   dvtTce?.impact_b   ?? null,
+        _dvt_a_over_rs:  dvtTce?.a_over_rs  ?? null,
       };
       const data = await fetchHabitability(result.star.tic_id, {
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
         stellar_mass_sun: result.star.mass ?? undefined,
-        orbital_period_d: result.bls?.period ?? undefined,
+        orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         planet_mass_earth: massEarth ?? undefined,
         n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
@@ -719,6 +724,7 @@ function ResultsView({ result }: { result: VettingResult }) {
       setMultisectorData(data);
       // Re-run HCI with updated sector counts
       if (data.n_sectors_observed > 1) {
+        const dvtTce = result.dvt?.tce;
         const enrichedVerdict = {
           ...result.verdict,
           _depth: result.events?.[0]?.depth ?? null,
@@ -727,12 +733,17 @@ function ResultsView({ result }: { result: VettingResult }) {
           _bls_duration: result.bls?.duration ?? null,
           _shape_class: result.shape?.shape_class ?? null,
           _events: result.events,
+          _dvt_period_d:   dvtTce?.period_d   ?? null,
+          _dvt_duration_h: dvtTce?.duration_h ?? null,
+          _dvt_depth_frac: dvtTce?.depth_frac ?? null,
+          _dvt_impact_b:   dvtTce?.impact_b   ?? null,
+          _dvt_a_over_rs:  dvtTce?.a_over_rs  ?? null,
         };
         const updated = await fetchHabitability(result.star.tic_id, {
           stellar_teff: result.star.teff ?? undefined,
           stellar_radius_sun: result.star.radius ?? undefined,
           stellar_mass_sun: result.star.mass ?? undefined,
-          orbital_period_d: result.bls?.period ?? undefined,
+          orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
           R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
           n_sectors_with_detections: data.n_sectors_with_detections,
           n_sectors_observed: data.n_sectors_observed,
@@ -848,6 +859,9 @@ function ResultsView({ result }: { result: VettingResult }) {
 
       {/* Plots */}
       <PlotsSection plots={result.plots} ticId={result.star.tic_id} sector={result.star.sector} />
+
+      {/* SPOC DVT phase-fold (MAST results only, when DVT is available) */}
+      {result.dvt?.available && <DvtPanel dvt={result.dvt} />}
 
       {/* Tests */}
       <div className="grid md:grid-cols-2 gap-4">
@@ -1070,7 +1084,10 @@ function ObservablesSection({ result }: { result: VettingResult }) {
     setLoading(true);
     setError(null);
     try {
-      // Same verdict-derived hints the HCI path feeds to /api/observables.
+      // Prefer SPOC DV-fitted parameters when a DVT file was found alongside
+      // the light curve.  These carry a fitted impact parameter and a/R★ that
+      // replace the b=0 central-transit assumption used by the BLS-only path.
+      const dvtTce = result.dvt?.tce;
       const vv: Record<string, any> = {
         _bls_period: result.bls?.period ?? null,
         _period: result.bls?.period ?? null,
@@ -1081,15 +1098,22 @@ function ObservablesSection({ result }: { result: VettingResult }) {
         _shape_class: result.shape?.shape_class ?? null,
         _R_companion_Rjup: result.physics?.R_companion_Rjup ?? null,
         _events: result.events,
+        // DVT-fitted parameters (null when DVT unavailable — backend ignores null)
+        _dvt_period_d:   dvtTce?.period_d   ?? null,
+        _dvt_duration_h: dvtTce?.duration_h ?? null,
+        _dvt_depth_frac: dvtTce?.depth_frac ?? null,
+        _dvt_impact_b:   dvtTce?.impact_b   ?? null,
+        _dvt_a_over_rs:  dvtTce?.a_over_rs  ?? null,
       };
       const obs = await fetchObservables({
         tic_id: result.star.tic_id ?? undefined,
         stellar_teff: result.star.teff ?? undefined,
         stellar_radius_sun: result.star.radius ?? undefined,
         stellar_mass_sun: result.star.mass ?? undefined,
-        orbital_period_d: result.bls?.period ?? undefined,
+        // Prefer DVT period (multi-sector fold) over single-sector BLS peak.
+        orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
         rp_rjup: result.physics?.R_companion_Rjup ?? undefined,
-        transit_depth_frac: result.physics?.observed_depth ?? result.bls?.depth ?? undefined,
+        transit_depth_frac: dvtTce?.depth_frac ?? result.physics?.observed_depth ?? result.bls?.depth ?? undefined,
         vetting_verdict: vv,
       });
       setData(obs);
@@ -1182,9 +1206,15 @@ function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any
   ];
   const tl = tlcm || {};
   const rv = tl.radial_velocity || {};
+  // Show the a/Rs source in the label: SPOC DV model fit is preferred over the
+  // b=0 duration-inversion when a DVT file was available.
+  const isSpocDv = (tl.a_over_rs_assumption ?? "").includes("SPOC DV");
+  const aRsLabel = isSpocDv
+    ? "Scaled semi-major axis a/Rs (SPOC DV / dynamical)"
+    : "Scaled semi-major axis a/Rs (duration / dynamical)";
   const tlRows: [string, any][] = [
     ["Radius ratio k = Rp/Rs", fmt(tl.radius_ratio_k, 4)],
-    ["Scaled semi-major axis a/Rs (duration / dynamical)",
+    [aRsLabel,
       tl.a_over_rs_dynamical != null
         ? `${fmt(tl.a_over_rs, 4)} / ${fmt(tl.a_over_rs_dynamical, 4)}${tl.a_over_rs_agreement_pct != null ? ` (Δ${fmt(tl.a_over_rs_agreement_pct, 1)}%)` : ""}`
         : fmt(tl.a_over_rs, 4)],
@@ -1197,9 +1227,12 @@ function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any
 
   // ExoFOP-TESS TOI parameters: pipeline-measured values + derived observables.
   // Transit epoch is converted BTJD → BJD (BJD = BTJD + 2,457,000).
+  // Prefer SPOC DV-fitted values (DVT) over BLS estimates when available —
+  // they are fitted from a Mandel-Agol model across all processed sectors.
+  const dvtTce = result?.dvt?.tce;
   const t0btjd = result?.bls?.t0;
-  const depthFrac = result?.physics?.observed_depth ?? result?.bls?.depth;
-  const durationH = result?.shape?.t14_hours ?? (result?.bls?.duration != null ? result.bls.duration * 24 : null);
+  const depthFrac = dvtTce?.depth_frac ?? result?.physics?.observed_depth ?? result?.bls?.depth;
+  const durationH = dvtTce?.duration_h ?? result?.shape?.t14_hours ?? (result?.bls?.duration != null ? result.bls.duration * 24 : null);
   const insol = obs.insolation_searth;
   const teq = insol != null && insol > 0 ? 278.3 * Math.pow(insol, 0.25) : null;
   const efmt = (v: any, unit: string) => {
@@ -1210,8 +1243,10 @@ function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any
     return typeof v === "number" ? Number(v.toPrecision(5)) : String(v);
   };
   const exofopRows: { label: string; value: any; unit: string; req: boolean }[] = [
-    { label: "Orbital Period", unit: "days", req: true, value: result?.bls?.period ?? obs.orbit?.orbital_period_d },
-    { label: "Transit Epoch", unit: "BJD", req: true, value: t0btjd != null ? t0btjd + 2457000 : null },
+    { label: "Orbital Period", unit: "days", req: true,
+      value: dvtTce?.period_d ?? result?.bls?.period ?? obs.orbit?.orbital_period_d },
+    { label: "Transit Epoch", unit: "BJD", req: true,
+      value: dvtTce?.epoch_btjd != null ? dvtTce.epoch_btjd + 2457000 : (t0btjd != null ? t0btjd + 2457000 : null) },
     { label: "Transit Depth", unit: "ppm", req: true, value: depthFrac != null ? depthFrac * 1e6 : null },
     { label: "Transit Duration", unit: "hrs", req: true, value: durationH },
     { label: "Inclination", unit: "deg", req: false, value: tl.inclination_deg },
@@ -1299,6 +1334,100 @@ function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any
         </ul>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SPOC DVT phase-fold panel
+// ---------------------------------------------------------------------------
+
+function DvtPanel({ dvt }: { dvt: DvtResult }) {
+  const [open, setOpen] = useState(true);
+  const tce = dvt.tce;
+  if (!tce) return null;
+
+  const fmt = (v: any, d = 4) =>
+    v === null || v === undefined ? "—" : typeof v === "number" ? Number(v.toPrecision(d)) : String(v);
+
+  const params: [string, string][] = [
+    ["Period (d)",         fmt(tce.period_d, 6)],
+    ["Duration T₁₄ (h)",  fmt(tce.duration_h, 5)],
+    ["Depth (ppm)",        tce.depth_ppm != null ? tce.depth_ppm.toFixed(0) : "—"],
+    ["a/R★ (ARAT)",       fmt(tce.a_over_rs, 4)],
+    ["Impact param b",    fmt(tce.impact_b, 3)],
+    ["Inclination (°)",   fmt(tce.inclination_deg, 4)],
+    ["Rp/Rs",             fmt(tce.rprs, 4)],
+    ["SNR",               fmt(tce.snr, 3)],
+    ["N transits",        tce.n_transits != null ? String(Math.round(tce.n_transits)) : "—"],
+  ].filter(([, v]) => v !== "—") as [string, string][];
+
+  return (
+    <section className="bg-white rounded-lg shadow p-5">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="font-bold text-slate-800">
+            SPOC DV phase-fold
+            {dvt.n_tces > 1 && (
+              <span className="ml-2 text-xs font-normal text-slate-500">
+                TCE 1 of {dvt.n_tces}
+              </span>
+            )}
+          </h3>
+          <p className="text-xs text-slate-400">
+            SPOC Data Validation fit — period, a/R★ (ARAT), and impact parameter b
+            replace the b=0 BLS assumption in the TLCM geometry and semi-major axis.
+          </p>
+        </div>
+        <button
+          onClick={() => setOpen((x) => !x)}
+          className="text-slate-400 hover:text-slate-700 text-sm ml-4"
+          aria-label={open ? "Collapse" : "Expand"}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="space-y-3">
+          {/* Fitted parameter chips */}
+          <div className="flex flex-wrap gap-2">
+            {params.map(([k, v]) => (
+              <span
+                key={k}
+                className="inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-xs"
+              >
+                <span className="text-indigo-500 font-medium">{k}</span>
+                <span className="font-mono text-slate-800">{v}</span>
+              </span>
+            ))}
+            {tce.a_over_rs != null && (
+              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs text-emerald-700 font-medium">
+                ✓ SPOC DV a/R★ used in TLCM
+              </span>
+            )}
+            {tce.impact_b != null && (
+              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs text-emerald-700 font-medium">
+                ✓ SPOC DV b used in TLCM
+              </span>
+            )}
+          </div>
+
+          {/* Phase-fold plot with SPOC transit model */}
+          {tce.phase_fold_plot && (
+            <div>
+              <p className="text-xs text-slate-500 mb-1">
+                Phase-folded light curve (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)
+              </p>
+              <img
+                src={`data:image/png;base64,${tce.phase_fold_plot}`}
+                alt="SPOC DV phase-fold with transit model"
+                className="w-full rounded border border-slate-200"
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
