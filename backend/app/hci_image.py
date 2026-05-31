@@ -238,6 +238,15 @@ def make_hci_summary_image(
     # --- observables + TLCM tables -------------------------------------
     ax_obs = fig.add_subplot(gs[2, 0])
     _table(ax_obs, "Predicted observables (POE)", _observable_rows(observables or {}))
+    obs_planet = (observables or {}).get("planet") or {}
+    if obs_planet.get("mass_fallback_powerlaw"):
+        ax_obs.text(
+            0.0, -0.02,
+            "Mass: power-law fallback (Chen & Kipping radius-degenerate\n"
+            "for R$_p$ > ~14 R$_\\oplus$; pins to ~131.6 M$_\\oplus$).",
+            fontsize=6.8, style="italic", color="#64748b",
+            va="top", ha="left", transform=ax_obs.transAxes,
+        )
 
     ax_tlcm = fig.add_subplot(gs[2, 1])
     _table(ax_tlcm, "Transit geometry & masses (TLCM)", _tlcm_rows(tlcm or {}))
