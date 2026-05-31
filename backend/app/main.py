@@ -291,6 +291,17 @@ def _mast_fetch_and_analyze(query: MastQuery):
     except Exception as e:
         raise _handle_exception("mast_fetch", e)
 
+    # Opportunistically fetch the companion DVT file produced by SPOC DV.
+    # Provides fitted period, a/R★ (ARAT), impact parameter, and a phase-fold
+    # plot with the transit model overlay — cleaner than BLS-only estimates.
+    # Fails soft: None when not yet available (recent sector, FFI-only target).
+    try:
+        from .dvt_fetch import fetch_dvt
+        info["dvt"] = fetch_dvt(query.tic_id, query.sector)
+    except Exception as _e:
+        log.warning("DVT fetch skipped for TIC %s S%s: %s", query.tic_id, query.sector, _e)
+        info["dvt"] = None
+
     try:
         parsed = parse_upload(info["path"], info["filename"])
     except Exception as e:
@@ -322,6 +333,8 @@ async def mast_analyze(query: MastQuery):
         "tried": info.get("tried", []),
     }
     out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+    # Include DVT summary for the frontend (phase-fold plot + fitted parameters).
+    out["dvt"] = _summarize_dvt(info.get("dvt"))
     return out
 
 
@@ -329,12 +342,14 @@ async def mast_analyze(query: MastQuery):
 async def mast_report(query: MastQuery):
     result, info = _mast_fetch_and_analyze(query)
     try:
-        extras = _build_report_extras(result)
+        dvt = info.get("dvt")
+        extras = _build_report_extras(result, dvt=dvt)
         pdf = build_pdf(
             result,
             hci_bundle=extras.get("hci_bundle"),
             exominer=extras.get("exominer"),
             ffi_cutout=extras.get("ffi_cutout"),
+            dvt=dvt,
         )
     except Exception as e:
         raise _handle_exception("build_pdf", e)
@@ -513,15 +528,32 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
             planet.mass_earth = comp["mp_earth"]
             planet.mass_source = "RV (archive)"
 
-    # TLCM transit geometry: a model-independent stellar density and a
-    # photometric semi-major axis (a/Rs x R*) that needs no catalogue mass.
+    # TLCM transit geometry: model-independent stellar density and photometric
+    # semi-major axis.  When DVT parameters are available we pass the SPOC
+    # DV-fitted a/R★ (ARAT) and impact parameter directly, replacing the
+    # b=0 central-transit assumption used in the BLS-only path.  This gives
+    # a cleaner a_au_photometric and therefore a cleaner semi-major axis.
     from .tlcm_geometry import compute_tlcm_geometry
     vv = query.vetting_verdict or {}
+
+    # Duration: prefer DVT (hours → days), then shape measure, then BLS
+    dvt_dur_h = vv.get("_dvt_duration_h")
+    t14_d = (dvt_dur_h / 24.0) if dvt_dur_h else (
+        vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration")
+    )
+    # Depth: prefer DVT depth_frac, then event/BLS depth
+    depth_frac = (
+        vv.get("_dvt_depth_frac")
+        or vv.get("_depth")
+        or vv.get("_bls_depth")
+    )
     tlcm_geo = compute_tlcm_geometry(
         period_d=planet.orbital_period_d,
-        t14_d=vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration"),
-        depth_frac=vv.get("_depth") or vv.get("_bls_depth"),
+        t14_d=t14_d,
+        depth_frac=depth_frac,
         rstar_sun=planet.stellar_radius_sun,
+        impact_parameter=vv.get("_dvt_impact_b"),   # fitted b from SPOC DV
+        a_over_rs_spoc=vv.get("_dvt_a_over_rs"),    # fitted ARAT from SPOC DV
         grazing=str(vv.get("_shape_class", "")).startswith("V"),
         mstar_sun=planet.stellar_mass_sun,
     ).to_dict()
@@ -624,15 +656,17 @@ def _build_report_extras(
     n_sectors_observed: int = 1,
     n_sectors_with_detections: Optional[int] = None,
     period_override: Optional[float] = None,
+    dvt: Optional[dict] = None,
 ) -> dict:
     """Server-side recompute of HCI, observables, TLCM and ExoMiner for a
     finished VettingResult, so the PDF (and the multi-sector panel) can embed
     *all current analyses* without the frontend forwarding its panel state.
 
-    ``n_sectors_observed`` / ``n_sectors_with_detections`` let a multi-sector
-    caller feed the real sector counts into the HCI; ``period_override`` lets a
-    caller (e.g. a multi-sector object) pin the consensus period instead of the
-    single-sector BLS peak.
+    ``dvt`` is the parsed DVT dict from ``dvt_fetch.fetch_dvt``.  When
+    present its TCE-0 parameters (period, duration, depth, impact parameter,
+    and the SPOC-fitted a/R★) are propagated into the enriched verdict and
+    used by ``_habitability_bundle`` for a cleaner TLCM geometry and
+    semi-major axis.
 
     Every step fails safe: a missing TIC, an offline catalogue, or an
     ExoMiner error simply omits that block.
@@ -641,6 +675,14 @@ def _build_report_extras(
     star = result.star
     tic = getattr(star, "tic_id", None)
     period = period_override or (result.bls.get("period") if result.bls else None)
+
+    # Extract the best DVT TCE parameters (None when DVT unavailable).
+    from .dvt_fetch import best_tce as _best_tce
+    tce = _best_tce(dvt)
+    dvt_period = tce.get("period_d") if tce else None
+    # DVT period is more precise (multi-sector fold) — prefer it over BLS.
+    if dvt_period and period_override is None:
+        period = dvt_period
 
     # --- HCI + observables + TLCM (needs a TIC to query ExoFOP) ---------
     if tic:
@@ -654,6 +696,12 @@ def _build_report_extras(
                     "_bls_duration": result.bls.get("duration") if result.bls else None,
                     "_shape_class": result.shape.get("shape_class") if result.shape else None,
                     "_events": result.events,
+                    # DVT-derived parameters (None when DVT unavailable)
+                    "_dvt_period_d": dvt_period,
+                    "_dvt_duration_h": tce.get("duration_h") if tce else None,
+                    "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
+                    "_dvt_impact_b": tce.get("impact_b") if tce else None,
+                    "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
                 }
             )
             if n_sectors_with_detections is not None:
@@ -1018,14 +1066,27 @@ async def observables(query: ObservablesQuery):
         except Exception as e:
             log.warning("ExoFOP lookup failed for TIC %s: %s", query.tic_id, e)
 
-    # Auto-detected: harvest period / depth / Rp from a vetting verdict blob
+    # Auto-detected: harvest period / depth / Rp from a vetting verdict blob.
+    # SPOC DV-fitted values (DVT) take precedence over BLS estimates so the
+    # standalone observables panel shows the same cleaner a/Rs and semi-major
+    # axis as the HCI/PDF paths.
     t14 = query.t14_d
     grazing = query.grazing
+    impact_parameter = query.impact_parameter
+    a_over_rs_spoc = None
     if query.vetting_verdict:
         vv = query.vetting_verdict
-        period = period or vv.get("_bls_period") or vv.get("_period")
-        depth = depth or vv.get("_depth") or vv.get("_bls_depth")
-        t14 = t14 or vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration")
+        dvt_dur_h = vv.get("_dvt_duration_h")
+        period = period or vv.get("_dvt_period_d") or vv.get("_bls_period") or vv.get("_period")
+        depth = depth or vv.get("_dvt_depth_frac") or vv.get("_depth") or vv.get("_bls_depth")
+        t14 = (
+            t14
+            or (dvt_dur_h / 24.0 if dvt_dur_h else None)
+            or vv.get("_t14_d") or vv.get("_duration") or vv.get("_bls_duration")
+        )
+        if impact_parameter is None and vv.get("_dvt_impact_b") is not None:
+            impact_parameter = vv.get("_dvt_impact_b")
+        a_over_rs_spoc = vv.get("_dvt_a_over_rs")
         if not grazing and str(vv.get("_shape_class", "")).startswith("V"):
             grazing = True
         if rp_rjup is None and vv.get("_R_companion_Rjup") is not None:
@@ -1033,13 +1094,15 @@ async def observables(query: ObservablesQuery):
 
     # TLCM transit geometry: radius ratio, a/Rs, model-independent stellar
     # density, photometric semi-major axis, and (with RV) absolute mass.
+    # When a SPOC DV a/R* (ARAT) is available it replaces the b=0 duration route.
     from .tlcm_geometry import compute_tlcm_geometry
     tlcm = compute_tlcm_geometry(
         period_d=period,
         t14_d=t14,
         depth_frac=depth,
         rstar_sun=rstar,
-        impact_parameter=query.impact_parameter,
+        impact_parameter=impact_parameter,
+        a_over_rs_spoc=a_over_rs_spoc,
         grazing=grazing,
         k_rv_ms=query.k_rv_ms,
         eccentricity=query.eccentricity,
@@ -1168,6 +1231,29 @@ async def radial_velocity(query: RVQuery):
 # -------------------------------------------------
 # Manual tiny-dip selector
 # -------------------------------------------------
+
+def _summarize_dvt(dvt: Optional[dict]) -> Optional[dict]:
+    """Build a frontend-friendly DVT summary from a parsed DVT dict.
+
+    Strips heavy array data; keeps scalar parameters and the phase-fold plot
+    (base64 PNG).  Returns None when dvt is None or contains no TCEs.
+    """
+    if not dvt or not dvt.get("tces"):
+        return None
+    from .dvt_fetch import best_tce
+    tce = best_tce(dvt)
+    if tce is None:
+        return None
+    return {
+        "available": True,
+        "star": dvt.get("star", {}),
+        "tce": {
+            k: v for k, v in tce.items()
+            if k not in ("columns_available",)  # not needed by frontend
+        },
+        "n_tces": len(dvt["tces"]),
+    }
+
 
 def _downsample_cached_lc(tic_id, sector, max_pts: int = 4000) -> Optional[dict]:
     """Return a transport-friendly {t, f} from the cached cleaned LC."""

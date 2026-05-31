@@ -242,6 +242,7 @@ def build_pdf(
     hci_bundle: dict = None,
     exominer: dict = None,
     ffi_cutout: dict = None,
+    dvt: dict = None,
 ) -> bytes:
     buf = io.BytesIO()
 
@@ -325,6 +326,35 @@ def build_pdf(
             _b64_image(result.plots["lightcurve"]),
             styles=styles,
         )
+
+    # ---------------- SPOC DV phase-fold (DVT) ----------------
+    _dvt_tce = (dvt or {}).get("tce") if dvt else None
+    if _dvt_tce and _dvt_tce.get("phase_fold_plot"):
+        _dvt_cap_parts = ["Phase-folded data (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)."]
+        _dvt_fitted: list[str] = []
+        if _dvt_tce.get("period_d") is not None:
+            _dvt_fitted.append(f"P = {_fmt(_dvt_tce['period_d'], nd=6)} d")
+        if _dvt_tce.get("duration_h") is not None:
+            _dvt_fitted.append(f"T&#8321;&#8324; = {_fmt(_dvt_tce['duration_h'], nd=4)} h")
+        if _dvt_tce.get("depth_ppm") is not None:
+            _dvt_fitted.append(f"depth = {_fmt(_dvt_tce['depth_ppm'], nd=0)} ppm")
+        if _dvt_tce.get("a_over_rs") is not None:
+            _dvt_fitted.append(f"a/R&#8902; = {_fmt(_dvt_tce['a_over_rs'], nd=4)} (ARAT)")
+        if _dvt_tce.get("impact_b") is not None:
+            _dvt_fitted.append(f"b = {_fmt(_dvt_tce['impact_b'], nd=3)}")
+        if _dvt_fitted:
+            _dvt_cap_parts.append("Fitted: " + ", ".join(_dvt_fitted) + ".")
+        _dvt_cap_parts.append(
+            "The SPOC DV a/R&#8902; (ARAT) and impact parameter b replace the "
+            "b = 0 central-transit assumption in the TLCM geometry below."
+        )
+        story += _section(
+            "SPOC DV phase-fold",
+            _b64_image(_dvt_tce["phase_fold_plot"]),
+            Paragraph("  ".join(_dvt_cap_parts), styles["caption"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
 
     story.append(PageBreak())
 
@@ -469,19 +499,38 @@ def build_pdf(
     # ---------------- ExoFOP TOI parameters ----------------
     if hci_bundle and (hci_bundle.get("observables") or hci_bundle.get("tlcm")):
         story.append(PageBreak())
+        # Prefer SPOC DV-fitted values over BLS for the required ExoFOP fields.
+        _tce = _dvt_tce  # already extracted above (None when DVT unavailable)
+        _period_d = (
+            (_tce.get("period_d") if _tce else None)
+            or (result.bls.get("period") if result.bls else None)
+        )
+        _t0_btjd = (
+            (_tce.get("epoch_btjd") if _tce else None)
+            or (result.bls.get("t0") if result.bls else None)
+        )
+        _depth_frac = (
+            (_tce.get("depth_frac") if _tce else None)
+            or (result.physics.get("observed_depth")
+                if result.physics.get("available")
+                else (result.bls.get("depth") if result.bls else None))
+        )
+        _duration_h = (
+            (_tce.get("duration_h") if _tce else None)
+            or (result.shape.get("t14_hours")
+                if result.shape.get("available")
+                else ((result.bls.get("duration") * 24.0)
+                      if result.bls and result.bls.get("duration") else None))
+        )
         _append_exofop_section(
             story,
-            period_d=(result.bls.get("period") if result.bls else None),
-            t0_btjd=(result.bls.get("t0") if result.bls else None),
-            depth_frac=(result.physics.get("observed_depth")
-                        if result.physics.get("available")
-                        else (result.bls.get("depth") if result.bls else None)),
-            duration_h=(result.shape.get("t14_hours")
-                        if result.shape.get("available")
-                        else ((result.bls.get("duration") * 24.0)
-                              if result.bls and result.bls.get("duration") else None)),
+            period_d=_period_d,
+            t0_btjd=_t0_btjd,
+            depth_frac=_depth_frac,
+            duration_h=_duration_h,
             observables=hci_bundle.get("observables"),
             tlcm=hci_bundle.get("tlcm"),
+            dvt_available=_tce is not None,
             styles=styles,
         )
 
@@ -588,9 +637,16 @@ def _fmt_exofop(value, unit):
 
 
 def _append_exofop_section(story, *, period_d, t0_btjd, depth_frac, duration_h,
-                           observables, tlcm, styles, heading="ExoFOP-TESS TOI parameters"):
+                           observables, tlcm, styles,
+                           dvt_available: bool = False,
+                           heading="ExoFOP-TESS TOI parameters"):
     """Build the ExoFOP TOI parameter table from measured + derived values.
-    The transit epoch is converted BTJD → BJD (BJD = BTJD + 2,457,000)."""
+    The transit epoch is converted BTJD → BJD (BJD = BTJD + 2,457,000).
+
+    When ``dvt_available`` is True, period, epoch, depth and duration come
+    from the SPOC DV-fitted values; a/R★ and impact parameter b come from the
+    TLCM block which was computed with the SPOC ARAT keyword.
+    """
     from .observables import exofop_param_rows
 
     body = styles["body"]
@@ -604,14 +660,22 @@ def _append_exofop_section(story, *, period_d, t0_btjd, depth_frac, duration_h,
         table_rows.append([label, _fmt_exofop(r["value"], r["unit"]), r["unit"] or "—"])
     tbl = _data_table(table_rows, [3.1 * inch, CONTENT_W - 4.0 * inch, 0.9 * inch])
 
-    note = Paragraph(
-        "Values formatted for ExoFOP-TESS TOI entry. <b>***</b> marks the four "
-        "required fields. The transit epoch is reported in <b>BJD</b> "
-        "(BJD = BTJD + 2,457,000); other quantities are derived from the "
-        "predicted-observables and TLCM analyses and should be treated as "
-        "estimates, not fitted values.",
-        styles["caption"],
-    )
+    if dvt_available:
+        note_text = (
+            "Values formatted for ExoFOP-TESS TOI entry. <b>***</b> marks the four "
+            "required fields. The transit epoch is in <b>BJD</b> (BJD = BTJD + 2,457,000). "
+            "<b>Period, epoch, depth and duration are SPOC DV-fitted values</b> from the DVT "
+            "file; a/R&#8902; and impact parameter b are from the SPOC DV TLCM fit (ARAT "
+            "keyword). Non-required fields are derived from the observables and TLCM analyses."
+        )
+    else:
+        note_text = (
+            "Values formatted for ExoFOP-TESS TOI entry. <b>***</b> marks the four "
+            "required fields. The transit epoch is in <b>BJD</b> (BJD = BTJD + 2,457,000); "
+            "other quantities are derived from the predicted-observables and TLCM analyses "
+            "and should be treated as estimates, not fitted values."
+        )
+    note = Paragraph(note_text, styles["caption"])
     story += _section(heading, tbl, note, styles=styles)
 
 

@@ -206,16 +206,26 @@ def compute_tlcm_geometry(
     depth_frac: Optional[float] = None,
     rstar_sun: Optional[float] = None,
     impact_parameter: Optional[float] = None,
+    a_over_rs_spoc: Optional[float] = None,
     grazing: bool = False,
     k_rv_ms: Optional[float] = None,
     eccentricity: float = 0.0,
     mstar_sun: Optional[float] = None,
     inclination_deg: Optional[float] = None,
 ) -> TLCMGeometry:
+    """Compute TLCM transit geometry.
+
+    ``a_over_rs_spoc`` accepts the SPOC DV-fitted a/R★ value (ARAT header
+    keyword from a DVT file).  When supplied it replaces the duration-based
+    derivation and removes the b=0 central-transit assumption, producing a
+    cleaner semi-major axis estimate.  All other quantities (stellar density,
+    inclination, photometric a) are still derived from this value.
+    """
     res = TLCMGeometry()
     res.inputs = {
         "period_d": period_d, "t14_d": t14_d, "depth_frac": depth_frac,
         "rstar_sun": rstar_sun, "impact_parameter": impact_parameter,
+        "a_over_rs_spoc": a_over_rs_spoc,
         "grazing": grazing, "k_rv_ms": k_rv_ms, "eccentricity": eccentricity,
         "mstar_sun": mstar_sun,
     }
@@ -232,9 +242,17 @@ def compute_tlcm_geometry(
                 "radius ratio is a LOWER limit only."
             )
 
-    # Scaled semi-major axis from duration
+    # Scaled semi-major axis: prefer SPOC DV-fitted value when available.
+    # The SPOC Mandel-Agol fit accounts for the actual impact parameter, so
+    # it is free of the b=0 bias that affects the duration-inversion route.
     b = impact_parameter if impact_parameter is not None else 0.0
-    if period_d and t14_d and k is not None:
+    if a_over_rs_spoc is not None and a_over_rs_spoc > 0:
+        res.a_over_rs = a_over_rs_spoc
+        res.a_over_rs_assumption = (
+            "SPOC DV model fit (ARAT)"
+            + (f"; b = {impact_parameter:.3f}" if impact_parameter is not None else "")
+        )
+    elif period_d and t14_d and k is not None:
         a_rs = a_over_rs_from_duration(period_d, t14_d, k, b)
         res.a_over_rs = a_rs
         res.a_over_rs_assumption = (
@@ -270,9 +288,15 @@ def compute_tlcm_geometry(
                 f"inaccurate stellar parameters (TLCM §2.12, Appendix A)."
             )
 
-    # Inclination from geometry
-    if res.a_over_rs and impact_parameter is not None:
-        res.inclination_deg = inclination_from_b(res.a_over_rs, impact_parameter)
+    # Impact parameter / inclination from geometry. Echo a supplied b (e.g. the
+    # SPOC DV-fitted IMPACT) into the result so it surfaces in the panel, the
+    # ExoFOP table and the PDF; otherwise recover b from a supplied inclination.
+    if impact_parameter is not None:
+        res.impact_parameter_b = impact_parameter
+        if res.a_over_rs:
+            res.inclination_deg = inclination_from_b(res.a_over_rs, impact_parameter)
+    elif inclination_deg is not None and res.a_over_rs:
+        res.impact_parameter_b = res.a_over_rs * math.cos(math.radians(inclination_deg))
     inc = inclination_deg or res.inclination_deg or 90.0
 
     # RV -> absolute mass
