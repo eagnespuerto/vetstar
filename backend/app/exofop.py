@@ -65,22 +65,41 @@ def _from_exofop(tic_id: int) -> Optional[dict]:
         log.info("ExoFOP fetch failed for TIC %s: %s", tic_id, e)
         return None
 
-    # Stellar parameters
-    sp = data.get("stellar_parameters") or {}
-    if isinstance(sp, list) and sp:
-        sp = sp[0]
-    star = {}
-    if isinstance(sp, dict):
-        star = {
-            "teff":     _f(sp.get("teff") or sp.get("st_teff")),
-            "radius":   _f(sp.get("srad") or sp.get("st_rad")),
-            "mass":     _f(sp.get("smass") or sp.get("st_mass")),
-            "logg":     _f(sp.get("slogg") or sp.get("st_logg")),
-            "tmag":     _f(sp.get("tmag")),
-            "ra":       _f(sp.get("ra")),
-            "dec":      _f(sp.get("dec")),
-            "distance": _f(sp.get("distance") or sp.get("st_dist")),
-        }
+    # Stellar parameters.
+    #
+    # ExoFOP returns "stellar_parameters" as a list whose first element is a
+    # "provenance" header ({prov, prov_title, prov_num}) and whose subsequent
+    # elements are the actual data rows from each contributing source. Picking
+    # sp[0] blindly grabs the header and yields no stellar values, so we walk
+    # the list and merge across rows, taking the first non-empty value for
+    # each field. (Field names per ExoFOP: teff, srad, mass, logg, dist; the
+    # st_* aliases are kept for forward compatibility with TIC v8 JSON.)
+    raw_sp = data.get("stellar_parameters") or {}
+    if isinstance(raw_sp, dict):
+        sp_rows = [raw_sp]
+    elif isinstance(raw_sp, list):
+        sp_rows = [r for r in raw_sp if isinstance(r, dict) and "prov_num" not in r]
+    else:
+        sp_rows = []
+
+    def _pick(*keys):
+        for row in sp_rows:
+            for k in keys:
+                v = _f(row.get(k))
+                if v is not None:
+                    return v
+        return None
+
+    star = {
+        "teff":     _pick("teff", "st_teff"),
+        "radius":   _pick("srad", "st_rad", "rad"),
+        "mass":     _pick("mass", "smass", "st_mass"),
+        "logg":     _pick("logg", "slogg", "st_logg"),
+        "tmag":     _pick("tmag"),
+        "ra":       _pick("ra"),
+        "dec":      _pick("dec"),
+        "distance": _pick("dist", "distance", "st_dist"),
+    }
 
     # TOI entries
     tois = []
