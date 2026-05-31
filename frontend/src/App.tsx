@@ -1472,9 +1472,16 @@ function DvtPanel({ dvt }: { dvt: DvtResult }) {
           {/* Phase-fold plot with SPOC transit model */}
           {tce.phase_fold_plot && (
             <div>
-              <p className="text-xs text-slate-500 mb-1">
-                Phase-folded light curve (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)
-              </p>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-xs text-slate-500">
+                  Phase-folded light curve (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)
+                </p>
+                <ShareToImgbbButton
+                  base64={tce.phase_fold_plot}
+                  title="SPOC_DV_phase_fold"
+                  label="SPOC DV phase-fold"
+                />
+              </div>
               <img
                 src={`data:image/png;base64,${tce.phase_fold_plot}`}
                 alt="SPOC DV phase-fold with transit model"
