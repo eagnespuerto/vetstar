@@ -242,6 +242,22 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> 
     fs = median_filter(f, size=21)
     baseline = float(np.nanmedian(fs))
 
+    # Identify real time gaps so we don't (a) flag points whose smoothed flux
+    # was dragged down by the median filter reaching across the gap, or
+    # (b) merge two separate in-dip runs across the gap into one fake event.
+    # A "gap" is any sample-to-sample dt much larger than the typical cadence.
+    t_arr = np.asarray(t)
+    dt = np.diff(t_arr)
+    pos_dt = dt[dt > 0]
+    if pos_dt.size:
+        cadence = float(np.median(pos_dt))
+        gap_threshold = max(5 * cadence, 0.2)  # days; ~5x cadence or 4.8 h
+        # gap_after[i] is True if there is a large gap between sample i and i+1
+        gap_after = np.concatenate([dt > gap_threshold, [False]])
+    else:
+        gap_after = np.zeros(len(t_arr), dtype=bool)
+        cadence = 0.0
+
     # --- Pass 1: measure local scatter from non-dip data ---
     # Use a rough cut: anything within 2× the raw MAD of median is "baseline"
     raw_mad = float(1.4826 * np.nanmedian(np.abs(f - baseline)))
@@ -264,18 +280,35 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> 
 
     in_dip = fs < effective_threshold
 
+    # Suppress samples adjacent to a large time gap: the size-21 median filter
+    # can pull edge points well below baseline by mixing in unrelated flux from
+    # the other side of the gap (or the gap edge itself), producing a spurious
+    # "dip" that just traces the discontinuity.
+    edge_pad = 10  # half the median filter window
+    n = len(in_dip)
+    gap_idx = np.where(gap_after)[0]
+    for gi in gap_idx:
+        lo = max(0, gi - edge_pad + 1)
+        hi = min(n, gi + edge_pad + 1)
+        in_dip[lo:hi] = False
+
     # Bridge short gaps: fill runs of <= max_gap "out" points that sit between
     # two "in" stretches, so median-filter noise doesn't split one transit.
     if max_gap > 0:
         i = 0
-        n = len(in_dip)
         while i < n:
             if not in_dip[i]:
                 start = i
                 while i < n and not in_dip[i]:
                     i += 1
-                # gap is [start, i); bridge only if flanked on both sides
-                if 0 < start and i < n and (i - start) <= max_gap:
+                # gap is [start, i); bridge only if flanked on both sides and
+                # the bridged region does not straddle a real time gap.
+                if (
+                    0 < start
+                    and i < n
+                    and (i - start) <= max_gap
+                    and not gap_after[start - 1 : i].any()
+                ):
                     in_dip[start:i] = True
             else:
                 i += 1
@@ -286,6 +319,11 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> 
         if in_dip[i]:
             start = i
             while i < len(t) and in_dip[i]:
+                # Stop a run at a real time gap — a single event cannot span
+                # a multi-hour data outage.
+                if gap_after[i]:
+                    i += 1
+                    break
                 i += 1
             end = i
             if end - start >= min_pts:
