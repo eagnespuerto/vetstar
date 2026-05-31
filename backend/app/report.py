@@ -684,6 +684,16 @@ def _append_exofop_section(story, *, period_d, t0_btjd, depth_frac, duration_h,
             "other quantities are derived from the predicted-observables and TLCM analyses "
             "and should be treated as estimates, not fitted values."
         )
+    planet = (observables or {}).get("planet") or {}
+    if planet.get("mass_fallback_powerlaw"):
+        note_text += (
+            " <b>Mass:</b> the Chen &amp; Kipping (2017) relation is radius-degenerate "
+            "in the Jovian regime (R_p &gt; ~14 R_E) and returns a constant "
+            "~131.6 M_E ceiling. To keep the TOI Mass field responsive to radius, "
+            "this report falls back to the piecewise power-law M-R relation "
+            "(0.5 R_p<super>1.5</super> in Earth units) for any candidate that hits "
+            "the ceiling. Treat as an order-of-magnitude estimate only."
+        )
     note = Paragraph(note_text, styles["caption"])
     story += _section(heading, tbl, note, styles=styles)
 

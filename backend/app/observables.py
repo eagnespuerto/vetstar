@@ -334,6 +334,8 @@ def compute_observables(
 
     mass_source = "supplied"
     mass_estimates = None
+    mass_fallback_powerlaw = False
+    mass_fallback_note = None
     if mp_mjup is None and rp_earth is not None:
         # Evaluate every relation so the user sees the spread (the M-R relation
         # is the dominant error in this chain, ~50-100%).
@@ -342,15 +344,35 @@ def compute_observables(
         }
         chosen_fn = MR_RELATIONS.get(mr_relation, estimate_mass_from_radius)
         est = chosen_fn(rp_earth)
-        mp_mjup = est["mp_earth"] / MJUP_TO_MEARTH
         label = "Chen & Kipping 2017" if mr_relation == "chen_kipping" else "power-law"
-        mass_source = f"{label} ({est['branch']})"
-        if est.get("degenerate"):
-            cav.append(
-                "Planet radius is in the Jovian regime where radius does not "
-                "constrain mass; RV/astrometric amplitudes use a lower-bound "
-                "mass and are order-of-magnitude only."
+        # If the chosen relation pinned to its radius-degenerate ceiling
+        # (Chen & Kipping in the Jovian regime returns a constant ~131.6 M_E
+        # for any R_p above ~14 R_E), fall back to the power-law estimate so
+        # the reported mass actually scales with radius.
+        if est.get("degenerate") and mr_relation == "chen_kipping":
+            pl_est = estimate_mass_powerlaw(rp_earth)
+            mp_mjup = pl_est["mp_earth"] / MJUP_TO_MEARTH
+            mass_source = (
+                f"power-law fallback ({pl_est['branch']}); "
+                f"Chen & Kipping radius-degenerate above ~14 R_E"
             )
+            mass_fallback_powerlaw = True
+            mass_fallback_note = (
+                "Mass estimated from the piecewise power-law M-R relation: "
+                "the Chen & Kipping (2017) relation is radius-degenerate in "
+                "the Jovian regime (R_p > ~14 R_E) and pins to the constant "
+                "Jovian-boundary mass (~131.6 M_E) regardless of radius."
+            )
+            cav.append(mass_fallback_note)
+        else:
+            mp_mjup = est["mp_earth"] / MJUP_TO_MEARTH
+            mass_source = f"{label} ({est['branch']})"
+            if est.get("degenerate"):
+                cav.append(
+                    "Planet radius is in the Jovian regime where radius does not "
+                    "constrain mass; RV/astrometric amplitudes use a lower-bound "
+                    "mass and are order-of-magnitude only."
+                )
         vals = [v for v in mass_estimates.values() if v]
         if vals and max(vals) / min(vals) > 1.5:
             cav.append(
@@ -364,6 +386,8 @@ def compute_observables(
         "mp_earth": (mp_mjup * MJUP_TO_MEARTH) if mp_mjup is not None else None,
         "mass_source": mass_source,
         "mass_estimates_earth": mass_estimates,   # all relations, for comparison
+        "mass_fallback_powerlaw": mass_fallback_powerlaw,
+        "mass_fallback_note": mass_fallback_note,
     }
 
     # --- Transit depth (predicted) ---
