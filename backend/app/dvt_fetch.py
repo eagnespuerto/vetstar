@@ -58,46 +58,64 @@ def _get_dvt_products(tic_id: int, sector: Optional[int] = None):
 
     DVT files have productSubGroupDescription == "DVT".  Only SPOC produces
     them.  Returns None when none are found.
+
+    SPOC DV runs are often filed under a multi-sector observation row whose
+    ``sequence_number`` is the *first* sector of the run, not the requested
+    one.  A strict sector filter therefore frequently misses the DVT product.
+    We try the sector-filtered search first (cheapest, most specific) and fall
+    back to a TIC-wide search whenever it yields no DVT.
     """
     from astroquery.mast import Observations
     from .mast_fetch import find_observations, safe_get, retry
 
-    try:
-        obs = find_observations(tic_id, sector=sector)
-    except Exception as e:
-        log.warning("DVT: observation lookup failed for TIC %s: %s", tic_id, e)
-        return None
+    def _query(sec):
+        try:
+            return find_observations(tic_id, sector=sec)
+        except Exception as e:
+            log.warning("DVT: observation lookup failed for TIC %s sector %s: %s",
+                        tic_id, sec, e)
+            return None
 
-    if len(obs) == 0:
-        return None
-
-    # Prefer SPOC rows; fall through to all rows if none match.
-    try:
-        spoc_mask = [str(safe_get(o, "provenance_name", "")) == "SPOC" for o in obs]
-        spoc_obs = obs[[i for i, m in enumerate(spoc_mask) if m]]
-        if len(spoc_obs) == 0:
+    def _filter_dvt(obs):
+        if obs is None or len(obs) == 0:
+            return None
+        try:
+            spoc_mask = [str(safe_get(o, "provenance_name", "")) == "SPOC" for o in obs]
+            spoc_obs = obs[[i for i, m in enumerate(spoc_mask) if m]]
+            if len(spoc_obs) == 0:
+                spoc_obs = obs
+        except Exception:
             spoc_obs = obs
-    except Exception:
-        spoc_obs = obs
 
-    def get_prods():
-        return Observations.get_product_list(spoc_obs)
+        def get_prods():
+            return Observations.get_product_list(spoc_obs)
 
-    try:
-        products = retry(get_prods, name=f"DVT product list TIC {tic_id}")
-    except RuntimeError as e:
-        log.warning("DVT: product list failed for TIC %s: %s", tic_id, e)
-        return None
+        try:
+            products = retry(get_prods, name=f"DVT product list TIC {tic_id}")
+        except RuntimeError as e:
+            log.warning("DVT: product list failed for TIC %s: %s", tic_id, e)
+            return None
 
-    dvt = Observations.filter_products(
-        products,
-        productSubGroupDescription="DVT",
-        extension="fits",
-    )
-    if len(dvt) == 0:
-        log.info("DVT: no DVT product for TIC %s sector %s", tic_id, sector)
-        return None
-    return dvt
+        dvt = Observations.filter_products(
+            products,
+            productSubGroupDescription="DVT",
+            extension="fits",
+        )
+        return dvt if len(dvt) > 0 else None
+
+    # First: strict (sector-filtered) search.
+    dvt = _filter_dvt(_query(sector))
+    if dvt is not None:
+        return dvt
+    # Fallback: TIC-wide search picks up multi-sector DV rows whose
+    # sequence_number doesn't match the requested sector.
+    if sector is not None:
+        log.info("DVT: no DVT in sector %s for TIC %s, retrying TIC-wide", sector, tic_id)
+        dvt = _filter_dvt(_query(None))
+        if dvt is not None:
+            return dvt
+    log.info("DVT: no DVT product for TIC %s sector %s", tic_id, sector)
+    return None
 
 
 def fetch_dvt(tic_id: int, sector: Optional[int] = None) -> Optional[dict]:
