@@ -328,7 +328,16 @@ def build_pdf(
         )
 
     # ---------------- SPOC DV phase-fold (DVT) ----------------
-    _dvt_tce = (dvt or {}).get("tce") if dvt else None
+    # Accept either the raw parser shape ({"tces": [...]}) returned by
+    # dvt_fetch.fetch_dvt, or the summarised shape ({"tce": {...}}) used by
+    # the frontend (_summarize_dvt). Single-sector callers pass the raw dict.
+    _dvt_tce = None
+    if dvt:
+        if dvt.get("tce"):
+            _dvt_tce = dvt["tce"]
+        elif dvt.get("tces"):
+            from .dvt_fetch import best_tce as _best_tce
+            _dvt_tce = _best_tce(dvt)
     if _dvt_tce and _dvt_tce.get("phase_fold_plot"):
         _dvt_cap_parts = ["Phase-folded data (LC_INIT) with SPOC Mandel-Agol model overlay (MODEL_INIT)."]
         _dvt_fitted: list[str] = []
