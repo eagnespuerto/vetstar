@@ -832,6 +832,17 @@ def _run_mast_multisector(query: MultisectorQuery):
     if not sector_results:
         raise HTTPException(502, f"All sector fetches failed. Errors: {errors}")
 
+    # Opportunistically fetch the SPOC DVT for the TIC (one DV run spans all
+    # processed sectors), so the per-object geometry below can use the fitted
+    # a/R* + impact parameter, and the frontend can show a fetch-status badge.
+    dvt = None
+    try:
+        from .dvt_fetch import fetch_dvt
+        dvt = fetch_dvt(query.tic_id, None)
+    except Exception as _e:
+        log.warning("DVT fetch skipped for TIC %s (multisector): %s", query.tic_id, _e)
+        dvt = None
+
     analysis = run_multisector_analysis(
         sector_results,
         detect_threshold=query.detect_threshold,
@@ -841,6 +852,7 @@ def _run_mast_multisector(query: MultisectorQuery):
     analysis["sectors_attempted"] = len(sectors_to_fetch)
     analysis["sectors_succeeded"] = len(sector_results)
     analysis["tic_id"] = query.tic_id
+    analysis["dvt"] = _summarize_dvt(dvt)
 
     analysis["sector_verdicts"] = [
         {
@@ -874,6 +886,7 @@ def _run_mast_multisector(query: MultisectorQuery):
                 n_sectors_observed=analysis.get("n_sectors_observed", 1),
                 n_sectors_with_detections=len(obj.get("sectors", [])) or None,
                 period_override=obj.get("period_d_median"),
+                dvt=dvt,
             )
             obj["representative_sector"] = best["sector"]
             obj["hci_bundle"] = extras.get("hci_bundle")
