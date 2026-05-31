@@ -172,7 +172,12 @@ Model-independent quantities from the light curve itself, following Csizmadia
 - **Radius ratio** k = Rp/Rs = sqrt(depth) (flagged as a lower limit for grazing
   transits)
 - **Scaled semi-major axis** a/Rs from the transit duration (TLCM eq. 70), giving
-  a **photometric semi-major axis** (a/Rs x R*) that needs no catalogue stellar mass
+  a **photometric semi-major axis** (a/Rs x R*) that needs no catalogue stellar mass.
+  When a **SPOC Data Validation Time Series (DVT)** file is available for a
+  MAST-fetched target (see below), the SPOC-fitted a/R★ (`ARAT`) and impact
+  parameter (`IMPACT`) are used directly instead, replacing the b = 0
+  central-transit assumption of the duration route and yielding a cleaner
+  semi-major axis
 - **Model-independent stellar density** rho_* = 3pi/(G P^2)(a/Rs)^3 (eq. 59), and a
   stellar mass cross-check from rho_* + R*
 - **Absolute companion mass** from the SB1 mass function f(m) = K^3 P (1-e^2)^{3/2}/(2 pi G)
@@ -293,6 +298,32 @@ If a very recent sector has observation metadata in MAST's catalog but the
 SPOC/QLP pipeline hasn't finished processing the light curves yet, the app
 returns a clear message explaining the data-availability timeline instead
 of a cryptic error.
+
+### SPOC Data Validation (DVT)
+
+When you fetch a target from MAST, the studio also opportunistically pulls the
+companion **DVT (Data Validation Time Series)** file the SPOC pipeline produces
+for threshold-crossing events (following the
+[MAST beginner DVT tutorial](https://spacetelescope.github.io/mast_notebooks/notebooks/TESS/beginner_how_to_use_dvt/beginner_how_to_use_dvt.html)).
+DVT files carry SPOC's full Mandel-Agol transit-model fit, folded across every
+processed sector, so they provide sharper parameters than a single-sector BLS
+peak:
+
+- **Period** (`TPERIOD`), **duration** (`TDUR`), **depth** (`TDEPTH`), and
+  **transit epoch** (`TEPOCH`)
+- **Fitted a/R★** (`ARAT`) and **impact parameter** (`IMPACT`) — these feed the
+  TLCM geometry directly, replacing the b = 0 central-transit assumption and
+  producing a **cleaner semi-major axis** and stellar density
+- A **phase-folded plot** of the data (`LC_INIT`) with the SPOC transit model
+  (`MODEL_INIT`) overlaid, shown in a **SPOC DV phase-fold** panel below the
+  diagnostic plots and embedded in the PDF report
+
+These SPOC DV-fitted values are preferred (where present) for the **Observables,
+parameters & TLCM** section, the **ExoFOP TOI parameter** table, the **HCI**, and
+both PDF reports; the panel and tables annotate the a/R★ source so you can see
+when the SPOC fit is in use. DVT fetching fails soft — if no DVT product exists
+yet (FFI-only target, or a very recent sector), the studio silently falls back
+to the BLS-derived geometry.
 
 
 ## Example output
@@ -478,6 +509,12 @@ Click **Report an Issue or Contribute** in the page header, or go to
 - Whether you adjusted the sensitivity sliders
 - Browser console output if available (F12 → Console tab)
 
+## Support
+
+If Vetstar is useful to you, you can support its development with the
+**Buy me a Ko-fi** button in the page header, or directly at
+<https://ko-fi.com/eagnespuerto>. Entirely optional and always appreciated.
+
 
 ## Limitations and disclaimers
 
@@ -552,6 +589,7 @@ vetstar/
 │   │   ├── pipeline.py         BLS, LS, adaptive detection, centroid, shape, physics
 │   │   ├── parsers.py          FITS + ExoFOP JSON readers
 │   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
+│   │   ├── dvt_fetch.py        SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
 │   │   ├── habitability.py     STEHM-based HCI scoring engine
 │   │   ├── observables.py      POE forward-modelled observables + ExoFOP TOI parameter mapping
 │   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
