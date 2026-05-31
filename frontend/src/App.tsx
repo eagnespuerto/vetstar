@@ -816,6 +816,9 @@ function ResultsView({ result }: { result: VettingResult }) {
               skipped because FFI products don't include centroid columns.
             </span>
           )}
+          <div className="mt-2">
+            <DvtStatus dvt={result.dvt} />
+          </div>
         </div>
       )}
       {/* Glossary */}
@@ -1359,6 +1362,39 @@ function ObservablesPanel({ obs, tlcm, aSource, result }: { obs: any; tlcm?: any
 }
 
 // ---------------------------------------------------------------------------
+// SPOC DVT fetch-status indicator (single + multi-sector)
+// ---------------------------------------------------------------------------
+
+function DvtStatus({ dvt }: { dvt?: DvtResult | null }) {
+  const ok = !!dvt?.available;
+  const tce = dvt?.tce;
+  const bits: string[] = [];
+  if (tce?.period_d != null) bits.push(`P = ${Number(tce.period_d).toPrecision(6)} d`);
+  if (tce?.a_over_rs != null) bits.push(`a/R★ = ${Number(tce.a_over_rs).toPrecision(4)}`);
+  if (tce?.impact_b != null) bits.push(`b = ${Number(tce.impact_b).toPrecision(3)}`);
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border ${
+        ok
+          ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+          : "bg-slate-100 border-slate-300 text-slate-500"
+      }`}
+      title={
+        ok
+          ? "SPOC Data Validation time series fetched — fitted a/R★ and impact parameter are in use."
+          : "No SPOC DV time series available for this target (FFI-only target or a very recent sector). The geometry falls back to the BLS-derived estimate."
+      }
+    >
+      {ok ? "✓" : "—"} SPOC DV time series:{" "}
+      <span className="font-semibold">{ok ? "fetched" : "not available"}</span>
+      {ok && bits.length > 0 && (
+        <span className="font-mono text-emerald-700/80">· {bits.join("  ")}</span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SPOC DVT phase-fold panel
 // ---------------------------------------------------------------------------
 
@@ -1731,6 +1767,11 @@ function MultisectorPanel({ data }: { data: any }) {
         </button>
       </div>
       {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
+
+      {/* SPOC DV time series fetch status for this multi-sector run */}
+      <div>
+        <DvtStatus dvt={data.dvt} />
+      </div>
 
       {expanded && (
         <div className="space-y-3">
