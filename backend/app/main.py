@@ -136,12 +136,21 @@ def _clamp_params(detect_threshold: float, detect_min_snr: float):
     return th, snr
 
 
+def _validate_secondary_sigma(secondary_sigma: float) -> float:
+    if not (1.0 <= float(secondary_sigma) <= 7.0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"secondary_sigma must be in [1.0, 7.0], got {secondary_sigma}.",
+        )
+    return float(secondary_sigma)
+
+
 def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   high_variability: bool = False,
                   rotation_period_days: Optional[float] = None,
                   secondary_sigma: float = 3.0):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
-    sec_sig = max(1.0, min(7.0, float(secondary_sigma)))
+    sec_sig = _validate_secondary_sigma(secondary_sigma)
     return run_full_vetting(
         t=parsed["t"],
         flux=parsed["flux"],
@@ -198,6 +207,9 @@ async def analyze(
     file: UploadFile = File(...),
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    rotation_period_days: Optional[float] = None,
+    secondary_sigma: float = 3.0,
 ):
     tmp_path = None
     try:
@@ -212,7 +224,12 @@ async def analyze(
                 ),
             )
         _cache_lc(parsed)
-        result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
+        result = _run_pipeline(
+            parsed, detect_threshold, detect_min_snr,
+            high_variability=high_variability,
+            rotation_period_days=rotation_period_days,
+            secondary_sigma=secondary_sigma,
+        )
         d = result.to_dict()
         d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
         return d
@@ -233,6 +250,9 @@ async def report(
     file: UploadFile = File(...),
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    rotation_period_days: Optional[float] = None,
+    secondary_sigma: float = 3.0,
 ):
     tmp_path = None
     try:
@@ -243,7 +263,12 @@ async def report(
                 status_code=400,
                 detail="ExoFOP metadata-only file. Upload a FITS light curve.",
             )
-        result = _run_pipeline(parsed, detect_threshold, detect_min_snr)
+        result = _run_pipeline(
+            parsed, detect_threshold, detect_min_snr,
+            high_variability=high_variability,
+            rotation_period_days=rotation_period_days,
+            secondary_sigma=secondary_sigma,
+        )
         _cache_lc(parsed)
         # Opportunistic SPOC DVT fetch — adds the DV phase-fold image and
         # fitted geometry when the TIC has been processed by SPOC DV.
@@ -291,6 +316,9 @@ class MastQuery(BaseModel):
     sector: int
     detect_threshold: float = 0.997
     detect_min_snr: float = 4.0
+    high_variability: bool = False
+    rotation_period_days: Optional[float] = None
+    secondary_sigma: float = 3.0
 
 
 @app.get("/api/mast/sectors/{tic_id}")
@@ -435,6 +463,9 @@ class MultisectorQuery(BaseModel):
     sectors: Optional[list] = None
     detect_threshold: float = 0.997
     detect_min_snr: float = 4.0
+    high_variability: bool = False
+    rotation_period_days: Optional[float] = None
+    secondary_sigma: float = 3.0
 
 
 def _habitability_bundle(query: HabitabilityQuery) -> dict:

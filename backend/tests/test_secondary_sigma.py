@@ -50,3 +50,28 @@ def test_default_argument_is_three():
     t, f, p, t0, d = _make_lc_with_secondary(sigma_target=4.0)
     out = secondary_eclipse_search(t, f, p, t0, d)
     assert out["detected"] is True
+
+
+def test_validate_secondary_sigma_rejects_out_of_range():
+    """The API-level validator raises HTTP 422 outside [1.0, 7.0].
+
+    Using the validator directly rather than going through TestClient because
+    every endpoint that exercises _run_pipeline first requires either a real
+    FITS upload or a successful MAST fetch — both of which would mask the
+    422 with an unrelated 500/502. Testing the validator directly verifies
+    the exact behaviour every endpoint inherits.
+    """
+    from fastapi import HTTPException
+    import pytest
+    from backend.app.main import _validate_secondary_sigma
+
+    assert _validate_secondary_sigma(3.0) == 3.0
+    assert _validate_secondary_sigma(1.0) == 1.0
+    assert _validate_secondary_sigma(7.0) == 7.0
+    with pytest.raises(HTTPException) as exc:
+        _validate_secondary_sigma(8.0)
+    assert exc.value.status_code == 422
+    assert "secondary_sigma" in exc.value.detail
+    with pytest.raises(HTTPException) as exc:
+        _validate_secondary_sigma(0.5)
+    assert exc.value.status_code == 422
