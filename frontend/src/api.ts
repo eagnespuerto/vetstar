@@ -6,14 +6,28 @@ export function fitsDownloadUrl(ticId: number, sector: number): string {
 }
 
 export interface DetectParams {
-  threshold: number;   // 0.95..0.999
-  minSnr: number;      // 1..20
+  threshold: number;             // 0.95..0.999
+  minSnr: number;                // 1..20
+  highVariability: boolean;      // toggle for sinusoid+harmonic detrend
+  rotationPeriod: number | null; // optional manual rotation period (days)
+  secondarySigma: number;        // 1..7, default 3
 }
 
-const DEFAULT_PARAMS: DetectParams = { threshold: 0.997, minSnr: 4.0 };
+const DEFAULT_PARAMS: DetectParams = {
+  threshold: 0.997,
+  minSnr: 4.0,
+  highVariability: false,
+  rotationPeriod: null,
+  secondarySigma: 3.0,
+};
 
 function qs(params: DetectParams = DEFAULT_PARAMS): string {
-  return `?detect_threshold=${params.threshold}&detect_min_snr=${params.minSnr}`;
+  const base = `?detect_threshold=${params.threshold}&detect_min_snr=${params.minSnr}`;
+  const tail =
+    `&high_variability=${params.highVariability}` +
+    (params.rotationPeriod !== null ? `&rotation_period_days=${params.rotationPeriod}` : "") +
+    `&secondary_sigma=${params.secondarySigma}`;
+  return base + tail;
 }
 
 export async function analyze(file: File, params: DetectParams = DEFAULT_PARAMS) {
@@ -53,7 +67,11 @@ export async function mastAnalyze(ticId: number, sector: number, params: DetectP
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       tic_id: ticId, sector,
-      detect_threshold: params.threshold, detect_min_snr: params.minSnr,
+      detect_threshold: params.threshold,
+      detect_min_snr: params.minSnr,
+      high_variability: params.highVariability,
+      rotation_period_days: params.rotationPeriod,
+      secondary_sigma: params.secondarySigma,
     }),
   });
   if (!r.ok) throw new Error(`MAST analyze failed (${r.status}): ${await r.text()}`);
@@ -88,7 +106,7 @@ export async function fetchHabitability(
 
 export async function fetchMultisector(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0 },
   sectors?: number[]
 ) {
   const r = await fetch(`${API_BASE}/api/mast/multisector`, {
@@ -98,6 +116,9 @@ export async function fetchMultisector(
       tic_id: ticId,
       detect_threshold: params.threshold,
       detect_min_snr: params.minSnr,
+      high_variability: params.highVariability,
+      rotation_period_days: params.rotationPeriod,
+      secondary_sigma: params.secondarySigma,
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -107,7 +128,7 @@ export async function fetchMultisector(
 
 export async function multisectorReport(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0 },
   sectors?: number[]
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/mast/multisector/report`, {
@@ -117,6 +138,9 @@ export async function multisectorReport(
       tic_id: ticId,
       detect_threshold: params.threshold,
       detect_min_snr: params.minSnr,
+      high_variability: params.highVariability,
+      rotation_period_days: params.rotationPeriod,
+      secondary_sigma: params.secondarySigma,
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -130,7 +154,11 @@ export async function mastReport(ticId: number, sector: number, params: DetectPa
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       tic_id: ticId, sector,
-      detect_threshold: params.threshold, detect_min_snr: params.minSnr,
+      detect_threshold: params.threshold,
+      detect_min_snr: params.minSnr,
+      high_variability: params.highVariability,
+      rotation_period_days: params.rotationPeriod,
+      secondary_sigma: params.secondarySigma,
     }),
   });
   if (!r.ok) throw new Error(`MAST report failed: ${await r.text()}`);
