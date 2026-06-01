@@ -15,6 +15,8 @@ standard astrophysics convention: `★` = host star, `p` = planet/companion,
 ## Table of contents
 
 1. [Light-curve ingestion & detrending](#1-light-curve-ingestion--detrending)
+   - 1.1 [Savitzky-Golay baseline removal](#11-savitzky-golay-baseline-removal)
+   - 1.2 [Optional sinusoidal-regression detrend (high stellar variability)](#12-optional-sinusoidal-regression-detrend-high-stellar-variability)
 2. [Adaptive dip detection](#2-adaptive-dip-detection)
 3. [Periodograms — BLS & Lomb-Scargle](#3-periodograms--bls--lomb-scargle)
 4. [Phase folding & transit-model fit](#4-phase-folding--transit-model-fit)
@@ -43,6 +45,8 @@ flags, then normalises the flux to a baseline of unity. For SPOC products
 the **PDCSAP_FLUX** column is preferred (planetary-friendly systematics
 removal); legacy Kepler PDCSAP_FLUX is treated identically.
 
+### 1.1 Savitzky-Golay baseline removal
+
 Detrending is done with a **Savitzky-Golay** filter sized adaptively to the
 data cadence. The detrended flux
 
@@ -65,6 +69,86 @@ The 1.4826 factor is the standard MAD→σ conversion for a Gaussian. MAD is
 preferred over the sample standard deviation because real light curves carry
 outliers (cosmic rays, momentum-dump residuals) that inflate `std()` but
 leave the median essentially untouched.
+
+### 1.2 Optional sinusoidal-regression detrend (high stellar variability)
+
+Spotted rotators, ellipsoidal binaries, and other wave-like variables carry
+a stellar signal whose amplitude is often **much larger than a planetary
+transit**. The Savitzky-Golay window above is sized for SPOC-style
+systematics removal and intentionally leaves coherent oscillations of period
+≳ 1 d intact, so on these targets BLS spends most of its power on the
+rotation signal and misses shallow dips.
+
+When the user opts in (the **High stellar variability** toggle in the UI;
+`high_variability=true` on the API), Vetstar fits a sine plus its first
+harmonic, at a fixed period `P`, by ordinary linear least squares:
+
+```
+f(t) ≈ C + A₁·sin(2π t / P) + B₁·cos(2π t / P)
+         + A₂·sin(4π t / P) + B₂·cos(4π t / P)
+```
+
+The five free coefficients `(C, A₁, B₁, A₂, B₂)` are recovered by
+`numpy.linalg.lstsq` against the 5-column design matrix
+`[1, sin(ω t), cos(ω t), sin(2ω t), cos(2ω t)]` with `ω = 2π / P`. Fixing
+`P` keeps the problem linear and closed-form — the alternative of treating
+`P` as a free parameter would make the system nonlinear and overlap
+strongly with BLS itself.
+
+**Period selection.** If `rotation_period_days` is supplied, it is used
+verbatim. Otherwise the **Lomb-Scargle top peak** from §3.2 is used. The
+choice is recorded in the result as `detrend.reason ∈ {"user_period",
+"ls_peak"}`.
+
+**Amplitude.** The fitted fundamental amplitude (peak, not RMS) is
+`A = √(A₁² + B₁²)`, reported in ppm of the median flux. The harmonic
+amplitude `√(A₂² + B₂²)` is reported separately.
+
+**Skip condition.** Fitting a sinusoid to pure white noise produces a
+non-zero amplitude purely by chance. Vetstar therefore estimates the
+per-cadence high-frequency noise floor
+
+![photometric noise floor](images/equations/mad.png)
+
+using the point-to-point MAD on the *flux differences*,
+
+```
+σ_floor ≈ 1.4826 · median |Δf| / √2     (ppm × 1e6)
+```
+
+(the `/√2` factor follows from `Var(Δf) = 2 σ²` for white noise; this form
+is the standard photometric noise estimator and, unlike `MAD(f − 1)`, is
+**not** biased by the very low-frequency variability we are about to fit).
+When the fitted fundamental amplitude falls below `σ_floor` the detrend is
+declared a fit-to-noise and **skipped**; the original flux is fed to BLS
+and `detrend.reason = "skipped_low_amplitude"`.
+
+**Residuals.** When the fit is applied, the BLS input becomes
+
+```
+f_resid(t) = f(t) − [C + A₁·sin(ωt) + B₁·cos(ωt)
+                       + A₂·sin(2ωt) + B₂·cos(2ωt)]   + 1.0
+```
+
+(the trailing `+ 1.0` re-centres around unity since `C` already absorbs the
+mean of `f`). The diagnostic plot panel emits a 3-row figure — raw flux
+with the fitted model overlaid, the model alone, and the residual that BLS
+actually sees — so the user can verify that the rotation signal was
+captured cleanly without distorting the in-transit cadences. The fit and
+the RMS-reduction percentage `100 · (σ_before − σ_after) / σ_before` are
+recorded in the JSON response and the PDF report.
+
+**Multi-sector behaviour.** Each sector is detrended independently against
+its own LS peak (or the same user-supplied period applied per-sector).
+Rotation phase is **not** preserved across the multi-month gaps between
+TESS sectors, so a single global fit would be wrong; running the
+regression per-sector is correct and is what the multi-sector pipeline
+does internally before its BLS pass.
+
+**Defaults preserve pre-feature behaviour.** With `high_variability=false`
+the entire block is bypassed and `f_resid ≡ f`; the regression test
+`test_defaults_match_pre_change_pipeline_output` locks BLS period, SDE,
+secondary-detected, and verdict category to their pre-change values.
 
 ---
 
@@ -182,9 +266,21 @@ ratio carries the in-event MAD-σ propagated through the depth average.
 ### 5.3 Secondary-eclipse search
 
 The phase-folded curve is searched at φ = 0.5 for a shallower secondary
-dip. The required significance reuses the integrated-SNR formula. A
-positive secondary at the BLS period (and not at any plausible orbital
-harmonic) is recorded as a strong EB indicator.
+dip. The required significance reuses the integrated-SNR formula: the
+secondary depth `δ_sec` is compared against the out-of-eclipse scatter
+`σ_oot / √N_in`, and the dip is **detected** when
+
+```
+δ_sec / (σ_oot / √N_in)  >  σ_thresh
+```
+
+`σ_thresh` is a user-tunable threshold (the **Secondary eclipse σ** slider
+in the UI, `secondary_sigma` on the API) bounded to **1.0σ–7.0σ** by the
+backend (HTTP 422 outside the range), defaulting to **3σ**. Lowering it
+surfaces more EB candidates at the cost of more false positives on noisy
+stars; raising it is stricter. A positive secondary at the BLS period
+(and not at any plausible orbital harmonic) is recorded as a strong EB
+indicator and feeds the verdict logic of the README.
 
 ### 5.4 CROWDSAP dilution correction
 
