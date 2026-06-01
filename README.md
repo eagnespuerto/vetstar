@@ -29,9 +29,16 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 
 - **Period searches** — Box Least Squares (BLS) + Lomb-Scargle periodograms
 - **Adaptive dip event detection** with adjustable sensitivity (see below)
+- **Optional sinusoidal-regression detrend** before BLS (toggle: *High stellar
+  variability*). Fits a sine + first harmonic at the Lomb-Scargle peak (or a
+  user-supplied rotation period) and subtracts it from the flux, so BLS sees
+  only the residual. Helps surface shallow planetary dips on spotted rotators
+  and other wave-like variables; skipped automatically if the fitted amplitude
+  falls below the per-cadence noise floor.
 - **Centroid offset test** — distinguishes on-target events from background blends
 - **Odd / even transit depth comparison** — eclipsing-binary indicator
-- **Secondary eclipse search** at phase 0.5
+- **Secondary eclipse search** at phase 0.5, with a user-tunable σ threshold
+  (1.0σ–7.0σ, default 3σ)
 - **Transit shape analysis** (U vs V, ingress / egress / flat-bottom durations)
 - **Physics-based companion sizing** with CROWDSAP dilution correction
 - **Target field — FFI cutout**: a Full-Frame-Image thumbnail of the patch
@@ -56,7 +63,11 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   table is included in the PDF.
 - **Multi-event diagnostic plots**: full light curve with all events shaded
   and numbered, multi-panel zoom grid showing depth + duration + SNR per
-  event, centroid behaviour, BLS and Lomb-Scargle periodograms
+  event, centroid behaviour, BLS and Lomb-Scargle periodograms. When the
+  sinusoidal-detrend toggle is on and the fit was applied, a **Stellar
+  variability detrend** panel is added (raw flux + fitted sin/harmonic
+  overlay + residual fed to BLS) and is shareable to ImgBB like the other
+  plots
 - **PDF report** for archiving — a clean, consistent multi-page layout: every
   page carries the same header band and a footer with page numbers, tables
   share one zebra-striped style, section headings stay attached to their
@@ -389,7 +400,7 @@ choose the analysis scope up front (see Step 5 for multi-sector).
 
 ### Step 2 — adjust detection sensitivity (optional)
 
-Below the tabs is a collapsed **⚙️ Detection sensitivity** panel. Two
+Below the tabs is a collapsed **⚙️ Detection sensitivity** panel. Three
 sliders:
 
 - **Depth threshold** (default `0.997`, range `0.95`–`0.999`) — the
@@ -402,6 +413,22 @@ sliders:
   The √N factor is what lets a shallow transit on a noisy star qualify —
   e.g. an 0.8%-deep, ~5 h transit on a star with 0.5% point scatter has a
   per-point SNR near 1 but an integrated SNR around 10.
+
+- **Secondary eclipse σ** (default `3σ`, range `1σ`–`7σ`) — the threshold
+  the phase-0.5 secondary search must exceed to flag an eclipsing-binary
+  signature. Lower values surface more EB candidates (and more false
+  positives on noisy stars); higher values are stricter. Out-of-range
+  values are rejected by the API with HTTP 422.
+
+Separately, on the MAST card, a **High stellar variability** checkbox sits
+just below the single-/multi-sector toggle. Tick it before fetching to
+have the pipeline fit a sinusoid plus its first harmonic (at the
+Lomb-Scargle peak, or at an optional rotation period you can type in days)
+and subtract it before BLS. This is the right knob for spotted rotators
+and other wave-like variables where the rotation signal would otherwise
+mask shallow dips. The fit is skipped automatically if the fitted
+amplitude falls below the per-cadence noise floor; in that case a small
+amber notice replaces the detrend plot.
 
 **How the adaptive detection works.** The pipeline computes the star's
 actual scatter (MAD of out-of-dip points) and sets an adaptive threshold:
@@ -593,16 +620,16 @@ python app.py --api-only           # API only, no SPA
 ### API endpoints
 
 ```
-POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=  → JSON
-POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=  → PDF (incl. HCI + ExoFOP + ExoMiner)
+POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → JSON
+POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → PDF (incl. HCI + ExoFOP + ExoMiner)
 GET  /api/mast/sectors/{tic}                                                        → sector list
-POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr}   → JSON
-POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr}   → PDF (incl. HCI + ExoFOP + ExoMiner)
+POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → JSON
+POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → PDF (incl. HCI + ExoFOP + ExoMiner)
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
-POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
+POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
+POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
@@ -619,6 +646,7 @@ vetstar/
 │   ├── app/
 │   │   ├── main.py             FastAPI endpoints + SPA mount
 │   │   ├── pipeline.py         BLS, LS, adaptive detection, centroid, shape, physics
+│   │   ├── detrend.py          Optional sinusoid + first-harmonic regression detrender (pre-BLS)
 │   │   ├── parsers.py          FITS + ExoFOP JSON readers
 │   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
 │   │   ├── dvt_fetch.py        SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
