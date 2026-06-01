@@ -104,3 +104,29 @@ def test_run_full_vetting_with_variability_toggle_runs_fit(rng):
     assert res.detrend["applied"] is True
     assert res.detrend["reason"] == "user_period"
     assert res.detrend["period_days"] == 4.0
+
+
+def test_detrend_plot_emitted_when_applied(rng):
+    from backend.app.pipeline import run_full_vetting, StarInfo
+
+    t = np.linspace(0.0, 27.0, 8000)
+    f = make_sinusoid(t, period=4.0, amp=0.01)
+    fe = np.full_like(t, 1e-3)
+    star = StarInfo()
+    res = run_full_vetting(
+        t, f, fe, quality=None, mom_x=None, mom_y=None, star=star,
+        high_variability=True, rotation_period_days=4.0,
+    )
+    assert "detrend" in res.plots
+    assert isinstance(res.plots["detrend"], str)
+    assert len(res.plots["detrend"]) > 100  # base64 PNG, not empty
+
+
+def test_detrend_plot_absent_when_disabled(rng):
+    from backend.app.pipeline import run_full_vetting, StarInfo
+
+    t = np.linspace(0.0, 27.0, 5000)
+    f = 1.0 + rng.normal(0.0, 1e-3, size=t.size)
+    fe = np.full_like(t, 1e-3)
+    res = run_full_vetting(t, f, fe, quality=None, mom_x=None, mom_y=None, star=StarInfo())
+    assert "detrend" not in res.plots

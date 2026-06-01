@@ -882,7 +882,12 @@ def make_verdict(
 # ----------------------------------------------------------------------
 # Plot generation
 # ----------------------------------------------------------------------
-def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, ls_periodogram) -> dict:
+def make_plots(
+    t, f, fe, mom_x, mom_y, events, primary_event,
+    bls_periodogram, ls_periodogram,
+    detrend_meta: Optional[dict] = None,
+    f_raw: Optional[np.ndarray] = None,
+) -> dict:
     """Generate diagnostic plots.
 
     ``events`` is the full list from detect_events (may be empty). ``primary_event``
@@ -892,6 +897,44 @@ def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, l
     """
     plots = {}
     events = events or []
+
+    # 0. Stellar variability detrend (only when actually applied).
+    if (
+        detrend_meta and detrend_meta.get("applied")
+        and f_raw is not None and "fit" in detrend_meta
+    ):
+        from .detrend import _design_matrix  # internal but stable for plot use
+        fit = detrend_meta["fit"]
+        X = _design_matrix(t, fit["period_days"])
+        coeffs = np.array([fit["C"], fit["A1"], fit["B1"], fit["A2"], fit["B2"]])
+        model = X @ coeffs
+        residual = f_raw - model + 1.0
+
+        fig, axes = plt.subplots(3, 1, figsize=(10, 6.5), sharex=True)
+        axes[0].plot(t, f_raw, "k.", ms=1, alpha=0.4)
+        axes[0].plot(t, model, "C1-", lw=1.0, alpha=0.9, label="sin + 1st harmonic")
+        axes[0].set_ylabel("Raw flux")
+        axes[0].set_title(
+            f"Stellar variability detrend — P = {fit['period_days']:.3f} d, "
+            f"amplitude = {detrend_meta['amplitude_ppm']:.0f} ppm, "
+            f"RMS reduced {detrend_meta['rms_reduction_pct']:.1f}%"
+        )
+        axes[0].legend(fontsize=8, loc="upper right")
+
+        axes[1].plot(t, model, "C1-", lw=0.8)
+        axes[1].set_ylabel("Fitted model")
+
+        axes[2].plot(t, residual, "k.", ms=1, alpha=0.4)
+        axes[2].axhline(1.0, color="gray", ls=":", alpha=0.5)
+        axes[2].set_ylabel("Residual (BLS in)")
+        axes[2].set_xlabel("Time (BTJD or similar)")
+
+        for ax in axes:
+            ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+            ax.yaxis.set_major_formatter(plt.ScalarFormatter(useOffset=False))
+
+        fig.tight_layout()
+        plots["detrend"] = _fig_to_b64(fig)
 
     # 1. Full LC with all events shaded.
     fig, ax = plt.subplots(figsize=(10, 3))
@@ -1051,6 +1094,7 @@ def run_full_vetting(
 
     # --- Optional sinusoidal detrend before BLS ----------------------------
     detrend_meta: dict
+    f_raw_for_plot = f_c.copy() if high_variability else None
     if high_variability:
         period_for_fit = rotation_period_days or ls.get("top_period")
         source = "user_period" if rotation_period_days else "ls_peak"
@@ -1146,6 +1190,8 @@ def run_full_vetting(
     plots = make_plots(
         t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
         bls.get("_periodogram"), ls,
+        detrend_meta=detrend_meta,
+        f_raw=f_raw_for_plot,
     )
 
     summary = {
