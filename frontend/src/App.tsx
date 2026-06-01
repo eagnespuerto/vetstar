@@ -90,7 +90,13 @@ export default function App() {
   const [drag, setDrag] = useState(false);
 
   // Detection sensitivity (shared across both modes).
-  const [params, setParams] = useState<DetectParams>({ threshold: 0.997, minSnr: 4.0 });
+  const [params, setParams] = useState<DetectParams>({
+    threshold: 0.997,
+    minSnr: 4.0,
+    highVariability: false,
+    rotationPeriod: null,
+    secondarySigma: 3.0,
+  });
 
   // MAST mode state
   const [ticInput, setTicInput] = useState<string>("");
@@ -381,6 +387,43 @@ export default function App() {
                 </p>
               )}
             </div>
+            {/* High stellar variability — fit + subtract a sinusoid before BLS. */}
+            <div className="mb-4 p-3 bg-slate-50 rounded border border-slate-200">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={params.highVariability}
+                  onChange={(e) =>
+                    setParams({ ...params, highVariability: e.target.checked })
+                  }
+                />
+                High stellar variability (detrend before BLS)
+              </label>
+              {params.highVariability && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                  <label>Expected rotation period (days, optional):</label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={params.rotationPeriod ?? ""}
+                    placeholder="auto (Lomb-Scargle peak)"
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      setParams({
+                        ...params,
+                        rotationPeriod: v === "" ? null : parseFloat(v),
+                      });
+                    }}
+                    className="border rounded px-2 py-0.5 font-mono w-40 text-xs"
+                  />
+                </div>
+              )}
+              <p className="text-[11px] text-slate-500 mt-1">
+                Fits a sine + first harmonic and subtracts it before BLS. Helps
+                detect shallow dips on spotted rotators and wave-like variables.
+              </p>
+            </div>
             <div className="grid sm:grid-cols-3 gap-3 items-end">
               <div>
                 <label className="block text-xs text-slate-600 mb-1">TIC ID</label>
@@ -535,7 +578,10 @@ function SensitivityPanel({
   setParams: (p: DetectParams) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const isDefault = params.threshold === 0.997 && params.minSnr === 4.0;
+  const isDefault =
+    params.threshold === 0.997 &&
+    params.minSnr === 4.0 &&
+    params.secondarySigma === 3.0;
 
   return (
     <section className="bg-white rounded-lg border border-slate-200 overflow-hidden">
@@ -642,6 +688,40 @@ function SensitivityPanel({
               <span>1σ (max sensitivity)</span>
               <span>4σ default</span>
               <span>10σ (very strict)</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+              <span>
+                Secondary eclipse σ:{" "}
+                <span className="font-mono">{params.secondarySigma.toFixed(1)}σ</span>
+                <span className="text-slate-400 ml-1">
+                  (depth at phase 0.5 must exceed this × local scatter)
+                </span>
+              </span>
+              <button
+                onClick={() => setParams({ ...params, secondarySigma: 3.0 })}
+                className="text-blue-600 hover:underline"
+              >
+                reset
+              </button>
+            </label>
+            <input
+              type="range"
+              min={1.0}
+              max={7.0}
+              step={0.1}
+              value={params.secondarySigma}
+              onChange={(e) =>
+                setParams({ ...params, secondarySigma: parseFloat(e.target.value) })
+              }
+              className="w-full"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+              <span>1σ (very loose, more EB flags)</span>
+              <span>3σ default</span>
+              <span>7σ (very strict)</span>
             </div>
           </div>
 
@@ -882,6 +962,34 @@ function ResultsView({ result }: { result: VettingResult }) {
       </div>
 
       {/* Plots */}
+      {result.detrend?.applied && result.plots.detrend && (
+        <figure className="space-y-1 mb-4">
+          <div className="flex items-center justify-between">
+            <figcaption className="text-xs text-slate-500 font-medium">
+              Stellar variability detrend — P ={" "}
+              {result.detrend.period_days?.toFixed(4)} d, amplitude{" "}
+              {result.detrend.amplitude_ppm?.toFixed(0)} ppm, RMS reduced{" "}
+              {result.detrend.rms_reduction_pct?.toFixed(1)}%
+            </figcaption>
+            <ShareToImgbbButton
+              base64={result.plots.detrend}
+              title={`detrend_TIC${result.star.tic_id ?? ""}_S${result.star.sector ?? ""}`}
+              label="Stellar variability detrend"
+            />
+          </div>
+          <img
+            src={`data:image/png;base64,${result.plots.detrend}`}
+            alt="Stellar variability detrend"
+            className="w-full rounded border border-slate-200"
+          />
+        </figure>
+      )}
+      {result.detrend?.reason === "skipped_low_amplitude" && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">
+          Detrending was requested but the fitted sinusoid amplitude was below the
+          per-cadence noise floor — no detrend applied.
+        </p>
+      )}
       <PlotsSection plots={result.plots} ticId={result.star.tic_id} sector={result.star.sector} />
 
       {/* SPOC DVT phase-fold (MAST results only, when DVT is available) */}

@@ -69,6 +69,21 @@ export interface DvtResult {
   n_tces: number;
 }
 
+export interface DetrendBlock {
+  applied: boolean;
+  reason: "user_period" | "ls_peak" | "skipped_low_amplitude" | "disabled";
+  period_days: number | null;
+  amplitude_ppm: number | null;
+  harmonic_amplitude_ppm: number | null;
+  rms_reduction_pct: number | null;
+}
+
+export interface SensitivityEcho {
+  threshold: number;
+  min_snr: number;
+  secondary_sigma: number;
+}
+
 export interface VettingResult {
   star: StarInfo;
   summary: Record<string, number>;
@@ -81,6 +96,8 @@ export interface VettingResult {
   shape: Record<string, any>;
   physics: Record<string, any>;
   verdict: Verdict;
+  detrend?: DetrendBlock;
+  sensitivity?: SensitivityEcho;
   plots: Record<string, string>;
   mast?: MastInfo;
   /** SPOC DVT fitted parameters (only present for MAST-fetched results). */

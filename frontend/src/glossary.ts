@@ -299,6 +299,14 @@ export const GLOSSARY: Record<string, string> = {
     "Stellar flux received at the planet, relative to Earth (Earth = 1.0). Values near 1 are most Earth-like.",
   "equilibrium_temperature":
     "The temperature a planet would have if it absorbed all incoming starlight and re-radiated it uniformly (in Kelvin). Earth's is ~255 K; the surface is warmer due to greenhouse gases.",
+  "high_stellar_variability":
+    "When ticked, the pipeline fits a sine wave plus first harmonic to the light curve at the user-supplied rotation period (or the Lomb-Scargle peak if blank) and subtracts it before running BLS. Useful for spotted rotators and other wave-like variables where the rotation signal would otherwise mask shallow planetary dips.",
+  "rotation_period_days":
+    "Optional period (in days) of the dominant stellar rotation signal to subtract before BLS. Leave blank to let the pipeline use its Lomb-Scargle top peak instead.",
+  "secondary_sigma":
+    "Detection threshold for the secondary-eclipse search at orbital phase 0.5. A candidate is flagged when the dip at phase 0.5 exceeds this many σ above the out-of-transit scatter. Lower values flag more eclipsing-binary candidates (more false positives); higher values are stricter.",
+  "detrend_amplitude":
+    "Peak amplitude of the fitted sinusoid (square-root of A1² + B1²), expressed in parts per million of the median flux. Quantifies how much rotational variability the detrender removed.",
 };
 
 /**

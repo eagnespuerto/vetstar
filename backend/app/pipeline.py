@@ -301,8 +301,10 @@ class VettingResult:
     shape: dict = field(default_factory=dict)
     physics: dict = field(default_factory=dict)
     verdict: dict = field(default_factory=dict)
-    known_object: dict = field(default_factory=dict)  # Gaia/SIMBAD crossmatch
-    plots: dict = field(default_factory=dict)  # name -> base64 PNG
+    known_object: dict = field(default_factory=dict)
+    detrend: dict = field(default_factory=dict)        # NEW
+    sensitivity: dict = field(default_factory=dict)    # NEW (echo applied thresholds)
+    plots: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -614,8 +616,11 @@ def odd_even_check(t, f, period, t0, duration) -> dict:
     }
 
 
-def secondary_eclipse_search(t, f, period, t0, duration) -> dict:
-    """Look at phase 0.5 for a secondary dip."""
+def secondary_eclipse_search(t, f, period, t0, duration, secondary_sigma: float = 3.0) -> dict:
+    """Look at phase 0.5 for a secondary dip.
+
+    ``secondary_sigma`` is the user-tunable detection threshold (default 3σ).
+    """
     if period is None or period <= 0:
         return {"available": False, "reason": "no period"}
     phase = ((t - t0) / period) % 1.0
@@ -634,7 +639,8 @@ def secondary_eclipse_search(t, f, period, t0, duration) -> dict:
         "available": True,
         "depth": float(depth),
         "sigma": float(sigma),
-        "detected": bool(sigma > 3),
+        "detected": bool(sigma > secondary_sigma),
+        "threshold_sigma": float(secondary_sigma),
     }
 
 
@@ -876,7 +882,12 @@ def make_verdict(
 # ----------------------------------------------------------------------
 # Plot generation
 # ----------------------------------------------------------------------
-def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, ls_periodogram) -> dict:
+def make_plots(
+    t, f, fe, mom_x, mom_y, events, primary_event,
+    bls_periodogram, ls_periodogram,
+    detrend_meta: Optional[dict] = None,
+    f_raw: Optional[np.ndarray] = None,
+) -> dict:
     """Generate diagnostic plots.
 
     ``events`` is the full list from detect_events (may be empty). ``primary_event``
@@ -886,6 +897,44 @@ def make_plots(t, f, fe, mom_x, mom_y, events, primary_event, bls_periodogram, l
     """
     plots = {}
     events = events or []
+
+    # 0. Stellar variability detrend (only when actually applied).
+    if (
+        detrend_meta and detrend_meta.get("applied")
+        and f_raw is not None and "fit" in detrend_meta
+    ):
+        from .detrend import _design_matrix  # internal but stable for plot use
+        fit = detrend_meta["fit"]
+        X = _design_matrix(t, fit["period_days"])
+        coeffs = np.array([fit["C"], fit["A1"], fit["B1"], fit["A2"], fit["B2"]])
+        model = X @ coeffs
+        residual = f_raw - model + 1.0
+
+        fig, axes = plt.subplots(3, 1, figsize=(10, 6.5), sharex=True)
+        axes[0].plot(t, f_raw, "k.", ms=1, alpha=0.4)
+        axes[0].plot(t, model, "C1-", lw=1.0, alpha=0.9, label="sin + 1st harmonic")
+        axes[0].set_ylabel("Raw flux")
+        axes[0].set_title(
+            f"Stellar variability detrend — P = {fit['period_days']:.3f} d, "
+            f"amplitude = {detrend_meta['amplitude_ppm']:.0f} ppm, "
+            f"RMS reduced {detrend_meta['rms_reduction_pct']:.1f}%"
+        )
+        axes[0].legend(fontsize=8, loc="upper right")
+
+        axes[1].plot(t, model, "C1-", lw=0.8)
+        axes[1].set_ylabel("Fitted model")
+
+        axes[2].plot(t, residual, "k.", ms=1, alpha=0.4)
+        axes[2].axhline(1.0, color="gray", ls=":", alpha=0.5)
+        axes[2].set_ylabel("Residual (BLS in)")
+        axes[2].set_xlabel("Time (BTJD or similar)")
+
+        for ax in axes:
+            ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+            ax.yaxis.set_major_formatter(plt.ScalarFormatter(useOffset=False))
+
+        fig.tight_layout()
+        plots["detrend"] = _fig_to_b64(fig)
 
     # 1. Full LC with all events shaded.
     fig, ax = plt.subplots(figsize=(10, 3))
@@ -1024,7 +1073,12 @@ def run_full_vetting(
     star: StarInfo,
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    rotation_period_days: Optional[float] = None,
+    secondary_sigma: float = 3.0,
 ) -> VettingResult:
+    from .detrend import apply_variability_detrend
+
     # Clean
     t_c, f_c, fe_c = clean_lightcurve(t, flux, flux_err, quality)
     if mom_x is not None and quality is not None:
@@ -1038,7 +1092,29 @@ def run_full_vetting(
     # Lomb-Scargle (cap at half the baseline)
     ls = run_lomb_scargle(t_c, f_c, fe_c, p_min=0.1, p_max=min(20.0, span / 2))
 
-    # BLS
+    # --- Optional sinusoidal detrend before BLS ----------------------------
+    detrend_meta: dict
+    f_raw_for_plot = f_c.copy() if high_variability else None
+    if high_variability:
+        period_for_fit = rotation_period_days or ls.get("top_period")
+        source = "user_period" if rotation_period_days else "ls_peak"
+        # Per-cadence noise floor in ppm — anything below this is just scatter.
+        # Use point-to-point differences so the floor reflects high-frequency
+        # noise rather than the very variability we're trying to fit.
+        df = np.diff(f_c)
+        noise_floor_ppm = float(1.4826 * np.nanmedian(np.abs(df)) / np.sqrt(2.0)) * 1e6
+        f_c, detrend_meta = apply_variability_detrend(
+            t_c, f_c, period_days=period_for_fit,
+            noise_floor_ppm=noise_floor_ppm, source=source,
+        )
+    else:
+        detrend_meta = {
+            "applied": False, "reason": "disabled",
+            "period_days": None, "amplitude_ppm": None,
+            "harmonic_amplitude_ppm": None, "rms_reduction_pct": None,
+        }
+
+    # BLS (runs on detrended residual when high_variability was enabled)
     bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
 
     # Direct event detection (user-tunable sensitivity).
@@ -1051,7 +1127,6 @@ def run_full_vetting(
 
     # If exactly one in-sector event, anchor centroid/shape on it.
     primary_event = events[0] if len(events) == 1 else None
-    # If multiple, anchor on deepest
     if len(events) > 1:
         primary_event = max(events, key=lambda e: e["depth"])
 
@@ -1067,9 +1142,12 @@ def run_full_vetting(
     if primary_event:
         shape = measure_shape(t_c, f_c, primary_event["t_start"], primary_event["t_end"])
 
-    # Odd/even and secondary use the BLS period (only meaningful for multi-event)
+    # Odd/even (unchanged) and secondary (now threshold-tunable)
     odd_even = odd_even_check(t_c, f_c, bls["period"], bls["t0"], bls["duration"])
-    secondary = secondary_eclipse_search(t_c, f_c, bls["period"], bls["t0"], bls["duration"])
+    secondary = secondary_eclipse_search(
+        t_c, f_c, bls["period"], bls["t0"], bls["duration"],
+        secondary_sigma=secondary_sigma,
+    )
 
     # Physics
     depth_for_physics = primary_event["depth"] if primary_event else bls.get("depth")
@@ -1086,10 +1164,7 @@ def run_full_vetting(
         bls_sde=bls["sde"],
     )
 
-    # External catalog cross-match. If the target sits on top of a known
-    # binary / planet host / variable, that classification supersedes
-    # whatever the light-curve verdict says — the published literature is
-    # always more authoritative than a single-sector vet.
+    # External catalog cross-match (unchanged).
     known = crossmatch_known_object(star.ra, star.dec)
     if known.get("matched"):
         verdict["original_headline"] = verdict.get("headline")
@@ -1110,9 +1185,13 @@ def run_full_vetting(
         verdict.setdefault("reasons", []).insert(0, match_reason)
         verdict.setdefault("flags", []).append("known_object_override")
 
-    # Plots
+    # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.
+    # For now keep the existing call signature; Task 7 adds the new kwargs.
     plots = make_plots(
-        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event, bls.get("_periodogram"), ls
+        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
+        bls.get("_periodogram"), ls,
+        detrend_meta=detrend_meta,
+        f_raw=f_raw_for_plot,
     )
 
     summary = {
@@ -1123,7 +1202,6 @@ def run_full_vetting(
         "scatter_mad": float(1.4826 * np.nanmedian(np.abs(f_c - 1))),
     }
 
-    # Strip heavy _periodogram before returning to user (keep only down-sampled)
     bls.pop("_periodogram", None)
 
     return VettingResult(
@@ -1139,6 +1217,12 @@ def run_full_vetting(
         physics=physics,
         verdict=verdict,
         known_object=known,
+        detrend=detrend_meta,
+        sensitivity={
+            "threshold": float(detect_threshold),
+            "min_snr": float(detect_min_snr),
+            "secondary_sigma": float(secondary_sigma),
+        },
         plots=plots,
     )
 
@@ -1186,11 +1270,13 @@ def _cluster_events_into_objects(reps: list, tol_h: float, max_objects: int = MA
 
 
 def run_multisector_analysis(
-    sector_results: list,          # list of (sector_num, VettingResult)
-    period_d: float | None = None, # known period from ExoFOP / BLS
-    t0: float | None = None,       # reference transit time
+    sector_results: list,
+    period_d: float | None = None,
+    t0: float | None = None,
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    secondary_sigma: float = 3.0,
     duration_tol_h: float = DURATION_MATCH_TOL_H,
 ) -> dict:
     """
@@ -1337,6 +1423,13 @@ def run_multisector_analysis(
     # Detection timeline plot
     timeline_plot = _make_timeline_plot(timeline)
 
+    analysis_settings = {
+        "detect_threshold": float(detect_threshold),
+        "detect_min_snr": float(detect_min_snr),
+        "high_variability": bool(high_variability),
+        "secondary_sigma": float(secondary_sigma),
+    }
+
     return {
         "n_sectors_observed": n_total,
         "n_sectors_with_detections": n_with_dip,
@@ -1350,6 +1443,7 @@ def run_multisector_analysis(
         "n_objects_detected": n_objects,
         "objects": objects,
         "timeline_plot": timeline_plot,
+        "settings": analysis_settings,
         "summary": (
             f"{n_with_dip}/{n_total} sectors show a dip event. "
             + (f"Consensus period ≈ {period_consensus['value_d']:.4f} d. "
