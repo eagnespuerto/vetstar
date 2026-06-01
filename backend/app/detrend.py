@@ -1,0 +1,72 @@
+"""Sinusoidal + first-harmonic regression detrender used before BLS when the
+user opts in to "High stellar variability" vetting.
+
+Model: f(t) ≈ C + A1·sin(2πt/P) + B1·cos(2πt/P) + A2·sin(4πt/P) + B2·cos(4πt/P)
+
+P is fixed (caller supplies it — Lomb-Scargle peak or user-supplied rotation
+period). The five remaining coefficients are solved by linear least squares.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Optional
+
+import numpy as np
+
+
+@dataclass
+class SinusoidFit:
+    period_days: float
+    C: float
+    A1: float
+    B1: float
+    A2: float
+    B2: float
+    amplitude_ppm: float            # sqrt(A1² + B1²) × 1e6
+    harmonic_amplitude_ppm: float   # sqrt(A2² + B2²) × 1e6
+    rms_before: float               # ppm
+    rms_after: float                # ppm
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def _design_matrix(t: np.ndarray, period_days: float) -> np.ndarray:
+    omega = 2.0 * np.pi / period_days
+    return np.column_stack([
+        np.ones_like(t),
+        np.sin(omega * t),
+        np.cos(omega * t),
+        np.sin(2.0 * omega * t),
+        np.cos(2.0 * omega * t),
+    ])
+
+
+def fit_sinusoid(t: np.ndarray, f: np.ndarray, period_days: float) -> SinusoidFit:
+    """Fit f(t) with a 5-coefficient sin+harmonic model at fixed period."""
+    if period_days is None or period_days <= 0 or not np.isfinite(period_days):
+        raise ValueError(f"period_days must be positive and finite, got {period_days!r}")
+    X = _design_matrix(t, period_days)
+    coeffs, *_ = np.linalg.lstsq(X, f, rcond=None)
+    C, A1, B1, A2, B2 = (float(c) for c in coeffs)
+    model = X @ coeffs
+    amp = float(np.hypot(A1, B1))
+    harm = float(np.hypot(A2, B2))
+    rms_before = float(np.std(f - np.median(f))) * 1e6
+    rms_after = float(np.std(f - model)) * 1e6
+    return SinusoidFit(
+        period_days=float(period_days),
+        C=C, A1=A1, B1=B1, A2=A2, B2=B2,
+        amplitude_ppm=amp * 1e6,
+        harmonic_amplitude_ppm=harm * 1e6,
+        rms_before=rms_before,
+        rms_after=rms_after,
+    )
+
+
+def apply_detrend(t: np.ndarray, f: np.ndarray, fit: SinusoidFit) -> np.ndarray:
+    """Subtract the fitted sinusoid, re-normalise to median = 1.0."""
+    X = _design_matrix(t, fit.period_days)
+    coeffs = np.array([fit.C, fit.A1, fit.B1, fit.A2, fit.B2])
+    residual = f - X @ coeffs
+    return residual + 1.0
