@@ -90,7 +90,13 @@ export default function App() {
   const [drag, setDrag] = useState(false);
 
   // Detection sensitivity (shared across both modes).
-  const [params, setParams] = useState<DetectParams>({ threshold: 0.997, minSnr: 4.0 });
+  const [params, setParams] = useState<DetectParams>({
+    threshold: 0.997,
+    minSnr: 4.0,
+    highVariability: false,
+    rotationPeriod: null,
+    secondarySigma: 3.0,
+  });
 
   // MAST mode state
   const [ticInput, setTicInput] = useState<string>("");
@@ -380,6 +386,43 @@ export default function App() {
                   same duration and period.
                 </p>
               )}
+            </div>
+            {/* High stellar variability — fit + subtract a sinusoid before BLS. */}
+            <div className="mb-4 p-3 bg-slate-50 rounded border border-slate-200">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={params.highVariability}
+                  onChange={(e) =>
+                    setParams({ ...params, highVariability: e.target.checked })
+                  }
+                />
+                High stellar variability (detrend before BLS)
+              </label>
+              {params.highVariability && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                  <label>Expected rotation period (days, optional):</label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={params.rotationPeriod ?? ""}
+                    placeholder="auto (Lomb-Scargle peak)"
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      setParams({
+                        ...params,
+                        rotationPeriod: v === "" ? null : parseFloat(v),
+                      });
+                    }}
+                    className="border rounded px-2 py-0.5 font-mono w-40 text-xs"
+                  />
+                </div>
+              )}
+              <p className="text-[11px] text-slate-500 mt-1">
+                Fits a sine + first harmonic and subtracts it before BLS. Helps
+                detect shallow dips on spotted rotators and wave-like variables.
+              </p>
             </div>
             <div className="grid sm:grid-cols-3 gap-3 items-end">
               <div>
