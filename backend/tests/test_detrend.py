@@ -130,3 +130,25 @@ def test_detrend_plot_absent_when_disabled(rng):
     fe = np.full_like(t, 1e-3)
     res = run_full_vetting(t, f, fe, quality=None, mom_x=None, mom_y=None, star=StarInfo())
     assert "detrend" not in res.plots
+
+
+def test_defaults_match_pre_change_pipeline_output(rng):
+    """With high_variability=False and secondary_sigma=3.0, run_full_vetting
+    must produce the same BLS, secondary, verdict as before these changes."""
+    from backend.app.pipeline import run_full_vetting, StarInfo
+
+    t = np.linspace(0.0, 27.0, 6000)
+    f = 1.0 + rng.normal(0.0, 1e-3, size=t.size)
+    fe = np.full_like(t, 1e-3)
+    star = StarInfo()
+    a = run_full_vetting(t, f, fe, None, None, None, star)
+    b = run_full_vetting(
+        t, f, fe, None, None, None, star,
+        high_variability=False, rotation_period_days=None, secondary_sigma=3.0,
+    )
+    assert a.bls["period"] == b.bls["period"]
+    assert a.bls["sde"] == b.bls["sde"]
+    assert a.secondary.get("detected") == b.secondary.get("detected")
+    assert a.verdict["category"] == b.verdict["category"]
+    assert a.detrend["applied"] is False
+    assert a.sensitivity["secondary_sigma"] == 3.0
