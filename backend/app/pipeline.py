@@ -301,8 +301,10 @@ class VettingResult:
     shape: dict = field(default_factory=dict)
     physics: dict = field(default_factory=dict)
     verdict: dict = field(default_factory=dict)
-    known_object: dict = field(default_factory=dict)  # Gaia/SIMBAD crossmatch
-    plots: dict = field(default_factory=dict)  # name -> base64 PNG
+    known_object: dict = field(default_factory=dict)
+    detrend: dict = field(default_factory=dict)        # NEW
+    sensitivity: dict = field(default_factory=dict)    # NEW (echo applied thresholds)
+    plots: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -1028,7 +1030,12 @@ def run_full_vetting(
     star: StarInfo,
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    rotation_period_days: Optional[float] = None,
+    secondary_sigma: float = 3.0,
 ) -> VettingResult:
+    from .detrend import apply_variability_detrend
+
     # Clean
     t_c, f_c, fe_c = clean_lightcurve(t, flux, flux_err, quality)
     if mom_x is not None and quality is not None:
@@ -1042,7 +1049,28 @@ def run_full_vetting(
     # Lomb-Scargle (cap at half the baseline)
     ls = run_lomb_scargle(t_c, f_c, fe_c, p_min=0.1, p_max=min(20.0, span / 2))
 
-    # BLS
+    # --- Optional sinusoidal detrend before BLS ----------------------------
+    detrend_meta: dict
+    if high_variability:
+        period_for_fit = rotation_period_days or ls.get("top_period")
+        source = "user_period" if rotation_period_days else "ls_peak"
+        # Per-cadence noise floor in ppm — anything below this is just scatter.
+        # Use point-to-point differences so the floor reflects high-frequency
+        # noise rather than the very variability we're trying to fit.
+        df = np.diff(f_c)
+        noise_floor_ppm = float(1.4826 * np.nanmedian(np.abs(df)) / np.sqrt(2.0)) * 1e6
+        f_c, detrend_meta = apply_variability_detrend(
+            t_c, f_c, period_days=period_for_fit,
+            noise_floor_ppm=noise_floor_ppm, source=source,
+        )
+    else:
+        detrend_meta = {
+            "applied": False, "reason": "disabled",
+            "period_days": None, "amplitude_ppm": None,
+            "harmonic_amplitude_ppm": None, "rms_reduction_pct": None,
+        }
+
+    # BLS (runs on detrended residual when high_variability was enabled)
     bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
 
     # Direct event detection (user-tunable sensitivity).
@@ -1055,7 +1083,6 @@ def run_full_vetting(
 
     # If exactly one in-sector event, anchor centroid/shape on it.
     primary_event = events[0] if len(events) == 1 else None
-    # If multiple, anchor on deepest
     if len(events) > 1:
         primary_event = max(events, key=lambda e: e["depth"])
 
@@ -1071,9 +1098,12 @@ def run_full_vetting(
     if primary_event:
         shape = measure_shape(t_c, f_c, primary_event["t_start"], primary_event["t_end"])
 
-    # Odd/even and secondary use the BLS period (only meaningful for multi-event)
+    # Odd/even (unchanged) and secondary (now threshold-tunable)
     odd_even = odd_even_check(t_c, f_c, bls["period"], bls["t0"], bls["duration"])
-    secondary = secondary_eclipse_search(t_c, f_c, bls["period"], bls["t0"], bls["duration"])
+    secondary = secondary_eclipse_search(
+        t_c, f_c, bls["period"], bls["t0"], bls["duration"],
+        secondary_sigma=secondary_sigma,
+    )
 
     # Physics
     depth_for_physics = primary_event["depth"] if primary_event else bls.get("depth")
@@ -1090,10 +1120,7 @@ def run_full_vetting(
         bls_sde=bls["sde"],
     )
 
-    # External catalog cross-match. If the target sits on top of a known
-    # binary / planet host / variable, that classification supersedes
-    # whatever the light-curve verdict says — the published literature is
-    # always more authoritative than a single-sector vet.
+    # External catalog cross-match (unchanged).
     known = crossmatch_known_object(star.ra, star.dec)
     if known.get("matched"):
         verdict["original_headline"] = verdict.get("headline")
@@ -1114,9 +1141,11 @@ def run_full_vetting(
         verdict.setdefault("reasons", []).insert(0, match_reason)
         verdict.setdefault("flags", []).append("known_object_override")
 
-    # Plots
+    # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.
+    # For now keep the existing call signature; Task 7 adds the new kwargs.
     plots = make_plots(
-        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event, bls.get("_periodogram"), ls
+        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
+        bls.get("_periodogram"), ls,
     )
 
     summary = {
@@ -1127,7 +1156,6 @@ def run_full_vetting(
         "scatter_mad": float(1.4826 * np.nanmedian(np.abs(f_c - 1))),
     }
 
-    # Strip heavy _periodogram before returning to user (keep only down-sampled)
     bls.pop("_periodogram", None)
 
     return VettingResult(
@@ -1143,6 +1171,12 @@ def run_full_vetting(
         physics=physics,
         verdict=verdict,
         known_object=known,
+        detrend=detrend_meta,
+        sensitivity={
+            "threshold": float(detect_threshold),
+            "min_snr": float(detect_min_snr),
+            "secondary_sigma": float(secondary_sigma),
+        },
         plots=plots,
     )
 
