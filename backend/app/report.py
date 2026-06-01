@@ -319,6 +319,42 @@ def build_pdf(
         )
         story.append(Spacer(1, 0.1 * inch))
 
+    # ---------------- Stellar-variability detrend (optional) ----------------
+    detrend = getattr(result, "detrend", None) or {}
+    if detrend.get("applied") and "detrend" in result.plots:
+        amp = detrend.get("amplitude_ppm")
+        period = detrend.get("period_days")
+        rms_red = detrend.get("rms_reduction_pct")
+        caption_bits = []
+        if period is not None:
+            caption_bits.append(f"P = {period:.4f} d")
+        if amp is not None:
+            caption_bits.append(f"amplitude {amp:.0f} ppm")
+        if rms_red is not None:
+            caption_bits.append(f"RMS reduced {rms_red:.1f}%")
+        caption = (
+            "Sinusoid + first-harmonic regression applied before BLS to "
+            "suppress stellar variability. Fitted: " + ", ".join(caption_bits) + "."
+        )
+        story += _section(
+            "Stellar variability detrend",
+            _b64_image(result.plots["detrend"]),
+            Paragraph(caption, styles["caption"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+    elif detrend.get("reason") == "skipped_low_amplitude":
+        story += _section(
+            "Stellar variability detrend",
+            Paragraph(
+                "Detrending was requested but the fitted sinusoid amplitude "
+                "was below the per-cadence noise floor — no detrend applied.",
+                body,
+            ),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+
     # ---------------- Detrended light curve ----------------
     if "lightcurve" in result.plots:
         story += _section(
