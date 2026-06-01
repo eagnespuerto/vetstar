@@ -962,6 +962,34 @@ function ResultsView({ result }: { result: VettingResult }) {
       </div>
 
       {/* Plots */}
+      {result.detrend?.applied && result.plots.detrend && (
+        <figure className="space-y-1 mb-4">
+          <div className="flex items-center justify-between">
+            <figcaption className="text-xs text-slate-500 font-medium">
+              Stellar variability detrend — P ={" "}
+              {result.detrend.period_days?.toFixed(4)} d, amplitude{" "}
+              {result.detrend.amplitude_ppm?.toFixed(0)} ppm, RMS reduced{" "}
+              {result.detrend.rms_reduction_pct?.toFixed(1)}%
+            </figcaption>
+            <ShareToImgbbButton
+              base64={result.plots.detrend}
+              title={`detrend_TIC${result.star.tic_id ?? ""}_S${result.star.sector ?? ""}`}
+              label="Stellar variability detrend"
+            />
+          </div>
+          <img
+            src={`data:image/png;base64,${result.plots.detrend}`}
+            alt="Stellar variability detrend"
+            className="w-full rounded border border-slate-200"
+          />
+        </figure>
+      )}
+      {result.detrend?.reason === "skipped_low_amplitude" && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">
+          Detrending was requested but the fitted sinusoid amplitude was below the
+          per-cadence noise floor — no detrend applied.
+        </p>
+      )}
       <PlotsSection plots={result.plots} ticId={result.star.tic_id} sector={result.star.sector} />
 
       {/* SPOC DVT phase-fold (MAST results only, when DVT is available) */}
