@@ -614,8 +614,11 @@ def odd_even_check(t, f, period, t0, duration) -> dict:
     }
 
 
-def secondary_eclipse_search(t, f, period, t0, duration) -> dict:
-    """Look at phase 0.5 for a secondary dip."""
+def secondary_eclipse_search(t, f, period, t0, duration, secondary_sigma: float = 3.0) -> dict:
+    """Look at phase 0.5 for a secondary dip.
+
+    ``secondary_sigma`` is the user-tunable detection threshold (default 3σ).
+    """
     if period is None or period <= 0:
         return {"available": False, "reason": "no period"}
     phase = ((t - t0) / period) % 1.0
@@ -634,7 +637,8 @@ def secondary_eclipse_search(t, f, period, t0, duration) -> dict:
         "available": True,
         "depth": float(depth),
         "sigma": float(sigma),
-        "detected": bool(sigma > 3),
+        "detected": bool(sigma > secondary_sigma),
+        "threshold_sigma": float(secondary_sigma),
     }
 
 
