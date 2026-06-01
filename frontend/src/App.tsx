@@ -578,7 +578,10 @@ function SensitivityPanel({
   setParams: (p: DetectParams) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const isDefault = params.threshold === 0.997 && params.minSnr === 4.0;
+  const isDefault =
+    params.threshold === 0.997 &&
+    params.minSnr === 4.0 &&
+    params.secondarySigma === 3.0;
 
   return (
     <section className="bg-white rounded-lg border border-slate-200 overflow-hidden">
@@ -685,6 +688,40 @@ function SensitivityPanel({
               <span>1σ (max sensitivity)</span>
               <span>4σ default</span>
               <span>10σ (very strict)</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+              <span>
+                Secondary eclipse σ:{" "}
+                <span className="font-mono">{params.secondarySigma.toFixed(1)}σ</span>
+                <span className="text-slate-400 ml-1">
+                  (depth at phase 0.5 must exceed this × local scatter)
+                </span>
+              </span>
+              <button
+                onClick={() => setParams({ ...params, secondarySigma: 3.0 })}
+                className="text-blue-600 hover:underline"
+              >
+                reset
+              </button>
+            </label>
+            <input
+              type="range"
+              min={1.0}
+              max={7.0}
+              step={0.1}
+              value={params.secondarySigma}
+              onChange={(e) =>
+                setParams({ ...params, secondarySigma: parseFloat(e.target.value) })
+              }
+              className="w-full"
+            />
+            <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+              <span>1σ (very loose, more EB flags)</span>
+              <span>3σ default</span>
+              <span>7σ (very strict)</span>
             </div>
           </div>
 
