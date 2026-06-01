@@ -40,3 +40,37 @@ def test_detrend_lifts_transit_visibility_above_variability():
 
     assert np.std(resid) < 0.5 * np.std(f)
     assert transit_depth > 3.0 * np.std(resid)
+
+
+from backend.app.detrend import apply_variability_detrend
+
+
+def test_skip_when_amplitude_below_noise_floor():
+    """A flat light curve must be returned unchanged with reason=skipped_low_amplitude."""
+    t = np.linspace(0.0, 27.0, 20000)
+    f = np.ones_like(t) + np.random.default_rng(0).normal(0.0, 1e-4, size=t.size)
+
+    out_f, meta = apply_variability_detrend(
+        t, f, period_days=5.0, noise_floor_ppm=500.0, source="ls_peak",
+    )
+
+    assert meta["applied"] is False
+    assert meta["reason"] == "skipped_low_amplitude"
+    assert meta["period_days"] == 5.0
+    assert meta["amplitude_ppm"] is not None
+    assert np.array_equal(out_f, f)
+
+
+def test_apply_when_amplitude_exceeds_noise_floor():
+    t = np.linspace(0.0, 27.0, 20000)
+    f = make_sinusoid(t, period=7.0, amp=0.01)
+
+    out_f, meta = apply_variability_detrend(
+        t, f, period_days=7.0, noise_floor_ppm=500.0, source="user_period",
+    )
+
+    assert meta["applied"] is True
+    assert meta["reason"] == "user_period"
+    assert meta["amplitude_ppm"] > 5000.0
+    assert meta["rms_reduction_pct"] > 50.0
+    assert np.std(out_f) < np.std(f)
