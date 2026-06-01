@@ -136,8 +136,12 @@ def _clamp_params(detect_threshold: float, detect_min_snr: float):
     return th, snr
 
 
-def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float):
+def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
+                  high_variability: bool = False,
+                  rotation_period_days: Optional[float] = None,
+                  secondary_sigma: float = 3.0):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
+    sec_sig = max(1.0, min(7.0, float(secondary_sigma)))
     return run_full_vetting(
         t=parsed["t"],
         flux=parsed["flux"],
@@ -148,6 +152,9 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float):
         star=parsed["star"],
         detect_threshold=th,
         detect_min_snr=snr,
+        high_variability=high_variability,
+        rotation_period_days=rotation_period_days,
+        secondary_sigma=sec_sig,
     )
 
 
@@ -324,7 +331,12 @@ def _mast_fetch_and_analyze(query: MastQuery):
     _cache_lc(parsed)
 
     try:
-        result = _run_pipeline(parsed, query.detect_threshold, query.detect_min_snr)
+        result = _run_pipeline(
+            parsed, query.detect_threshold, query.detect_min_snr,
+            high_variability=getattr(query, "high_variability", False),
+            rotation_period_days=getattr(query, "rotation_period_days", None),
+            secondary_sigma=getattr(query, "secondary_sigma", 3.0),
+        )
     except Exception as e:
         raise _handle_exception("pipeline", e)
 
@@ -897,7 +909,13 @@ def _run_mast_multisector(query: MultisectorQuery):
         try:
             info = fetch_spoc_lightcurve(query.tic_id, sec_num)
             parsed = parse_upload(info["path"], info["filename"])
-            result = _run_pipeline(parsed, query.detect_threshold, query.detect_min_snr)
+            result = _run_pipeline(
+                parsed,
+                query.detect_threshold, query.detect_min_snr,
+                high_variability=getattr(query, "high_variability", False),
+                rotation_period_days=getattr(query, "rotation_period_days", None),
+                secondary_sigma=getattr(query, "secondary_sigma", 3.0),
+            )
             # Cache the cleaned LC per sector so ExoMiner can reuse it below.
             _cache_lc(parsed)
             sector_results.append((sec_num, result))
@@ -923,6 +941,8 @@ def _run_mast_multisector(query: MultisectorQuery):
         sector_results,
         detect_threshold=query.detect_threshold,
         detect_min_snr=query.detect_min_snr,
+        high_variability=getattr(query, "high_variability", False),
+        secondary_sigma=getattr(query, "secondary_sigma", 3.0),
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)

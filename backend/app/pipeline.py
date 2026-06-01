@@ -1224,11 +1224,13 @@ def _cluster_events_into_objects(reps: list, tol_h: float, max_objects: int = MA
 
 
 def run_multisector_analysis(
-    sector_results: list,          # list of (sector_num, VettingResult)
-    period_d: float | None = None, # known period from ExoFOP / BLS
-    t0: float | None = None,       # reference transit time
+    sector_results: list,
+    period_d: float | None = None,
+    t0: float | None = None,
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    secondary_sigma: float = 3.0,
     duration_tol_h: float = DURATION_MATCH_TOL_H,
 ) -> dict:
     """
@@ -1375,6 +1377,13 @@ def run_multisector_analysis(
     # Detection timeline plot
     timeline_plot = _make_timeline_plot(timeline)
 
+    analysis_settings = {
+        "detect_threshold": float(detect_threshold),
+        "detect_min_snr": float(detect_min_snr),
+        "high_variability": bool(high_variability),
+        "secondary_sigma": float(secondary_sigma),
+    }
+
     return {
         "n_sectors_observed": n_total,
         "n_sectors_with_detections": n_with_dip,
@@ -1388,6 +1397,7 @@ def run_multisector_analysis(
         "n_objects_detected": n_objects,
         "objects": objects,
         "timeline_plot": timeline_plot,
+        "settings": analysis_settings,
         "summary": (
             f"{n_with_dip}/{n_total} sectors show a dip event. "
             + (f"Consensus period ≈ {period_consensus['value_d']:.4f} d. "
