@@ -6,11 +6,12 @@ export function fitsDownloadUrl(ticId: number, sector: number): string {
 }
 
 export interface DetectParams {
-  threshold: number;             // 0.95..0.999
-  minSnr: number;                // 1..20
+  threshold: number;             // 0.91..0.9999
+  minSnr: number;                // 0.5..32
   highVariability: boolean;      // toggle for sinusoid+harmonic detrend
   rotationPeriod: number | null; // optional manual rotation period (days)
-  secondarySigma: number;        // 1..7, default 3
+  secondarySigma: number;        // 0.5..20, default 3
+  oddEvenSigma: number;          // 0.5..20, default 3 — EB-flag threshold
 }
 
 const DEFAULT_PARAMS: DetectParams = {
@@ -19,6 +20,7 @@ const DEFAULT_PARAMS: DetectParams = {
   highVariability: false,
   rotationPeriod: null,
   secondarySigma: 3.0,
+  oddEvenSigma: 3.0,
 };
 
 function qs(params: DetectParams = DEFAULT_PARAMS): string {
@@ -26,7 +28,8 @@ function qs(params: DetectParams = DEFAULT_PARAMS): string {
   const tail =
     `&high_variability=${params.highVariability}` +
     (params.rotationPeriod !== null ? `&rotation_period_days=${params.rotationPeriod}` : "") +
-    `&secondary_sigma=${params.secondarySigma}`;
+    `&secondary_sigma=${params.secondarySigma}` +
+    `&odd_even_sigma=${params.oddEvenSigma}`;
   return base + tail;
 }
 
@@ -72,6 +75,7 @@ export async function mastAnalyze(ticId: number, sector: number, params: DetectP
       high_variability: params.highVariability,
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
+      odd_even_sigma: params.oddEvenSigma,
     }),
   });
   if (!r.ok) throw new Error(`MAST analyze failed (${r.status}): ${await r.text()}`);
@@ -106,7 +110,7 @@ export async function fetchHabitability(
 
 export async function fetchMultisector(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
   sectors?: number[]
 ) {
   const r = await fetch(`${API_BASE}/api/mast/multisector`, {
@@ -119,6 +123,7 @@ export async function fetchMultisector(
       high_variability: params.highVariability,
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
+      odd_even_sigma: params.oddEvenSigma,
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -128,7 +133,7 @@ export async function fetchMultisector(
 
 export async function multisectorReport(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
   sectors?: number[]
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/mast/multisector/report`, {
@@ -141,6 +146,7 @@ export async function multisectorReport(
       high_variability: params.highVariability,
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
+      odd_even_sigma: params.oddEvenSigma,
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -159,6 +165,7 @@ export async function mastReport(ticId: number, sector: number, params: DetectPa
       high_variability: params.highVariability,
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
+      odd_even_sigma: params.oddEvenSigma,
     }),
   });
   if (!r.ok) throw new Error(`MAST report failed: ${await r.text()}`);

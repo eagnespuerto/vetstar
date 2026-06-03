@@ -53,7 +53,7 @@ def test_default_argument_is_three():
 
 
 def test_validate_secondary_sigma_rejects_out_of_range():
-    """The API-level validator raises HTTP 422 outside [1.0, 7.0].
+    """The API-level validator raises HTTP 422 outside [0.5, 20.0].
 
     Using the validator directly rather than going through TestClient because
     every endpoint that exercises _run_pipeline first requires either a real
@@ -66,12 +66,12 @@ def test_validate_secondary_sigma_rejects_out_of_range():
     from backend.app.main import _validate_secondary_sigma
 
     assert _validate_secondary_sigma(3.0) == 3.0
-    assert _validate_secondary_sigma(1.0) == 1.0
-    assert _validate_secondary_sigma(7.0) == 7.0
+    assert _validate_secondary_sigma(0.5) == 0.5
+    assert _validate_secondary_sigma(20.0) == 20.0
     with pytest.raises(HTTPException) as exc:
-        _validate_secondary_sigma(8.0)
+        _validate_secondary_sigma(25.0)
     assert exc.value.status_code == 422
     assert "secondary_sigma" in exc.value.detail
     with pytest.raises(HTTPException) as exc:
-        _validate_secondary_sigma(0.5)
+        _validate_secondary_sigma(0.1)
     assert exc.value.status_code == 422
