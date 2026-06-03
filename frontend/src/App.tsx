@@ -2093,6 +2093,15 @@ function MultisectorPanel({ data }: { data: any }) {
 
           {/* Per-sector table */}
           {data.sector_verdicts && (
+            <>
+            <p className="text-xs text-slate-500 italic">
+              Per-sector verdict summary below. Full per-sector vetting (detrend, BLS
+              periodogram, light curve, centroid / odd-even / secondary / shape /
+              physics, and ExoFOP-TESS TOI parameters) is included in the multi-sector
+              PDF — inlining every sector's plots in the live page would balloon the
+              JSON payload to several MB per request and bog down the server, so we
+              keep the on-site view light and route the full picture into the PDF.
+            </p>
             <table className="w-full text-xs">
               <thead className="border-b text-slate-500 text-left">
                 <tr>
@@ -2142,6 +2151,7 @@ function MultisectorPanel({ data }: { data: any }) {
                 ))}
               </tbody>
             </table>
+            </>
           )}
 
           {/* Period consensus */}
