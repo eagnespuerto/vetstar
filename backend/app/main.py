@@ -131,26 +131,38 @@ def _cache_lc(parsed: dict) -> None:
 # -------------------------------------------------
 
 def _clamp_params(detect_threshold: float, detect_min_snr: float):
-    th = max(0.95, min(0.999, float(detect_threshold)))
-    snr = max(1.0, min(20.0, float(detect_min_snr)))
+    # Widened to support the log-scale slider range: depth 0.01%..9%.
+    th = max(0.91, min(0.9999, float(detect_threshold)))
+    snr = max(0.5, min(32.0, float(detect_min_snr)))
     return th, snr
 
 
 def _validate_secondary_sigma(secondary_sigma: float) -> float:
-    if not (1.0 <= float(secondary_sigma) <= 7.0):
+    if not (0.5 <= float(secondary_sigma) <= 20.0):
         raise HTTPException(
             status_code=422,
-            detail=f"secondary_sigma must be in [1.0, 7.0], got {secondary_sigma}.",
+            detail=f"secondary_sigma must be in [0.5, 20.0], got {secondary_sigma}.",
         )
     return float(secondary_sigma)
+
+
+def _validate_odd_even_sigma(odd_even_sigma: float) -> float:
+    if not (0.5 <= float(odd_even_sigma) <= 20.0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"odd_even_sigma must be in [0.5, 20.0], got {odd_even_sigma}.",
+        )
+    return float(odd_even_sigma)
 
 
 def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   high_variability: bool = False,
                   rotation_period_days: Optional[float] = None,
-                  secondary_sigma: float = 3.0):
+                  secondary_sigma: float = 3.0,
+                  odd_even_sigma: float = 3.0):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
     sec_sig = _validate_secondary_sigma(secondary_sigma)
+    oe_sig = _validate_odd_even_sigma(odd_even_sigma)
     return run_full_vetting(
         t=parsed["t"],
         flux=parsed["flux"],
@@ -164,6 +176,7 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
         high_variability=high_variability,
         rotation_period_days=rotation_period_days,
         secondary_sigma=sec_sig,
+        odd_even_sigma=oe_sig,
     )
 
 
@@ -210,6 +223,7 @@ async def analyze(
     high_variability: bool = False,
     rotation_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
+    odd_even_sigma: float = 3.0,
 ):
     tmp_path = None
     try:
@@ -229,6 +243,7 @@ async def analyze(
             high_variability=high_variability,
             rotation_period_days=rotation_period_days,
             secondary_sigma=secondary_sigma,
+            odd_even_sigma=odd_even_sigma,
         )
         d = result.to_dict()
         d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
@@ -253,6 +268,7 @@ async def report(
     high_variability: bool = False,
     rotation_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
+    odd_even_sigma: float = 3.0,
 ):
     tmp_path = None
     try:
@@ -268,6 +284,7 @@ async def report(
             high_variability=high_variability,
             rotation_period_days=rotation_period_days,
             secondary_sigma=secondary_sigma,
+            odd_even_sigma=odd_even_sigma,
         )
         _cache_lc(parsed)
         # Opportunistic SPOC DVT fetch — adds the DV phase-fold image and
@@ -319,6 +336,7 @@ class MastQuery(BaseModel):
     high_variability: bool = False
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
+    odd_even_sigma: float = 3.0
 
 
 @app.get("/api/mast/sectors/{tic_id}")
@@ -364,6 +382,7 @@ def _mast_fetch_and_analyze(query: MastQuery):
             high_variability=getattr(query, "high_variability", False),
             rotation_period_days=getattr(query, "rotation_period_days", None),
             secondary_sigma=getattr(query, "secondary_sigma", 3.0),
+            odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
         )
     except Exception as e:
         raise _handle_exception("pipeline", e)
@@ -466,6 +485,7 @@ class MultisectorQuery(BaseModel):
     high_variability: bool = False
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
+    odd_even_sigma: float = 3.0
 
 
 def _habitability_bundle(query: HabitabilityQuery) -> dict:
@@ -946,6 +966,7 @@ def _run_mast_multisector(query: MultisectorQuery):
                 high_variability=getattr(query, "high_variability", False),
                 rotation_period_days=getattr(query, "rotation_period_days", None),
                 secondary_sigma=getattr(query, "secondary_sigma", 3.0),
+                odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
             )
             # Cache the cleaned LC per sector so ExoMiner can reuse it below.
             _cache_lc(parsed)
@@ -974,6 +995,7 @@ def _run_mast_multisector(query: MultisectorQuery):
         detect_min_snr=query.detect_min_snr,
         high_variability=getattr(query, "high_variability", False),
         secondary_sigma=getattr(query, "secondary_sigma", 3.0),
+        odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)

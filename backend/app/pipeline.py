@@ -578,8 +578,11 @@ def centroid_check(
     }
 
 
-def odd_even_check(t, f, period, t0, duration) -> dict:
-    """Compare even- vs odd-numbered transits.  Big depth difference -> EB."""
+def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0) -> dict:
+    """Compare even- vs odd-numbered transits.  Big depth difference -> EB.
+
+    ``odd_even_sigma`` is the user-tunable EB-flag threshold (default 3σ).
+    """
     if period is None or period <= 0:
         return {"available": False, "reason": "no period"}
     # phase folded; cycle number
@@ -612,7 +615,8 @@ def odd_even_check(t, f, period, t0, duration) -> dict:
         "sigma": float(sigma),
         "n_odd": int(odd.sum()),
         "n_even": int(even.sum()),
-        "flag_eb": bool(sigma > 3),
+        "flag_eb": bool(sigma > odd_even_sigma),
+        "threshold_sigma": float(odd_even_sigma),
     }
 
 
@@ -1076,6 +1080,7 @@ def run_full_vetting(
     high_variability: bool = False,
     rotation_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
+    odd_even_sigma: float = 3.0,
 ) -> VettingResult:
     from .detrend import apply_variability_detrend
 
@@ -1142,8 +1147,11 @@ def run_full_vetting(
     if primary_event:
         shape = measure_shape(t_c, f_c, primary_event["t_start"], primary_event["t_end"])
 
-    # Odd/even (unchanged) and secondary (now threshold-tunable)
-    odd_even = odd_even_check(t_c, f_c, bls["period"], bls["t0"], bls["duration"])
+    # Odd/even and secondary (both threshold-tunable)
+    odd_even = odd_even_check(
+        t_c, f_c, bls["period"], bls["t0"], bls["duration"],
+        odd_even_sigma=odd_even_sigma,
+    )
     secondary = secondary_eclipse_search(
         t_c, f_c, bls["period"], bls["t0"], bls["duration"],
         secondary_sigma=secondary_sigma,
@@ -1222,6 +1230,7 @@ def run_full_vetting(
             "threshold": float(detect_threshold),
             "min_snr": float(detect_min_snr),
             "secondary_sigma": float(secondary_sigma),
+            "odd_even_sigma": float(odd_even_sigma),
         },
         plots=plots,
     )
@@ -1277,6 +1286,7 @@ def run_multisector_analysis(
     detect_min_snr: float = 4.0,
     high_variability: bool = False,
     secondary_sigma: float = 3.0,
+    odd_even_sigma: float = 3.0,
     duration_tol_h: float = DURATION_MATCH_TOL_H,
 ) -> dict:
     """
@@ -1428,6 +1438,7 @@ def run_multisector_analysis(
         "detect_min_snr": float(detect_min_snr),
         "high_variability": bool(high_variability),
         "secondary_sigma": float(secondary_sigma),
+        "odd_even_sigma": float(odd_even_sigma),
     }
 
     return {
