@@ -898,7 +898,7 @@ def _build_report_extras(
 
 @app.post("/api/mast/multisector")
 async def mast_multisector(query: MultisectorQuery):
-    analysis, _rep_star = _run_mast_multisector(query)
+    analysis, _rep_star, _sector_results = _run_mast_multisector(query)
     return analysis
 
 
@@ -910,7 +910,7 @@ async def mast_multisector_report(query: MultisectorQuery):
     object."""
     from .report import build_multisector_pdf
 
-    analysis, rep_star = _run_mast_multisector(query)
+    analysis, rep_star, sector_results = _run_mast_multisector(query)
     try:
         ffi = None
         if rep_star is not None and getattr(rep_star, "ra", None) is not None:
@@ -918,7 +918,9 @@ async def mast_multisector_report(query: MultisectorQuery):
                 query.tic_id, getattr(rep_star, "sector", None),
                 rep_star.ra, rep_star.dec,
             )
-        pdf = build_multisector_pdf(analysis, ffi_cutout=ffi)
+        pdf = build_multisector_pdf(
+            analysis, ffi_cutout=ffi, sector_results=sector_results,
+        )
     except Exception as e:
         raise _handle_exception("build_multisector_pdf", e)
 
@@ -1046,7 +1048,7 @@ def _run_mast_multisector(query: MultisectorQuery):
             obj["exominer"] = obj.get("exominer")
 
     rep_star = sector_results[0][1].star if sector_results else None
-    return analysis, rep_star
+    return analysis, rep_star, sector_results
 
 
 # -------------------------------------------------

@@ -737,7 +737,252 @@ def _append_exofop_section(story, *, period_d, t0_btjd, depth_frac, duration_h,
 # ----------------------------------------------------------------------
 # Multi-sector report
 # ----------------------------------------------------------------------
-def build_multisector_pdf(analysis: dict, ffi_cutout: dict = None) -> bytes:
+def _append_sector_details(story, sec_num, result, styles):
+    """Render full per-sector vetting details for the multi-sector report:
+    detrend -> light curve -> BLS/LS -> centroid/odd-even/secondary/shape/physics.
+    Mirrors the single-sector layout so each sector gets a comprehensive page."""
+    body = styles["body"]
+
+    story.append(PageBreak())
+    story.append(Paragraph(f"Sector {sec_num} — full vetting", styles["h2"]))
+    story.append(HRFlowable(width="100%", thickness=1.1, color=ACCENT,
+                            spaceBefore=1, spaceAfter=6, lineCap="round"))
+
+    # Per-sector verdict line
+    v = result.verdict or {}
+    story.append(Paragraph(
+        f"<b>Verdict:</b> {v.get('headline', '—')} &nbsp;&nbsp; "
+        f"<b>Category:</b> {v.get('category', '—')} &nbsp;&nbsp; "
+        f"<b>Confidence:</b> {(v.get('confidence', 0) or 0) * 100:.0f}%", body))
+    if v.get("reasons"):
+        for r in v["reasons"]:
+            story.append(Paragraph(f"• {r}", body))
+    if v.get("flags"):
+        story.append(Paragraph(f"<b>Flags:</b> {', '.join(v['flags'])}", body))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Light curve summary
+    s = result.summary or {}
+    summary_rows = [
+        ["N points (cleaned)", _fmt(s.get("n_points"), nd=0)],
+        ["Time span (d)", _fmt(s.get("time_span_d"), nd=2)],
+        ["Median cadence (min)", _fmt(s.get("median_cadence_min"), nd=2)],
+        ["Photometric scatter (MAD)", _fmt(s.get("scatter_mad"), nd=5)],
+        ["Discrete dip events", _fmt(s.get("n_events_detected"), nd=0)],
+    ]
+    story += _section("Light curve summary", _kv_table(summary_rows), styles=styles)
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Detrend
+    detrend = getattr(result, "detrend", None) or {}
+    if detrend.get("applied") and "detrend" in (result.plots or {}):
+        amp = detrend.get("amplitude_ppm")
+        period = detrend.get("period_days")
+        rms_red = detrend.get("rms_reduction_pct")
+        bits = []
+        if period is not None:
+            bits.append(f"P = {period:.4f} d")
+        if amp is not None:
+            bits.append(f"amplitude {amp:.0f} ppm")
+        if rms_red is not None:
+            bits.append(f"RMS reduced {rms_red:.1f}%")
+        caption = (
+            "Sinusoid + first-harmonic regression applied before BLS to "
+            "suppress stellar variability. Fitted: " + ", ".join(bits) + "."
+        )
+        story += _section(
+            "Stellar variability detrend",
+            _b64_image(result.plots["detrend"]),
+            Paragraph(caption, styles["caption"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+    elif detrend.get("reason") == "skipped_low_amplitude":
+        story += _section(
+            "Stellar variability detrend",
+            Paragraph(
+                "Detrending was requested but the fitted sinusoid amplitude "
+                "was below the per-cadence noise floor — no detrend applied.",
+                body,
+            ),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+
+    # Detrended light curve plot
+    if "lightcurve" in (result.plots or {}):
+        story += _section(
+            "Detrended light curve",
+            _b64_image(result.plots["lightcurve"]),
+            styles=styles,
+        )
+        story.append(Spacer(1, 0.1 * inch))
+
+    # Period searches (BLS + LS)
+    bls = result.bls or {}
+    ls = result.lomb_scargle or {}
+    rows = [
+        ["BLS period (d)", _fmt(bls.get("period"), nd=5)],
+        ["BLS t0 (BTJD)", _fmt(bls.get("t0"), nd=4)],
+        ["BLS duration (d)", _fmt(bls.get("duration"), nd=3)],
+        ["BLS depth", _fmt(bls.get("depth"), nd=5)],
+        ["BLS SDE", _fmt(bls.get("sde"), nd=2)],
+        ["BLS transits in window", _fmt(bls.get("n_transits_in_window"), nd=0)],
+        ["Lomb-Scargle top period (d)", _fmt(ls.get("top_period"), nd=4)],
+        ["Lomb-Scargle top power", _fmt(ls.get("top_power"), nd=3)],
+        ["LS false-alarm probability", _fmt(ls.get("false_alarm_prob"))],
+    ]
+    story += _section("Period searches", _kv_table(rows, label_w=2.7 * inch), styles=styles)
+    if "bls" in (result.plots or {}):
+        story.append(Spacer(1, 0.08 * inch))
+        story.append(_b64_image(result.plots["bls"]))
+    if "lomb_scargle" in (result.plots or {}):
+        story.append(Spacer(1, 0.08 * inch))
+        story.append(_b64_image(result.plots["lomb_scargle"]))
+    story.append(Spacer(1, 0.12 * inch))
+
+    # Discrete dip events
+    if result.events:
+        ev_rows = [["#", "t_start", "t_end", "Dur (h)", "Depth (%)"]]
+        for i, e in enumerate(result.events[:10], 1):
+            ev_rows.append([
+                str(i), _fmt(e["t_start"], nd=3), _fmt(e["t_end"], nd=3),
+                _fmt(e["duration_d"] * 24, nd=2), _fmt(e["depth"] * 100, nd=2),
+            ])
+        ev_block = _data_table(
+            ev_rows, [0.4 * inch, 1.6 * inch, 1.6 * inch, 1.0 * inch, 1.2 * inch])
+    else:
+        ev_block = Paragraph("No discrete dip events detected.", body)
+    story += _section("Discrete dip events", ev_block, styles=styles)
+    if "event_zoom" in (result.plots or {}):
+        story.append(Spacer(1, 0.08 * inch))
+        story.append(_b64_image(result.plots["event_zoom"]))
+    story.append(Spacer(1, 0.12 * inch))
+
+    # Vetting tests heading
+    story.append(Paragraph("Vetting tests", styles["h2"]))
+    story.append(HRFlowable(width="100%", thickness=1.1, color=ACCENT,
+                            spaceBefore=1, spaceAfter=8, lineCap="round"))
+
+    # Centroid
+    c = result.centroid or {}
+    if c.get("available"):
+        rows = [
+            ["Column shift (px)", _fmt(c["shift_col_px"], nd=5)],
+            ["Column shift (σ)", _fmt(c["shift_col_sigma"], nd=2)],
+            ["Row shift (px)", _fmt(c["shift_row_px"], nd=5)],
+            ["Row shift (σ)", _fmt(c["shift_row_sigma"], nd=2)],
+            ["On target?", _fmt(c["on_target"])],
+        ]
+        c_block = _kv_table(rows)
+    else:
+        c_block = Paragraph("Centroid data not available.", body)
+    story.append(KeepTogether([
+        Paragraph("Centroid offset (background-blend test)", styles["h3"]), c_block]))
+    if "centroid" in (result.plots or {}):
+        story.append(Spacer(1, 0.06 * inch))
+        story.append(_b64_image(result.plots["centroid"]))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Odd / even
+    oe = result.odd_even or {}
+    if oe.get("available"):
+        rows = [
+            ["Depth — odd transits", _fmt(oe["depth_odd"], nd=5)],
+            ["Depth — even transits", _fmt(oe["depth_even"], nd=5)],
+            ["Difference σ", _fmt(oe["sigma"], nd=2)],
+            ["EB flag?", _fmt(oe["flag_eb"])],
+        ]
+        oe_block = _kv_table(rows)
+    else:
+        oe_block = Paragraph(f"Not available: {oe.get('reason', '—')}", body)
+    story.append(KeepTogether([
+        Paragraph("Odd vs even transit depths (EB test)", styles["h3"]), oe_block]))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Secondary
+    se = result.secondary or {}
+    if se.get("available"):
+        rows = [
+            ["Depth at phase 0.5", _fmt(se["depth"], nd=5)],
+            ["Significance σ", _fmt(se["sigma"], nd=2)],
+            ["Detected?", _fmt(se["detected"])],
+        ]
+        se_block = _kv_table(rows)
+    else:
+        se_block = Paragraph(f"Not available: {se.get('reason', '—')}", body)
+    story.append(KeepTogether([
+        Paragraph("Secondary eclipse search (EB test)", styles["h3"]), se_block]))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Shape
+    sh = result.shape or {}
+    if sh.get("available"):
+        rows = [
+            ["T14 (h)", _fmt(sh["t14_hours"], nd=2)],
+            ["T23 (h, flat bottom)", _fmt(sh["t23_hours"], nd=2)],
+            ["T23 / T14", _fmt(sh["t23_over_t14"], nd=2)],
+            ["Shape class", sh["shape_class"]],
+        ]
+        sh_block = _kv_table(rows)
+    else:
+        sh_block = Paragraph("Shape not available.", body)
+    story.append(KeepTogether([
+        Paragraph("Transit shape (U vs V)", styles["h3"]), sh_block]))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Physics
+    p = result.physics or {}
+    if p.get("available"):
+        rows = [
+            ["Observed depth", _fmt(p["observed_depth"], nd=5)],
+            ["Dilution-corrected depth", _fmt(p["dilution_corrected_depth"], nd=5)],
+            ["Companion radius (R_sun)", _fmt(p["R_companion_Rsun"], nd=3)],
+            ["Companion radius (R_Jup)", _fmt(p["R_companion_Rjup"], nd=2)],
+            ["Category", p["category"]],
+            ["Planet candidate?", _fmt(p["is_planet_candidate"])],
+            ["Estimated star mass (M_sun)", _fmt(p.get("M_star_estimated_Msun"), nd=2)],
+            ["Central-transit P implied (d)", _fmt(p.get("P_central_implied_d"), nd=2)],
+        ]
+        ph_block = _kv_table(rows, label_w=2.7 * inch)
+    else:
+        ph_block = Paragraph("Physics not available (missing stellar parameters).", body)
+    story.append(KeepTogether([
+        Paragraph("Physical interpretation", styles["h3"]), ph_block]))
+
+    # Per-sector ExoFOP TOI parameters (from this sector's BLS/shape/physics).
+    bls_period = bls.get("period")
+    bls_t0 = bls.get("t0")
+    if p.get("available"):
+        depth_for_exofop = p.get("observed_depth")
+    else:
+        depth_for_exofop = bls.get("depth")
+    if sh.get("available"):
+        duration_h_for_exofop = sh.get("t14_hours")
+    else:
+        duration_h_for_exofop = (bls.get("duration") * 24.0
+                                 if bls.get("duration") else None)
+    if bls_period or bls_t0 or depth_for_exofop or duration_h_for_exofop:
+        story.append(Spacer(1, 0.12 * inch))
+        _append_exofop_section(
+            story,
+            period_d=bls_period,
+            t0_btjd=bls_t0,
+            depth_frac=depth_for_exofop,
+            duration_h=duration_h_for_exofop,
+            observables=None,
+            tlcm=None,
+            dvt_available=False,
+            styles=styles,
+            heading=f"ExoFOP-TESS TOI parameters — Sector {sec_num}",
+        )
+
+
+def build_multisector_pdf(
+    analysis: dict,
+    ffi_cutout: dict = None,
+    sector_results: list = None,
+) -> bytes:
     """Render a multi-sector analysis dict to a PDF, using the same layout
     (header band, footer, unified tables, sections) as the single-sector
     report."""
@@ -842,6 +1087,17 @@ def build_multisector_pdf(analysis: dict, ffi_cutout: dict = None) -> bytes:
                                0.7 * inch, 1.1 * inch, 0.9 * inch]),
             styles=styles,
         )
+
+    # ---------------- Per-sector full vetting details ----------------
+    # Mirrors the single-sector report layout (detrend -> light curve -> BLS/LS
+    # -> vetting tests -> ExoFOP) for each contributing sector.
+    if sector_results:
+        for sec_num, res in sector_results:
+            try:
+                _append_sector_details(story, sec_num, res, styles)
+            except Exception:
+                # Don't let one bad sector kill the report.
+                continue
 
     # ---------------- Identified objects ----------------
     for i, obj in enumerate(analysis.get("objects", []), 1):
