@@ -266,17 +266,39 @@ the **SPOC DV phase-fold** — are uploaded with TIC-aware filenames (e.g.
 `TIC_12345678_S20_SPOC_DV_phase_fold`) so the target stays attached to the
 image when it lands in an issue, thread, or wiki.
 
-### Bulk image download + ExoFOP manifest
+### Bulk ZIP for ExoFOP-TESS upload
 
-Next to the ImgBB action on the **Diagnostic plots** panel, a **⬇ Bulk
-download + ExoFOP manifest** button streams every diagnostic PNG (light
-curve, event zoom, centroid, BLS, Lomb-Scargle, and the SPOC DV phase-fold
-when available) with TIC-named filenames like
-`TIC12345678_S020_lightcurve.png`. Alongside the images it drops a
-pipe-delimited `..._exofop_manifest.txt` in the **ExoFOP-TESS bulk file
-upload** column format (`target|tag|group|prop_period|filename|description`),
-so you can edit the group / proprietary period and submit the whole batch to
-ExoFOP-TESS in one go instead of attaching plots one at a time.
+The **Diagnostic plots** panel includes a collapsible **⬇ Build ExoFOP-TESS
+bulk-upload ZIP** section that packages every plot into a single archive
+matching the [ExoFOP-TESS bulk file upload
+spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
+
+- **Three small inputs** — your **initials** (`xx`), a per-day **counter**
+  (`nnn`, 001–999), and your **data tag** (column 2 of the descriptor,
+  must be valid on your ExoFOP account). Initials and tag are remembered
+  in `localStorage`, and the counter auto-bumps after each build so
+  successive runs on the same day don't collide.
+- **Archive + descriptor** are named `xxYYYYMMDD-nnn.zip` and
+  `xxYYYYMMDD-nnn.txt` (matching base names, as the spec requires).
+- **Each plot** is renamed to the
+  `targetnameC-xxDATESTAMP[optional_info][y].ext` convention, with the
+  correct single-letter type code: `L` (Light Curve) for the full and
+  zoomed light-curve plots and the SPOC DV phase-fold, `O` (Other) for
+  the BLS / Lomb-Scargle periodograms and the centroid diagnostic.
+  Filenames stay under the 100-character cap and are suffixed `a`, `b`, …
+  if a sibling would collide.
+- **Descriptor rows** have the five pipe-delimited columns ExoFOP expects
+  — `filename | data tag | group | proprietary period | description` —
+  with group blank and proprietary period set to `0` (the spec mandates
+  `0` whenever no group is assigned).
+- **Single flat directory** inside the zip (no nested folders), built
+  with an in-repo store-only ZIP writer (no extra dependency required
+  since PNGs are already compressed).
+
+A TIC ID is required (run vetting via the MAST tab, or upload a SPOC FITS
+that carries a `TICID` header) — without one, or with missing initials /
+counter / tag, the button explains what's missing and stops before
+producing anything ExoFOP would reject.
 
 
 ### Multi-sector analysis
