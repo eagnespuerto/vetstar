@@ -82,3 +82,18 @@ def test_run_full_vetting_propagates_known_period():
     )
     assert result.bls.get("constrained") is True
     assert result.bls.get("known_period_input_days") == pytest.approx(3.1)
+
+
+def test_run_full_vetting_falls_back_when_known_period_out_of_range():
+    rng = np.random.default_rng(5)
+    t, f, fe = _inject_box_transit(rng, period_d=3.1)
+    span = float(t.max() - t.min())  # ~27 d
+    star = StarInfo(tic_id=0, ra=0.0, dec=0.0, tmag=10.0,
+                    teff=5800.0, radius=1.0, mass=1.0)
+    # Pass a known period well above 0.7 * span — must fall back.
+    result = run_full_vetting(
+        t, f, fe, quality=None, mom_x=None, mom_y=None,
+        star=star, known_period_days=span,  # = span > 0.7*span
+    )
+    assert result.bls.get("constrained") is not True
+    assert "constrained_fallback_reason" in result.bls

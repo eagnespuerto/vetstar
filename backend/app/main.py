@@ -156,6 +156,20 @@ def _validate_odd_even_sigma(odd_even_sigma: float) -> float:
     return float(odd_even_sigma)
 
 
+def _validate_known_period_days(v: Optional[float]) -> None:
+    if v is None:
+        return
+    if (
+        not math.isfinite(v)
+        or v <= 0
+        or v > 1000
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="known_period_days must be a finite number in (0, 1000].",
+        )
+
+
 def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   high_variability: bool = False,
                   rotation_period_days: Optional[float] = None,
@@ -229,15 +243,7 @@ async def analyze(
     odd_even_sigma: float = 3.0,
     known_period_days: Optional[float] = None,
 ):
-    if known_period_days is not None and (
-        not math.isfinite(known_period_days)
-        or known_period_days <= 0
-        or known_period_days > 1000
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="known_period_days must be a finite number in (0, 1000].",
-        )
+    _validate_known_period_days(known_period_days)
     tmp_path = None
     try:
         tmp_path = _save_upload_to_tempfile(file)
@@ -285,15 +291,7 @@ async def report(
     odd_even_sigma: float = 3.0,
     known_period_days: Optional[float] = None,
 ):
-    if known_period_days is not None and (
-        not math.isfinite(known_period_days)
-        or known_period_days <= 0
-        or known_period_days > 1000
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="known_period_days must be a finite number in (0, 1000].",
-        )
+    _validate_known_period_days(known_period_days)
     tmp_path = None
     try:
         tmp_path = _save_upload_to_tempfile(file)
