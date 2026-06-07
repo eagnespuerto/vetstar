@@ -998,6 +998,8 @@ def _run_mast_multisector(query: MultisectorQuery):
         high_variability=getattr(query, "high_variability", False),
         secondary_sigma=getattr(query, "secondary_sigma", 3.0),
         odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
+        # Task 3 will populate this from the request model.
+        known_period_days=getattr(query, "known_period_days", None),
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)
