@@ -266,17 +266,29 @@ the **SPOC DV phase-fold** — are uploaded with TIC-aware filenames (e.g.
 `TIC_12345678_S20_SPOC_DV_phase_fold`) so the target stays attached to the
 image when it lands in an issue, thread, or wiki.
 
-### Bulk image download + ExoFOP manifest
+### Bulk ZIP for ExoFOP-TESS upload
 
-Next to the ImgBB action on the **Diagnostic plots** panel, a **⬇ Bulk
-download + ExoFOP manifest** button streams every diagnostic PNG (light
-curve, event zoom, centroid, BLS, Lomb-Scargle, and the SPOC DV phase-fold
-when available) with TIC-named filenames like
-`TIC12345678_S020_lightcurve.png`. Alongside the images it drops a
-pipe-delimited `..._exofop_manifest.txt` in the **ExoFOP-TESS bulk file
-upload** column format (`target|tag|group|prop_period|filename|description`),
-so you can edit the group / proprietary period and submit the whole batch to
-ExoFOP-TESS in one go instead of attaching plots one at a time.
+Next to the ImgBB action on the **Diagnostic plots** panel, a **⬇ Bulk ZIP
+for ExoFOP upload** button builds a ready-to-submit archive that matches
+ExoFOP-TESS's [bulk file upload](https://exofop.ipac.caltech.edu/tess/help.php#upload)
+spec exactly:
+
+- The button first asks for a **data tag** — pre-filled with a compliant
+  default `YYYYMMDD_vetstar_TIC<id>_<14-digit-random>` you can edit to
+  insert your username / description before bundling.
+- Every diagnostic PNG (light curve, event zoom, centroid, BLS,
+  Lomb-Scargle, and the SPOC DV phase-fold when available) is renamed to
+  the required `TIC<id>S-<tag>_<plot>.png` convention.
+- A `<tag>.txt` descriptor is included with the pipe-delimited columns
+  ExoFOP expects: `filename | data tag | group | proprietary period | file description`
+  (group is left blank for you to fill in, proprietary period defaults to 0).
+- All files are packed into `<tag>.zip` using a built-in store-only ZIP
+  writer (no extra dependency, no install required) and downloaded as a
+  single file you can hand straight to the ExoFOP bulk-upload form.
+
+A TIC ID is required (run vetting via the MAST tab, or upload a SPOC FITS
+that carries a `TICID` header) — without one the button explains why and
+stops, since the ExoFOP naming convention is keyed off the TIC.
 
 
 ### Multi-sector analysis
