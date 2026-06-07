@@ -18,7 +18,7 @@ so a sharper BLS fit produces more accurate TOI observables.
 
 ## Scope
 
-Add a single optional input, `known_period_daysays`, to both vetting entry
+Add a single optional input, `known_period_days`, to both vetting entry
 points. When supplied, BLS scans a narrow window around that period plus
 its `P/2` and `2P` harmonics instead of the blind sweep. When omitted,
 behavior is unchanged.
@@ -74,12 +74,12 @@ Add a new keyword argument:
 ```python
 def run_full_vetting(
     ...,
-    known_period_daysays: Optional[float] = None,
+    known_period_days: Optional[float] = None,
     ...,
 ) -> VettingResult:
 ```
 
-If `known_period_daysays` is finite and > 0, call `run_bls_constrained`
+If `known_period_days` is finite and > 0, call `run_bls_constrained`
 instead of `run_bls`. All downstream code (`odd_even_check`,
 `secondary_eclipse_search`, `measure_shape`, physics, verdict) consumes
 the same `bls` dict shape and is unchanged.
@@ -90,7 +90,7 @@ the same `bls` dict shape and is unchanged.
 parameter that becomes the `period_consensus` ("external (ExoFOP/user)").
 The multi-sector orchestrator must:
 
-1. **Thread `known_period_daysays` to per-sector vetting.** Pass it into
+1. **Thread `known_period_days` to per-sector vetting.** Pass it into
    every `run_full_vetting` call so each sector runs constrained BLS.
 2. **Reuse it as the consensus input.** Pass the same value as `period_d`
    into `run_multisector_analysis`. Source label becomes
@@ -115,11 +115,11 @@ The multi-sector orchestrator must:
 
 The existing per-object `periods_consistent` check inside
 `_cluster_events_into_objects` uses the same tightened tolerance when
-`known_period_daysays` is set.
+`known_period_days` is set.
 
 ### Defensive fallback
 
-If the pipeline receives `known_period_daysays` that is non-finite, ≤ 0, or
+If the pipeline receives `known_period_days` that is non-finite, ≤ 0, or
 > `0.7 × span`, it falls back to the blind `run_bls` and records
 `bls["constrained_fallback_reason"]`. The API layer is the primary
 validator; this is belt-and-suspenders.
@@ -128,7 +128,7 @@ validator; this is belt-and-suspenders.
 
 `backend/app/main.py`:
 
-- Add `known_period_daysays: float | None = None` to the single-sector vetting
+- Add `known_period_days: float | None = None` to the single-sector vetting
   request model.
 - Add the same field to the multi-sector request model.
 - Validation: if supplied, must be finite and in `(0, 1000]`; otherwise
@@ -150,7 +150,7 @@ No DB or migration changes. No new dependencies.
   > search.
 
 - Empty input → omit the field from the request body (don't send `0` or
-  `null`). Request type: `known_period_daysays?: number`.
+  `null`). Request type: `known_period_days?: number`.
 - When the response has `bls.constrained === true`, render a small badge
   on the BLS panel: **"Constrained search (±2% around {known_period_input_days} d,
   matched {matched_harmonic})"**.
@@ -177,14 +177,14 @@ New file `backend/tests/test_pipeline_known_period.py`:
    handles the low-SDE case downstream).
 4. Output dict has all keys that `run_bls()` produces, plus the new ones.
 
-Extend an existing `run_full_vetting` test to pass `known_period_daysays` and
+Extend an existing `run_full_vetting` test to pass `known_period_days` and
 assert `result.bls["constrained"] is True` and the new keys are present.
 
 Multi-sector reconciliation tests (new file
 `backend/tests/test_multisector_known_period.py`):
 
 1. Three synthetic sectors with the same injected transit at P = 3.1 d.
-   Call the multi-sector orchestrator with `known_period_daysays=3.1`.
+   Call the multi-sector orchestrator with `known_period_days=3.1`.
    Assert `period_consensus["source"]` is `"user known period
    (constrained BLS)"`, `harmonic_disagreement` is `False`, and the
    `refined_median_d` is within tol of 3.1.
