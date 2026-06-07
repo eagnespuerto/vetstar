@@ -32,9 +32,38 @@ const VETTING_LOADING_MSGS = [
   "Asking the star to hold still…",
   "Bribing photons to arrive on time…",
   "Untangling odd transits from even ones…",
-  "Running BLS + Lomb-Scargle + centroid + odd/even + secondary tests…",
+  "Lassoing the planet…",
+  "Connecting the dots…",
   "Politely interrogating the centroid…",
   "Checking if it's a planet or just a clingy binary…",
+  "Convincing the photons to behave…",
+  "Squinting at the noise floor…",
+];
+
+const MULTISECTOR_LOADING_MSGS = [
+  "Stitching sectors together with cosmic string…",
+  "Cross-checking the planet across multiple timelines…",
+  "Lassoing the planet across five sectors…",
+  "Asking each sector for its alibi…",
+  "Connecting the dots between sectors…",
+  "Phoning TESS for every visit on file…",
+  "Reconciling sector-to-sector gossip…",
+  "Hunting for the same dip in every sector…",
+  "Triangulating the transit across time…",
+  "Convincing sectors to agree on a period…",
+];
+
+const PDF_LOADING_MSGS = [
+  "Asking an alien for the write-up…",
+  "Rendering plots into PDF goodness…",
+  "Convincing matplotlib to behave…",
+  "Stamping the report with cosmic credentials…",
+  "Teaching the printer about exoplanets…",
+  "Binding the report with hyperlinks…",
+  "Polishing the figures one last time…",
+  "Folding the universe into A4…",
+  "Filing paperwork at the planet office…",
+  "Translating photons into prose…",
 ];
 
 const HCI_LOADING_MSGS = [
@@ -111,6 +140,7 @@ export default function App() {
   const [multiSectors, setMultiSectors] = useState<number[]>([]);
   const [msData, setMsData] = useState<any>(null);
   const [msTopLoading, setMsTopLoading] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const MAX_MULTI_SECTORS = 5;
   const toggleMultiSector = (s: number) => {
@@ -174,11 +204,14 @@ export default function App() {
 
   const runReport = async () => {
     if (!file) return;
+    setPdfBusy(true);
     try {
       const blob = await downloadReport(file, params);
       triggerDownload(blob, `vetting_TIC${result?.star.tic_id || "report"}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -226,11 +259,14 @@ export default function App() {
     const tic = parseInt(ticInput);
     const sec = parseInt(sectorInput);
     if (!tic || !sec) return;
+    setPdfBusy(true);
     try {
       const blob = await mastReport(tic, sec, params);
       triggerDownload(blob, `vetting_TIC${tic}_S${String(sec).padStart(3, "0")}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -340,10 +376,10 @@ export default function App() {
                 </button>
                 <button
                   onClick={runReport}
-                  disabled={!file || status === "analyzing"}
+                  disabled={!file || status === "analyzing" || pdfBusy}
                   className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
                 >
-                  Download PDF report
+                  {pdfBusy ? "Building PDF…" : "Download PDF report"}
                 </button>
               </div>
             </div>
@@ -512,10 +548,10 @@ export default function App() {
                   </button>
                   <button
                     onClick={runMastReport}
-                    disabled={status === "analyzing" || !ticInput || !sectorInput}
+                    disabled={status === "analyzing" || pdfBusy || !ticInput || !sectorInput}
                     className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
                   >
-                    Fetch & download PDF
+                    {pdfBusy ? "Building PDF…" : "Fetch & download PDF"}
                   </button>
                 </>
               ) : (
@@ -543,9 +579,22 @@ export default function App() {
 
         {status === "analyzing" && (
           <div className="rounded bg-blue-50 border border-blue-200 p-4 text-blue-900">
-            <CyclingLoader messages={VETTING_LOADING_MSGS} />
+            <CyclingLoader
+              messages={msTopLoading ? MULTISECTOR_LOADING_MSGS : VETTING_LOADING_MSGS}
+            />
             <span className="block mt-1 text-xs text-blue-700">
-              This can take 10–30 seconds for a 2-min cadence sector.
+              {msTopLoading
+                ? "Multi-sector runs can take a minute or two — we're crunching several sectors at once."
+                : "This can take 10–30 seconds for a 2-min cadence sector."}
+            </span>
+          </div>
+        )}
+
+        {pdfBusy && status !== "analyzing" && (
+          <div className="rounded bg-emerald-50 border border-emerald-200 p-4 text-emerald-900">
+            <CyclingLoader messages={PDF_LOADING_MSGS} />
+            <span className="block mt-1 text-xs text-emerald-700">
+              Building your PDF report — typically 10–30 seconds.
             </span>
           </div>
         )}
@@ -1966,6 +2015,14 @@ function MultisectorPanel({ data }: { data: any }) {
           {pdfBusy ? "Building…" : "Download multi-sector PDF"}
         </button>
       </div>
+      {pdfBusy && (
+        <div className="rounded bg-emerald-50 border border-emerald-200 p-3 text-emerald-900 text-sm">
+          <CyclingLoader messages={PDF_LOADING_MSGS} />
+          <span className="block mt-1 text-xs text-emerald-700">
+            Stitching every sector's plots into one PDF — this can take a minute.
+          </span>
+        </div>
+      )}
       {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
 
       {/* SPOC DV time series fetch status for this multi-sector run */}
