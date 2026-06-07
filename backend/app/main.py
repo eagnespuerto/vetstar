@@ -227,7 +227,17 @@ async def analyze(
     rotation_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
     odd_even_sigma: float = 3.0,
+    known_period_days: Optional[float] = None,
 ):
+    if known_period_days is not None and (
+        not math.isfinite(known_period_days)
+        or known_period_days <= 0
+        or known_period_days > 1000
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="known_period_days must be a finite number in (0, 1000].",
+        )
     tmp_path = None
     try:
         tmp_path = _save_upload_to_tempfile(file)
@@ -247,6 +257,7 @@ async def analyze(
             rotation_period_days=rotation_period_days,
             secondary_sigma=secondary_sigma,
             odd_even_sigma=odd_even_sigma,
+            known_period_days=known_period_days,
         )
         d = result.to_dict()
         d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
@@ -272,7 +283,17 @@ async def report(
     rotation_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
     odd_even_sigma: float = 3.0,
+    known_period_days: Optional[float] = None,
 ):
+    if known_period_days is not None and (
+        not math.isfinite(known_period_days)
+        or known_period_days <= 0
+        or known_period_days > 1000
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="known_period_days must be a finite number in (0, 1000].",
+        )
     tmp_path = None
     try:
         tmp_path = _save_upload_to_tempfile(file)
@@ -288,6 +309,7 @@ async def report(
             rotation_period_days=rotation_period_days,
             secondary_sigma=secondary_sigma,
             odd_even_sigma=odd_even_sigma,
+            known_period_days=known_period_days,
         )
         _cache_lc(parsed)
         # Opportunistic SPOC DVT fetch — adds the DV phase-fold image and
