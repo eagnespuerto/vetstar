@@ -261,7 +261,33 @@ summary image, the ExoMiner views, and the multi-sector timeline / per-object
 HCI / per-object ExoMiner views — has a share button that uploads the PNG to
 ImgBB and returns a public link (with Markdown and BBCode embeds); an "upload
 all plots" action bundles the full set into a single shareable album for
-pasting into issues or collaboration threads.
+pasting into issues or collaboration threads. Single-image exports — including
+the **SPOC DV phase-fold** — are uploaded with TIC-aware filenames (e.g.
+`TIC_12345678_S20_SPOC_DV_phase_fold`) so the target stays attached to the
+image when it lands in an issue, thread, or wiki.
+
+### Bulk image download + ExoFOP manifest
+
+Next to the ImgBB action on the **Diagnostic plots** panel, a **⬇ Bulk
+download + ExoFOP manifest** button streams every diagnostic PNG (light
+curve, event zoom, centroid, BLS, Lomb-Scargle, and the SPOC DV phase-fold
+when available) with TIC-named filenames like
+`TIC12345678_S020_lightcurve.png`. Alongside the images it drops a
+pipe-delimited `..._exofop_manifest.txt` in the **ExoFOP-TESS bulk file
+upload** column format (`target|tag|group|prop_period|filename|description`),
+so you can edit the group / proprietary period and submit the whole batch to
+ExoFOP-TESS in one go instead of attaching plots one at a time.
+
+### Witty cycling status messages
+
+While the pipeline is busy — single-sector vetting, multi-sector runs, and
+PDF report builds — the UI shows a small spinning icon and cycles through a
+set of light-hearted status lines ("Lassoing the planet…", "Connecting the
+dots…", "Asking an alien for the write-up…", etc.) so long-running operations
+feel a little less like staring at a spinner. The multi-sector and PDF flows
+get their own dedicated message pools, and the previously redundant
+"BLS + Lomb-Scargle + centroid + odd/even + secondary" line was removed from
+the main vetting cycle to avoid duplicating what the footer already states.
 
 ### Multi-sector analysis
 
