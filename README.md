@@ -254,6 +254,17 @@ interactive light-curve plot to mark a candidate event. The backend
 characterises its depth, duration, U/V shape, and — when centroid moments are
 cached — an on-target test, via `POST /api/manual_dip`.
 
+### Witty cycling status messages
+
+While the pipeline is busy — single-sector vetting, multi-sector runs, and
+PDF report builds — the UI shows a small spinning icon and cycles through a
+set of light-hearted status lines ("Lassoing the planet…", "Connecting the
+dots…", "Asking an alien for the write-up…", etc.) so long-running operations
+feel a little less like staring at a spinner. The multi-sector and PDF flows
+get their own dedicated message pools, and the previously redundant
+"BLS + Lomb-Scargle + centroid + odd/even + secondary" line was removed from
+the main vetting cycle to avoid duplicating what the footer already states.
+
 ### Plot sharing (ImgBB)
 
 Every generated image — the diagnostic and phase-folded plots, the HCI
