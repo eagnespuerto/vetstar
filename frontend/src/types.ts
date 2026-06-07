@@ -78,6 +78,31 @@ export interface DetrendBlock {
   rms_reduction_pct: number | null;
 }
 
+/** BLS result fields produced by the backend (subset typed for the constrained-search UI). */
+export interface BlsResult {
+  period?: number;
+  t0?: number;
+  duration?: number;
+  depth?: number;
+  /** True when BLS searched a narrow window around a user-supplied known period. */
+  constrained?: boolean;
+  known_period_input_days?: number;
+  matched_harmonic?: "P" | "P/2" | "2P";
+  constrained_fallback_reason?: string;
+}
+
+/** Multi-sector period consensus block (extended for constrained-BLS harmonic reporting). */
+export interface PeriodConsensus {
+  value_d?: number;
+  std_d?: number;
+  source?: string;
+  harmonic_disagreement?: boolean;
+  per_sector_matches?: [number, "P" | "P/2" | "2P" | null][];
+  refined_median_d?: number;
+  refined_std_d?: number;
+  no_constrained_sectors?: boolean;
+}
+
 export interface SensitivityEcho {
   threshold: number;
   min_snr: number;
@@ -87,7 +112,7 @@ export interface SensitivityEcho {
 export interface VettingResult {
   star: StarInfo;
   summary: Record<string, number>;
-  bls: Record<string, any>;
+  bls: BlsResult & Record<string, any>;
   lomb_scargle: Record<string, any>;
   events: Event[];
   centroid: Record<string, any>;
