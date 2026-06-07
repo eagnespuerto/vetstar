@@ -159,7 +159,8 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   high_variability: bool = False,
                   rotation_period_days: Optional[float] = None,
                   secondary_sigma: float = 3.0,
-                  odd_even_sigma: float = 3.0):
+                  odd_even_sigma: float = 3.0,
+                  known_period_days: Optional[float] = None):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
     sec_sig = _validate_secondary_sigma(secondary_sigma)
     oe_sig = _validate_odd_even_sigma(odd_even_sigma)
@@ -175,6 +176,7 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
         detect_min_snr=snr,
         high_variability=high_variability,
         rotation_period_days=rotation_period_days,
+        known_period_days=known_period_days,
         secondary_sigma=sec_sig,
         odd_even_sigma=oe_sig,
     )
@@ -969,6 +971,9 @@ def _run_mast_multisector(query: MultisectorQuery):
                 rotation_period_days=getattr(query, "rotation_period_days", None),
                 secondary_sigma=getattr(query, "secondary_sigma", 3.0),
                 odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
+                # Task 3 will populate this from the request model; bridged via
+                # getattr so each sector actually runs constrained BLS today.
+                known_period_days=getattr(query, "known_period_days", None),
             )
             # Cache the cleaned LC per sector so ExoMiner can reuse it below.
             _cache_lc(parsed)

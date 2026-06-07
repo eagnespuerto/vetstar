@@ -57,5 +57,5 @@ def test_periods_consistent_uses_tightened_tolerance_when_constrained():
         period_d=3.1, known_period_days=3.1,
     )
     objs = out.get("objects", [])
-    if objs:
-        assert objs[0]["periods_consistent"] is False
+    assert len(objs) >= 1, "expected at least one clustered object"
+    assert objs[0]["periods_consistent"] is False

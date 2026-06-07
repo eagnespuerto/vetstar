@@ -1468,6 +1468,7 @@ def run_multisector_analysis(
             "source": "user known period (constrained BLS)",
             "harmonic_disagreement": len(harmonics) > 1,
             "per_sector_matches": per_sector_matches,
+            "no_constrained_sectors": len(per_sector_matches) == 0,
         }
         if refined_median_d is not None:
             period_consensus["refined_median_d"] = refined_median_d
