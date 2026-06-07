@@ -97,6 +97,7 @@ export default function App() {
     rotationPeriod: null,
     secondarySigma: 3.0,
     oddEvenSigma: 3.0,
+    knownPeriod: null,
   });
 
   // MAST mode state
@@ -806,6 +807,34 @@ function SensitivityPanel({
             })()}
           </div>
 
+          <div className="pt-2 border-t border-slate-200">
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Known period (days, optional)
+            </label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              placeholder="e.g. 3.14 — leave blank for blind BLS sweep"
+              value={params.knownPeriod ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                setParams({
+                  ...params,
+                  knownPeriod: v === "" ? null : parseFloat(v),
+                });
+              }}
+              className="w-full border rounded px-2 py-1 font-mono text-xs"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              If set, BLS searches a ±2% window around this period and its
+              P/2 and 2P harmonics instead of a blind sweep. Sharpens
+              recovered period, t0, duration, and depth — which feeds
+              cleaner inputs into the odd/even, secondary, and
+              transit-shape checks. Leave blank for unconstrained search.
+            </p>
+          </div>
+
           <p className="text-xs text-slate-500 italic">
             Tip: if real shallow transits are being missed, lower SNR first
             (slide left). If noise spikes are being flagged as events, raise
@@ -1097,7 +1126,24 @@ function ResultsView({ result }: { result: VettingResult }) {
 
       {/* Tests */}
       <div className="grid md:grid-cols-2 gap-4">
-        <KV title="BLS (Box Least Squares)" data={result.bls} hide={["_periodogram"]} />
+        <div>
+          {result.bls?.constrained && (
+            <div className="mb-2 text-xs">
+              <span className="inline-block rounded bg-blue-100 px-2 py-0.5 text-blue-800">
+                Constrained search (±2% around{" "}
+                {result.bls.known_period_input_days?.toFixed(4)} d, matched{" "}
+                {result.bls.matched_harmonic})
+              </span>
+              {result.bls.constrained_fallback_reason && (
+                <p className="mt-1 text-amber-700">
+                  Constrained search fell back to blind sweep:{" "}
+                  {result.bls.constrained_fallback_reason}
+                </p>
+              )}
+            </div>
+          )}
+          <KV title="BLS (Box Least Squares)" data={result.bls} hide={["_periodogram"]} />
+        </div>
         <KV title="Lomb-Scargle periodogram" data={result.lomb_scargle} hide={["top_peaks"]} />
         <KV title="Centroid (background-blend test)" data={result.centroid} />
         <KV title="Transit shape (U vs V)" data={result.shape} />
@@ -2182,14 +2228,40 @@ function MultisectorPanel({ data }: { data: any }) {
 
           {/* Period consensus */}
           {data.period_consensus && (
-            <p className="text-xs text-slate-600">
-              <strong>Period consensus:</strong>{" "}
-              {data.period_consensus.value_d?.toFixed(5)} d{" "}
-              {data.period_consensus.std_d
-                ? `± ${data.period_consensus.std_d.toFixed(5)} d`
-                : ""}{" "}
-              <span className="text-slate-400">({data.period_consensus.source})</span>
-            </p>
+            <div className="text-xs text-slate-600 space-y-1">
+              <p>
+                <strong>Period consensus:</strong>{" "}
+                {data.period_consensus.value_d?.toFixed(5)} d{" "}
+                {data.period_consensus.std_d
+                  ? `± ${data.period_consensus.std_d.toFixed(5)} d`
+                  : ""}{" "}
+                <span className="text-slate-400">({data.period_consensus.source})</span>
+              </p>
+              {data.period_consensus.refined_median_d != null && (
+                <p className="text-slate-500">
+                  Refined (constrained-BLS sectors only):{" "}
+                  {data.period_consensus.refined_median_d.toFixed(5)} d
+                  {data.period_consensus.refined_std_d
+                    ? ` ± ${data.period_consensus.refined_std_d.toFixed(5)} d`
+                    : ""}
+                </p>
+              )}
+              {data.period_consensus.harmonic_disagreement && (
+                <p className="text-amber-700">
+                  Harmonic disagreement across sectors —{" "}
+                  {data.period_consensus.per_sector_matches
+                    ?.map(([s, h]: [number, string | null]) => `S${s}:${h ?? "?"}`)
+                    .join(", ")}
+                  . Your input period may be off by a factor of two on some sectors.
+                </p>
+              )}
+              {data.period_consensus.no_constrained_sectors && (
+                <p className="text-amber-700">
+                  No sector matched a harmonic of the supplied known period
+                  within ±2% — falling back to blind-sweep medians.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Fetch errors */}

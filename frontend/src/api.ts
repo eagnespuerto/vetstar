@@ -12,6 +12,7 @@ export interface DetectParams {
   rotationPeriod: number | null; // optional manual rotation period (days)
   secondarySigma: number;        // 0.5..20, default 3
   oddEvenSigma: number;          // 0.5..20, default 3 — EB-flag threshold
+  knownPeriod?: number | null;   // optional known period (days) — constrains BLS to ±2% around P, P/2, 2P
 }
 
 const DEFAULT_PARAMS: DetectParams = {
@@ -21,7 +22,16 @@ const DEFAULT_PARAMS: DetectParams = {
   rotationPeriod: null,
   secondarySigma: 3.0,
   oddEvenSigma: 3.0,
+  knownPeriod: null,
 };
+
+function hasKnownPeriod(p: DetectParams): p is DetectParams & { knownPeriod: number } {
+  return (
+    typeof p.knownPeriod === "number" &&
+    Number.isFinite(p.knownPeriod) &&
+    p.knownPeriod > 0
+  );
+}
 
 function qs(params: DetectParams = DEFAULT_PARAMS): string {
   const base = `?detect_threshold=${params.threshold}&detect_min_snr=${params.minSnr}`;
@@ -29,7 +39,8 @@ function qs(params: DetectParams = DEFAULT_PARAMS): string {
     `&high_variability=${params.highVariability}` +
     (params.rotationPeriod !== null ? `&rotation_period_days=${params.rotationPeriod}` : "") +
     `&secondary_sigma=${params.secondarySigma}` +
-    `&odd_even_sigma=${params.oddEvenSigma}`;
+    `&odd_even_sigma=${params.oddEvenSigma}` +
+    (hasKnownPeriod(params) ? `&known_period_days=${params.knownPeriod}` : "");
   return base + tail;
 }
 
@@ -76,6 +87,7 @@ export async function mastAnalyze(ticId: number, sector: number, params: DetectP
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
+      ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
     }),
   });
   if (!r.ok) throw new Error(`MAST analyze failed (${r.status}): ${await r.text()}`);
@@ -110,7 +122,7 @@ export async function fetchHabitability(
 
 export async function fetchMultisector(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0, knownPeriod: null },
   sectors?: number[]
 ) {
   const r = await fetch(`${API_BASE}/api/mast/multisector`, {
@@ -124,6 +136,7 @@ export async function fetchMultisector(
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
+      ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -133,7 +146,7 @@ export async function fetchMultisector(
 
 export async function multisectorReport(
   ticId: number,
-  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
+  params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0, knownPeriod: null },
   sectors?: number[]
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/mast/multisector/report`, {
@@ -147,6 +160,7 @@ export async function multisectorReport(
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
+      ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
       ...(sectors && sectors.length ? { sectors } : {}),
     }),
   });
@@ -166,6 +180,7 @@ export async function mastReport(ticId: number, sector: number, params: DetectPa
       rotation_period_days: params.rotationPeriod,
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
+      ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
     }),
   });
   if (!r.ok) throw new Error(`MAST report failed: ${await r.text()}`);

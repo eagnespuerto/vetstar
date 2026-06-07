@@ -11,6 +11,10 @@ export const GLOSSARY: Record<string, string> = {
   // --- Pipeline concepts ---
   "BLS":
     "Box Least Squares — a period-search algorithm that looks for repeating box-shaped dips in brightness, which is how transits appear in a light curve. A strong BLS peak means the data contain a periodic dip pattern.",
+  "Constrained BLS":
+    "A BLS run restricted to a narrow window around a user-supplied known period. When you supply a known period, Vetstar searches a ±2% window around that period and its P/2 and 2P harmonics instead of the blind sweep from 0.5 d to 0.7 × span. This sharpens the recovered period, t0, duration, and depth — which feeds cleaner inputs into the odd/even, secondary, and transit-shape checks.",
+  "matched_harmonic":
+    "Which harmonic of the supplied known period the constrained BLS search locked onto: \"P\" (the input period itself), \"P/2\" (half — common when the true orbital period was reported as the eclipsing-binary alternation period), or \"2P\" (double).",
   "Lomb-Scargle":
     "A period-search method that looks for smooth, sinusoidal brightness variations (like starspots rotating in and out of view). Unlike BLS, it doesn't assume box-shaped dips.",
   "centroid":
