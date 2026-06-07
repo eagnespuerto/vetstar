@@ -5,6 +5,7 @@ FastAPI backend for TESS vetting app.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import pathlib
 import tempfile
@@ -19,7 +20,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
 from .parsers import parse_upload
@@ -339,6 +340,25 @@ class MastQuery(BaseModel):
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
     odd_even_sigma: float = 3.0
+    known_period_days: Optional[float] = Field(
+        default=None,
+        description=(
+            "Optional. If set, BLS searches a ±2% window around this "
+            "period (and its P/2 and 2P harmonics) instead of a blind "
+            "sweep. Must be in (0, 1000] days."
+        ),
+    )
+
+    @field_validator("known_period_days")
+    @classmethod
+    def _validate_known_period_days(cls, v):
+        if v is None:
+            return v
+        if not math.isfinite(v) or v <= 0 or v > 1000:
+            raise ValueError(
+                "known_period_days must be a finite number in (0, 1000]."
+            )
+        return v
 
 
 @app.get("/api/mast/sectors/{tic_id}")
@@ -381,10 +401,11 @@ def _mast_fetch_and_analyze(query: MastQuery):
     try:
         result = _run_pipeline(
             parsed, query.detect_threshold, query.detect_min_snr,
-            high_variability=getattr(query, "high_variability", False),
-            rotation_period_days=getattr(query, "rotation_period_days", None),
-            secondary_sigma=getattr(query, "secondary_sigma", 3.0),
-            odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
+            high_variability=query.high_variability,
+            rotation_period_days=query.rotation_period_days,
+            secondary_sigma=query.secondary_sigma,
+            odd_even_sigma=query.odd_even_sigma,
+            known_period_days=query.known_period_days,
         )
     except Exception as e:
         raise _handle_exception("pipeline", e)
@@ -488,6 +509,25 @@ class MultisectorQuery(BaseModel):
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
     odd_even_sigma: float = 3.0
+    known_period_days: Optional[float] = Field(
+        default=None,
+        description=(
+            "Optional. If set, BLS searches a ±2% window around this "
+            "period (and its P/2 and 2P harmonics) instead of a blind "
+            "sweep. Must be in (0, 1000] days."
+        ),
+    )
+
+    @field_validator("known_period_days")
+    @classmethod
+    def _validate_known_period_days(cls, v):
+        if v is None:
+            return v
+        if not math.isfinite(v) or v <= 0 or v > 1000:
+            raise ValueError(
+                "known_period_days must be a finite number in (0, 1000]."
+            )
+        return v
 
 
 def _habitability_bundle(query: HabitabilityQuery) -> dict:
@@ -967,13 +1007,11 @@ def _run_mast_multisector(query: MultisectorQuery):
             result = _run_pipeline(
                 parsed,
                 query.detect_threshold, query.detect_min_snr,
-                high_variability=getattr(query, "high_variability", False),
-                rotation_period_days=getattr(query, "rotation_period_days", None),
-                secondary_sigma=getattr(query, "secondary_sigma", 3.0),
-                odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
-                # Task 3 will populate this from the request model; bridged via
-                # getattr so each sector actually runs constrained BLS today.
-                known_period_days=getattr(query, "known_period_days", None),
+                high_variability=query.high_variability,
+                rotation_period_days=query.rotation_period_days,
+                secondary_sigma=query.secondary_sigma,
+                odd_even_sigma=query.odd_even_sigma,
+                known_period_days=query.known_period_days,
             )
             # Cache the cleaned LC per sector so ExoMiner can reuse it below.
             _cache_lc(parsed)
@@ -1000,11 +1038,10 @@ def _run_mast_multisector(query: MultisectorQuery):
         sector_results,
         detect_threshold=query.detect_threshold,
         detect_min_snr=query.detect_min_snr,
-        high_variability=getattr(query, "high_variability", False),
-        secondary_sigma=getattr(query, "secondary_sigma", 3.0),
-        odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
-        # Task 3 will populate this from the request model.
-        known_period_days=getattr(query, "known_period_days", None),
+        high_variability=query.high_variability,
+        secondary_sigma=query.secondary_sigma,
+        odd_even_sigma=query.odd_even_sigma,
+        known_period_days=query.known_period_days,
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)
