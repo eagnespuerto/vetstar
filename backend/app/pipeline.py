@@ -381,7 +381,7 @@ BLS_KNOWN_PERIOD_TOL_FRAC = 0.02
 
 def run_bls_constrained(
     t, f, fe,
-    known_period_d: float,
+    known_period_days: float,
     tol_frac: float = BLS_KNOWN_PERIOD_TOL_FRAC,
     n_periods: int = 4000,
     search_harmonics: bool = True,
@@ -389,18 +389,18 @@ def run_bls_constrained(
     """BLS over a narrow window around a known period plus P/2 and 2P harmonics.
 
     Returns the same dict shape as :func:`run_bls` plus three extra keys:
-    ``constrained``, ``known_period_input_d``, and ``matched_harmonic``
+    ``constrained``, ``known_period_input_days``, and ``matched_harmonic``
     (one of ``"P"``, ``"P/2"``, ``"2P"``).
     """
     span = float(t.max() - t.min())
     p_max_blind = max(0.5, span * 0.7)
 
-    sub_grids = [("P", known_period_d)]
+    sub_grids = [("P", known_period_days)]
     if search_harmonics:
-        if known_period_d / 2.0 >= 0.5:
-            sub_grids.append(("P/2", known_period_d / 2.0))
-        if 2.0 * known_period_d <= p_max_blind:
-            sub_grids.append(("2P", 2.0 * known_period_d))
+        if known_period_days / 2.0 >= 0.5:
+            sub_grids.append(("P/2", known_period_days / 2.0))
+        if 2.0 * known_period_days <= p_max_blind:
+            sub_grids.append(("2P", 2.0 * known_period_days))
 
     per_grid = max(200, n_periods // len(sub_grids))
     grid_periods = []
@@ -425,7 +425,8 @@ def run_bls_constrained(
             matched = label
             break
 
-    sde = float((res.power[ib] - np.median(res.power)) / np.std(res.power))
+    _std = float(np.std(res.power))
+    sde = float((res.power[ib] - np.median(res.power)) / _std) if _std > 0 else 0.0
     return {
         "period": best_p,
         "t0": float(res.transit_time[ib]),
@@ -443,7 +444,7 @@ def run_bls_constrained(
             "power": res.power.tolist()[::20],
         },
         "constrained": True,
-        "known_period_input_d": float(known_period_d),
+        "known_period_input_days": float(known_period_days),
         "matched_harmonic": matched,
     }
 
@@ -459,7 +460,8 @@ def run_bls(
     periods = np.linspace(p_min, p_max, n_periods)
     res = bls.power(periods, durations)
     ib = int(np.argmax(res.power))
-    sde = float((res.power[ib] - np.median(res.power)) / np.std(res.power))
+    _std = float(np.std(res.power))
+    sde = float((res.power[ib] - np.median(res.power)) / _std) if _std > 0 else 0.0
     return {
         "period": float(res.period[ib]),
         "t0": float(res.transit_time[ib]),
@@ -1198,7 +1200,7 @@ def run_full_vetting(
     if (known_period_days is not None
             and np.isfinite(known_period_days)
             and 0 < known_period_days <= 0.7 * span):
-        bls = run_bls_constrained(t_c, f_c, fe_c, known_period_d=known_period_days)
+        bls = run_bls_constrained(t_c, f_c, fe_c, known_period_days=known_period_days)
     else:
         bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
         if known_period_days is not None:

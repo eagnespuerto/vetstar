@@ -28,9 +28,9 @@ def test_constrained_recovers_period_with_strong_power():
     rng = np.random.default_rng(0)
     t, f, fe = _inject_box_transit(rng, period_d=3.1)
     blind = run_bls(t, f, fe, p_min=0.5, p_max=10.0, n_periods=2000)
-    constrained = run_bls_constrained(t, f, fe, known_period_d=3.1)
+    constrained = run_bls_constrained(t, f, fe, known_period_days=3.1)
     assert constrained["constrained"] is True
-    assert constrained["known_period_input_d"] == pytest.approx(3.1)
+    assert constrained["known_period_input_days"] == pytest.approx(3.1)
     assert constrained["matched_harmonic"] == "P"
     assert abs(constrained["period"] - 3.1) / 3.1 <= BLS_KNOWN_PERIOD_TOL_FRAC
     # Peak BLS power is the raw detection statistic and is comparable
@@ -42,7 +42,7 @@ def test_constrained_recovers_period_with_strong_power():
 def test_constrained_handles_two_x_alias():
     rng = np.random.default_rng(1)
     t, f, fe = _inject_box_transit(rng, period_d=3.1)
-    result = run_bls_constrained(t, f, fe, known_period_d=6.2)
+    result = run_bls_constrained(t, f, fe, known_period_days=6.2)
     assert result["matched_harmonic"] == "P/2"
     assert abs(result["period"] - 3.1) / 3.1 <= BLS_KNOWN_PERIOD_TOL_FRAC
 
@@ -50,21 +50,24 @@ def test_constrained_handles_two_x_alias():
 def test_constrained_with_wrong_period_returns_low_sde():
     rng = np.random.default_rng(2)
     t, f, fe = _inject_box_transit(rng, period_d=3.1)
-    result = run_bls_constrained(t, f, fe, known_period_d=10.0)
+    result = run_bls_constrained(t, f, fe, known_period_days=10.0)
     assert result["constrained"] is True
     assert np.isfinite(result["sde"])
+    # Vetstar uses SDE < 7 as the "not a clear detection" threshold in
+    # make_verdict; a wrong-period constrained search should be well below.
+    assert result["sde"] < 7.0
 
 
 def test_constrained_output_shape_matches_run_bls_plus_new_keys():
     rng = np.random.default_rng(3)
     t, f, fe = _inject_box_transit(rng, period_d=3.1)
     blind = run_bls(t, f, fe, p_min=0.5, p_max=10.0, n_periods=2000)
-    constrained = run_bls_constrained(t, f, fe, known_period_d=3.1)
+    constrained = run_bls_constrained(t, f, fe, known_period_days=3.1)
     for key in ("period", "t0", "duration", "depth", "power", "sde",
                 "n_transits_in_window", "_periodogram"):
         assert key in constrained, f"missing {key}"
         assert key in blind
-    for key in ("constrained", "known_period_input_d", "matched_harmonic"):
+    for key in ("constrained", "known_period_input_days", "matched_harmonic"):
         assert key in constrained
 
 
@@ -78,4 +81,4 @@ def test_run_full_vetting_propagates_known_period():
         star=star, known_period_days=3.1,
     )
     assert result.bls.get("constrained") is True
-    assert result.bls.get("known_period_input_d") == pytest.approx(3.1)
+    assert result.bls.get("known_period_input_days") == pytest.approx(3.1)
