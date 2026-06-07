@@ -164,8 +164,11 @@ New file `backend/tests/test_pipeline_known_period.py`:
 
 1. Synthetic transit at P = 3.1 d injected into a noisy lightcurve. Run
    `run_bls_constrained(known_period_d=3.1)`. Assert recovered period is
-   within tol, and `sde` is greater than the SDE from `run_bls()` on the
-   same data.
+   within tol, and the raw BLS peak `power` is at least 90% of the
+   `run_bls()` peak power on the same data. (Peak power is the
+   grid-invariant detection statistic; SDE = (peak − median) / std is
+   sensitive to the period-grid width, so SDE values from constrained
+   vs. blind searches are not directly comparable.)
 2. Same synthetic data, but call with `known_period_d=6.2` (the 2× alias).
    Assert `matched_harmonic == "P/2"` and recovered period ≈ 3.1.
 3. Same synthetic data, but call with `known_period_d=10.0` (wrong).
