@@ -374,6 +374,80 @@ def run_lomb_scargle(t, f, fe, p_min=0.1, p_max=20.0) -> dict:
     }
 
 
+# Default fractional half-width of the BLS search window around a known
+# period, e.g. 0.02 means scan periods in [P*0.98, P*1.02].
+BLS_KNOWN_PERIOD_TOL_FRAC = 0.02
+
+
+def run_bls_constrained(
+    t, f, fe,
+    known_period_d: float,
+    tol_frac: float = BLS_KNOWN_PERIOD_TOL_FRAC,
+    n_periods: int = 4000,
+    search_harmonics: bool = True,
+) -> dict:
+    """BLS over a narrow window around a known period plus P/2 and 2P harmonics.
+
+    Returns the same dict shape as :func:`run_bls` plus three extra keys:
+    ``constrained``, ``known_period_input_d``, and ``matched_harmonic``
+    (one of ``"P"``, ``"P/2"``, ``"2P"``).
+    """
+    span = float(t.max() - t.min())
+    p_max_blind = max(0.5, span * 0.7)
+
+    sub_grids = [("P", known_period_d)]
+    if search_harmonics:
+        if known_period_d / 2.0 >= 0.5:
+            sub_grids.append(("P/2", known_period_d / 2.0))
+        if 2.0 * known_period_d <= p_max_blind:
+            sub_grids.append(("2P", 2.0 * known_period_d))
+
+    per_grid = max(200, n_periods // len(sub_grids))
+    grid_periods = []
+    grid_labels = []
+    for label, p in sub_grids:
+        lo = p * (1.0 - tol_frac)
+        hi = p * (1.0 + tol_frac)
+        ps = np.linspace(lo, hi, per_grid)
+        grid_periods.append(ps)
+        grid_labels.append((label, ps))
+
+    periods = np.concatenate(grid_periods)
+    durations = np.array([0.05, 0.1, 0.15, 0.2, 0.3])
+    bls = BoxLeastSquares(t, f, fe)
+    res = bls.power(periods, durations)
+    ib = int(np.argmax(res.power))
+
+    best_p = float(res.period[ib])
+    matched = "P"
+    for label, ps in grid_labels:
+        if ps[0] <= best_p <= ps[-1]:
+            matched = label
+            break
+
+    sde = float((res.power[ib] - np.median(res.power)) / np.std(res.power))
+    return {
+        "period": best_p,
+        "t0": float(res.transit_time[ib]),
+        "duration": float(res.duration[ib]),
+        "depth": float(res.depth[ib]),
+        "power": float(res.power[ib]),
+        "sde": sde,
+        "n_transits_in_window": int(
+            np.floor((t.max() - res.transit_time[ib]) / res.period[ib])
+            - np.ceil((t.min() - res.transit_time[ib]) / res.period[ib])
+            + 1
+        ),
+        "_periodogram": {
+            "periods": periods.tolist()[::20],
+            "power": res.power.tolist()[::20],
+        },
+        "constrained": True,
+        "known_period_input_d": float(known_period_d),
+        "matched_harmonic": matched,
+    }
+
+
 def run_bls(
     t, f, fe, p_min=0.5, p_max=None, n_periods=20000
 ) -> dict:
@@ -1079,6 +1153,7 @@ def run_full_vetting(
     detect_min_snr: float = 4.0,
     high_variability: bool = False,
     rotation_period_days: Optional[float] = None,
+    known_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
     odd_even_sigma: float = 3.0,
 ) -> VettingResult:
@@ -1120,7 +1195,16 @@ def run_full_vetting(
         }
 
     # BLS (runs on detrended residual when high_variability was enabled)
-    bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
+    if (known_period_days is not None
+            and np.isfinite(known_period_days)
+            and 0 < known_period_days <= 0.7 * span):
+        bls = run_bls_constrained(t_c, f_c, fe_c, known_period_d=known_period_days)
+    else:
+        bls = run_bls(t_c, f_c, fe_c, p_min=0.5, p_max=span * 0.7)
+        if known_period_days is not None:
+            bls["constrained_fallback_reason"] = (
+                "known_period_days outside valid range"
+            )
 
     # Direct event detection (user-tunable sensitivity).
     events = detect_events(
