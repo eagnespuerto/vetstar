@@ -84,13 +84,38 @@ instead of `run_bls`. All downstream code (`odd_even_check`,
 `secondary_eclipse_search`, `measure_shape`, physics, verdict) consumes
 the same `bls` dict shape and is unchanged.
 
-### Multi-sector path
+### Multi-sector path & period reconciliation
 
-Thread `known_period_days` through the multi-sector orchestrator into
-each per-sector `run_full_vetting` call. The cross-sector
-`periods_consistent` check still runs; with a constrained search, every
-sector should converge on the same period (within the existing
-`PERIOD_MATCH_TOL_FRAC`), which is the desired outcome.
+`run_multisector_analysis` already accepts an external `period_d`
+parameter that becomes the `period_consensus` ("external (ExoFOP/user)").
+The multi-sector orchestrator must:
+
+1. **Thread `known_period_days` to per-sector vetting.** Pass it into
+   every `run_full_vetting` call so each sector runs constrained BLS.
+2. **Reuse it as the consensus input.** Pass the same value as `period_d`
+   into `run_multisector_analysis`. Source label becomes
+   `"user known period (constrained BLS)"` so the UI can distinguish it
+   from a generic ExoFOP override.
+3. **Tighten the cross-sector consistency check when constrained.** When
+   a known period is supplied, override `periods_consistent`'s tolerance
+   from the default `PERIOD_MATCH_TOL_FRAC` to the same `tol_frac` used
+   by the constrained BLS (default 0.02). All sectors should land inside
+   that window; if they don't, it's a real disagreement worth flagging.
+4. **Detect harmonic disagreement.** Collect `bls["matched_harmonic"]`
+   from each sector. If sectors disagree (e.g. one matches `"P"` and
+   another `"2P"`), set `period_consensus["harmonic_disagreement"] = True`
+   and include a note listing the per-sector matches. This is a strong
+   signal that the user's period is off by a factor of two on at least
+   some sectors.
+5. **Refined median still reported.** Even when an external `period_d`
+   is supplied, also compute the median of per-sector BLS peaks and
+   return it as `period_consensus["refined_median_d"]` plus
+   `["refined_std_d"]`. This gives the user a refined value they can
+   compare against their input.
+
+The existing per-object `periods_consistent` check inside
+`_cluster_events_into_objects` uses the same tightened tolerance when
+`known_period_days` is set.
 
 ### Defensive fallback
 
@@ -152,6 +177,21 @@ New file `backend/tests/test_pipeline_known_period.py`:
 Extend an existing `run_full_vetting` test to pass `known_period_days` and
 assert `result.bls["constrained"] is True` and the new keys are present.
 
+Multi-sector reconciliation tests (new file
+`backend/tests/test_multisector_known_period.py`):
+
+1. Three synthetic sectors with the same injected transit at P = 3.1 d.
+   Call the multi-sector orchestrator with `known_period_days=3.1`.
+   Assert `period_consensus["source"]` is `"user known period
+   (constrained BLS)"`, `harmonic_disagreement` is `False`, and the
+   `refined_median_d` is within tol of 3.1.
+2. Two sectors at P = 3.1 d, one sector deliberately constructed so the
+   2P harmonic wins (e.g. only one transit visible). Assert
+   `harmonic_disagreement` is `True` and the per-sector matches are
+   recorded.
+3. Sectors with periods that drift outside the tightened tolerance —
+   assert the relevant object reports `periods_consistent: False`.
+
 ## Error handling
 
 | Input | Behavior |
@@ -164,7 +204,10 @@ assert `result.bls["constrained"] is True` and the new keys are present.
 ## Non-goals
 
 - No change to `rotation_period_days` or sinusoidal detrend behavior.
-- No change to the multi-sector period reconciliation algorithm.
+- No change to the *event-clustering* step of the multi-sector algorithm
+  (duration-based clustering is unchanged). The period-consistency
+  tolerance inside that step IS tightened when a known period is
+  supplied; the clustering logic itself is not.
 - No "lock period" mode (rejected during brainstorm in favor of a narrow
   search that still validates the input).
 - No user-tunable tolerance in this iteration; the ±2% default is fixed.
