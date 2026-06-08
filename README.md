@@ -268,9 +268,10 @@ image when it lands in an issue, thread, or wiki.
 
 ### Bulk ZIP for ExoFOP-TESS upload
 
-The **Diagnostic plots** panel includes a collapsible **⬇ Build ExoFOP-TESS
-bulk-upload ZIP** section that packages every plot into a single archive
-matching the [ExoFOP-TESS bulk file upload
+Both the single-sector **Diagnostic plots** panel and the **Multi-sector
+analysis** panel include a collapsible **⬇ Build ExoFOP-TESS bulk-upload
+ZIP** section that packages every plot into a single archive matching the
+[ExoFOP-TESS bulk file upload
 spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
 
 - **Three small inputs** — your **initials** (`xx`), a per-day **counter**
@@ -280,13 +281,24 @@ spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
   successive runs on the same day don't collide.
 - **Archive + descriptor** are named `xxYYYYMMDD-nnn.zip` and
   `xxYYYYMMDD-nnn.txt` (matching base names, as the spec requires).
+- **Single-sector contents** — full light curve, event-zoom grid, centroid
+  behaviour, BLS and Lomb-Scargle periodograms, the SPOC DV phase-fold (when
+  a DVT is available), and — once you've clicked **Compute HCI** — the
+  **Habitability Chance Index summary image** with its metrics, weightings,
+  predicted observables, and TLCM geometry.
+- **Multi-sector contents** — the detection-timeline plot, plus, for each
+  identified object, its HCI summary image and the full ExoMiner feature
+  views (global / local / secondary / odd-vs-even, plus centroid global /
+  local and the σ diagnostic). Filenames carry the object id (`obj1`,
+  `obj2`, …) so each object's plots stay grouped on ExoFOP.
 - **Each plot** is renamed to the
   `targetnameC-xxDATESTAMP[optional_info][y].ext` convention, with the
-  correct single-letter type code: `L` (Light Curve) for the full and
-  zoomed light-curve plots and the SPOC DV phase-fold, `O` (Other) for
-  the BLS / Lomb-Scargle periodograms and the centroid diagnostic.
-  Filenames stay under the 100-character cap and are suffixed `a`, `b`, …
-  if a sibling would collide.
+  correct single-letter type code: `L` (Light Curve) for raw photometry
+  views (the full and zoomed light-curve plots, SPOC DV phase-fold, and the
+  ExoMiner global / local / secondary / odd-even phase folds), `O` (Other)
+  for periodograms, centroid diagnostics, the HCI summary image, and the
+  multi-sector timeline. Filenames stay under the 100-character cap and are
+  suffixed `a`, `b`, … if a sibling would collide.
 - **Descriptor rows** have the five pipe-delimited columns ExoFOP expects
   — `filename | data tag | group | proprietary period | description` —
   with group blank and proprietary period set to `0` (the spec mandates
@@ -311,10 +323,17 @@ default — runs the vetting pipeline on each, and produces:
 - A **detection timeline** bar chart (red = dip detected, grey = no dip)
   showing detection consistency across sectors
 - **Object identification** — the **2 deepest events per sector** are pooled
-  and grouped by transit duration into **up to 2 distinct objects**. Each
-  object is **cross-confirmed** when it appears in ≥2 sectors with the *same
-  transit duration* (within a ±0.05 h tolerance, `DURATION_MATCH_TOL_H`) and
-  the *same period*. This separates, e.g., a real repeating planet from a
+  and grouped by transit duration into **up to N distinct objects** (N
+  defaults to 2, configurable per run from 1 up to
+  `MAX_SECTORS × EVENTS_PER_SECTOR = 10` via a small input next to the
+  scope toggle, or the `max_objects` field on the multi-sector API). Bump
+  it up when the deepest dips in a TIC are a contaminant or eclipsing
+  binary and the real TOI of interest would otherwise be merged away — for
+  example, TIC 253126207 / TOI 6568.01 (a ~17-day orbit) only emerges as
+  its own object when N is raised above the default 2. Each object is
+  **cross-confirmed** when it appears in ≥2 sectors with the *same transit
+  duration* (within a ±0.05 h tolerance, `DURATION_MATCH_TOL_H`) and the
+  *same period*. This separates, e.g., a real repeating planet from a
   second signal of different duration in the same target.
 - A **per-sector verdict table** with event counts, BLS period, and SDE
 - A **period consensus** estimate from sectors where BLS SDE > 6
@@ -326,7 +345,10 @@ default — runs the vetting pipeline on each, and produces:
 
 Every image in the multi-sector panel — the detection timeline, each object's
 HCI summary, and each ExoMiner view — has its own **Share** button (ImgBB
-link / Markdown / BBCode).
+link / Markdown / BBCode). The same panel offers a **⬇ Build ExoFOP-TESS
+bulk-upload ZIP (multi-sector)** section that bundles the timeline plus
+every object's HCI summary and ExoMiner views into a single spec-compliant
+archive (see [Bulk ZIP for ExoFOP-TESS upload](#bulk-zip-for-exofop-tess-upload)).
 
 A **Download multi-sector PDF** button on the panel exports the whole analysis
 as a PDF in the same clean format as the single-sector report: an overview
@@ -337,9 +359,11 @@ identified object — its summary, HCI summary image, **ExoFOP TOI parameters**
 list of any sectors that failed to fetch. The report re-runs the analysis on
 the same sectors the panel displayed, so the PDF always matches the screen.
 
-The sector cap, events-per-sector, and object cap are tunable constants
-(`MAX_SECTORS`, `EVENTS_PER_SECTOR`, `MAX_OBJECTS`) at the top of
-`pipeline.py`.
+The sector cap, events-per-sector, default object cap, and hard object
+cap are tunable constants (`MAX_SECTORS`, `EVENTS_PER_SECTOR`,
+`MAX_OBJECTS`, `MAX_OBJECTS_HARD_CAP`) at the top of `pipeline.py`.
+`MAX_OBJECTS` is just the default — each multi-sector request can override
+it up to `MAX_OBJECTS_HARD_CAP` (one bucket per representative event).
 
 ### MAST integration
 
@@ -543,9 +567,11 @@ multi-sector**. The app fetches the sectors, runs the full pipeline on each,
 and displays:
 
 - A **detection timeline** bar chart across sectors
-- **Up to 2 identified objects**, each shown with its median duration, depth,
-  period, the sectors it appears in, and a confirmed / mismatch banner from
-  the same-duration (±0.05 h) and same-period cross-check
+- **Up to N identified objects** (default 2; raise the **Look for up to N
+  distinct objects** input next to the scope toggle, max 10, when the deepest
+  dips are a contaminant masking the real TOI), each shown with its median
+  duration, depth, period, the sectors it appears in, and a confirmed /
+  mismatch banner from the same-duration (±0.05 h) and same-period cross-check
 - For **each object**, its **HCI score + summary image** and full **ExoMiner
   feature views**, recomputed from the sector with that object's deepest event
 - A **per-sector verdict table** with event counts and BLS results
@@ -666,8 +692,8 @@ POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → timeline + up-to-2 objects (each w/ HCI + ExoMiner) JSON
-POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
+POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, ?max_objects (1–10, default 2)} → timeline + up-to-N objects (each w/ HCI + ExoMiner) JSON
+POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, ?max_objects (1–10, default 2)} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
@@ -704,11 +730,13 @@ vetstar/
 │   ├── src/
 │   │   ├── App.tsx             Tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
+│   │   ├── ExofopBulkPanel.tsx Reusable ExoFOP-TESS bulk-upload ZIP builder (single + multi-sector)
 │   │   ├── FfiCutoutPanel.tsx   TESScut FFI cutout panel (auto-loads under results)
 │   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
 │   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
 │   │   ├── imgbb.ts            ImgBB upload client
 │   │   ├── glossary.ts         Term tooltips
+│   │   ├── zip.ts              In-repo store-only ZIP writer (ExoFOP bulk archives)
 │   │   ├── api.ts              API client
 │   │   └── types.ts            Shared TypeScript types
 │   ├── index.html
