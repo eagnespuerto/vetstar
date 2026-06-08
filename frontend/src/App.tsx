@@ -1016,7 +1016,7 @@ function ResultsView({ result }: { result: VettingResult }) {
     if (!result.star.tic_id) return;
     setMsLoading(true); setMsError(null);
     try {
-      const data = await fetchMultisector(result.star.tic_id, params, undefined, multiMaxObjects);
+      const data = await fetchMultisector(result.star.tic_id);
       setMultisectorData(data);
       // Re-run HCI with updated sector counts
       if (data.n_sectors_observed > 1) {
