@@ -529,6 +529,11 @@ class MultisectorQuery(BaseModel):
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
     odd_even_sigma: float = 3.0
+    # How many distinct objects to keep when clustering per-sector events by
+    # transit duration. Default 2 mirrors the historical behaviour; bumping it
+    # up to 10 (MAX_SECTORS * EVENTS_PER_SECTOR) lets a real TOI surface when
+    # the deepest dips belong to a brighter contaminant.
+    max_objects: int = 2
     known_period_days: Optional[float] = Field(
         default=None,
         description=(
@@ -1062,6 +1067,7 @@ def _run_mast_multisector(query: MultisectorQuery):
         secondary_sigma=query.secondary_sigma,
         odd_even_sigma=query.odd_even_sigma,
         known_period_days=query.known_period_days,
+        max_objects=query.max_objects,
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)
