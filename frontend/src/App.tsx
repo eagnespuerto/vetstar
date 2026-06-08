@@ -33,9 +33,38 @@ const VETTING_LOADING_MSGS = [
   "Asking the star to hold still…",
   "Bribing photons to arrive on time…",
   "Untangling odd transits from even ones…",
-  "Running BLS + Lomb-Scargle + centroid + odd/even + secondary tests…",
+  "Lassoing the planet…",
+  "Connecting the dots…",
   "Politely interrogating the centroid…",
   "Checking if it's a planet or just a clingy binary…",
+  "Convincing the photons to behave…",
+  "Squinting at the noise floor…",
+];
+
+const MULTISECTOR_LOADING_MSGS = [
+  "Stitching sectors together with cosmic string…",
+  "Cross-checking the planet across multiple timelines…",
+  "Lassoing the planet across five sectors…",
+  "Asking each sector for its alibi…",
+  "Connecting the dots between sectors…",
+  "Phoning TESS for every visit on file…",
+  "Reconciling sector-to-sector gossip…",
+  "Hunting for the same dip in every sector…",
+  "Triangulating the transit across time…",
+  "Convincing sectors to agree on a period…",
+];
+
+const PDF_LOADING_MSGS = [
+  "Asking an alien for the write-up…",
+  "Rendering plots into PDF goodness…",
+  "Convincing matplotlib to behave…",
+  "Stamping the report with cosmic credentials…",
+  "Teaching the printer about exoplanets…",
+  "Binding the report with hyperlinks…",
+  "Polishing the figures one last time…",
+  "Folding the universe into A4…",
+  "Filing paperwork at the planet office…",
+  "Translating photons into prose…",
 ];
 
 const HCI_LOADING_MSGS = [
@@ -98,6 +127,7 @@ export default function App() {
     rotationPeriod: null,
     secondarySigma: 3.0,
     oddEvenSigma: 3.0,
+    knownPeriod: null,
   });
 
   // MAST mode state
@@ -116,6 +146,7 @@ export default function App() {
   const [multiMaxObjects, setMultiMaxObjects] = useState<number>(2);
   const [msData, setMsData] = useState<any>(null);
   const [msTopLoading, setMsTopLoading] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const MAX_MULTI_SECTORS = 5;
   const MAX_MULTI_OBJECTS = 10; // MAX_SECTORS * EVENTS_PER_SECTOR on backend
@@ -180,11 +211,14 @@ export default function App() {
 
   const runReport = async () => {
     if (!file) return;
+    setPdfBusy(true);
     try {
       const blob = await downloadReport(file, params);
       triggerDownload(blob, `vetting_TIC${result?.star.tic_id || "report"}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -232,11 +266,14 @@ export default function App() {
     const tic = parseInt(ticInput);
     const sec = parseInt(sectorInput);
     if (!tic || !sec) return;
+    setPdfBusy(true);
     try {
       const blob = await mastReport(tic, sec, params);
       triggerDownload(blob, `vetting_TIC${tic}_S${String(sec).padStart(3, "0")}.pdf`);
     } catch (e: any) {
       setError(e.message || String(e));
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -346,10 +383,10 @@ export default function App() {
                 </button>
                 <button
                   onClick={runReport}
-                  disabled={!file || status === "analyzing"}
+                  disabled={!file || status === "analyzing" || pdfBusy}
                   className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
                 >
-                  Download PDF report
+                  {pdfBusy ? "Building PDF…" : "Download PDF report"}
                 </button>
               </div>
             </div>
@@ -544,10 +581,10 @@ export default function App() {
                   </button>
                   <button
                     onClick={runMastReport}
-                    disabled={status === "analyzing" || !ticInput || !sectorInput}
+                    disabled={status === "analyzing" || pdfBusy || !ticInput || !sectorInput}
                     className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
                   >
-                    Fetch & download PDF
+                    {pdfBusy ? "Building PDF…" : "Fetch & download PDF"}
                   </button>
                 </>
               ) : (
@@ -575,9 +612,22 @@ export default function App() {
 
         {status === "analyzing" && (
           <div className="rounded bg-blue-50 border border-blue-200 p-4 text-blue-900">
-            <CyclingLoader messages={VETTING_LOADING_MSGS} />
+            <CyclingLoader
+              messages={msTopLoading ? MULTISECTOR_LOADING_MSGS : VETTING_LOADING_MSGS}
+            />
             <span className="block mt-1 text-xs text-blue-700">
-              This can take 10–30 seconds for a 2-min cadence sector.
+              {msTopLoading
+                ? "Multi-sector runs can take a minute or two — we're crunching several sectors at once."
+                : "This can take 10–30 seconds for a 2-min cadence sector."}
+            </span>
+          </div>
+        )}
+
+        {pdfBusy && status !== "analyzing" && (
+          <div className="rounded bg-emerald-50 border border-emerald-200 p-4 text-emerald-900">
+            <CyclingLoader messages={PDF_LOADING_MSGS} />
+            <span className="block mt-1 text-xs text-emerald-700">
+              Building your PDF report — typically 10–30 seconds.
             </span>
           </div>
         )}
@@ -836,6 +886,34 @@ function SensitivityPanel({
                 </>
               );
             })()}
+          </div>
+
+          <div className="pt-2 border-t border-slate-200">
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Known period (days, optional)
+            </label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              placeholder="e.g. 3.14 — leave blank for blind BLS sweep"
+              value={params.knownPeriod ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                setParams({
+                  ...params,
+                  knownPeriod: v === "" ? null : parseFloat(v),
+                });
+              }}
+              className="w-full border rounded px-2 py-1 font-mono text-xs"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              If set, BLS searches a ±2% window around this period and its
+              P/2 and 2P harmonics instead of a blind sweep. Sharpens
+              recovered period, t0, duration, and depth — which feeds
+              cleaner inputs into the odd/even, secondary, and
+              transit-shape checks. Leave blank for unconstrained search.
+            </p>
           </div>
 
           <p className="text-xs text-slate-500 italic">
@@ -1134,7 +1212,24 @@ function ResultsView({ result }: { result: VettingResult }) {
 
       {/* Tests */}
       <div className="grid md:grid-cols-2 gap-4">
-        <KV title="BLS (Box Least Squares)" data={result.bls} hide={["_periodogram"]} />
+        <div>
+          {result.bls?.constrained && (
+            <div className="mb-2 text-xs">
+              <span className="inline-block rounded bg-blue-100 px-2 py-0.5 text-blue-800">
+                Constrained search (±2% around{" "}
+                {result.bls.known_period_input_days?.toFixed(4)} d, matched{" "}
+                {result.bls.matched_harmonic})
+              </span>
+              {result.bls.constrained_fallback_reason && (
+                <p className="mt-1 text-amber-700">
+                  Constrained search fell back to blind sweep:{" "}
+                  {result.bls.constrained_fallback_reason}
+                </p>
+              )}
+            </div>
+          )}
+          <KV title="BLS (Box Least Squares)" data={result.bls} hide={["_periodogram"]} />
+        </div>
         <KV title="Lomb-Scargle periodogram" data={result.lomb_scargle} hide={["top_peaks"]} />
         <KV title="Centroid (background-blend test)" data={result.centroid} />
         <KV title="Transit shape (U vs V)" data={result.shape} />
@@ -2032,6 +2127,14 @@ function MultisectorPanel({ data }: { data: any }) {
           {pdfBusy ? "Building…" : "Download multi-sector PDF"}
         </button>
       </div>
+      {pdfBusy && (
+        <div className="rounded bg-emerald-50 border border-emerald-200 p-3 text-emerald-900 text-sm">
+          <CyclingLoader messages={PDF_LOADING_MSGS} />
+          <span className="block mt-1 text-xs text-emerald-700">
+            Stitching every sector's plots into one PDF — this can take a minute.
+          </span>
+        </div>
+      )}
       {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
 
       {/* SPOC DV time series fetch status for this multi-sector run */}
@@ -2275,14 +2378,40 @@ function MultisectorPanel({ data }: { data: any }) {
 
           {/* Period consensus */}
           {data.period_consensus && (
-            <p className="text-xs text-slate-600">
-              <strong>Period consensus:</strong>{" "}
-              {data.period_consensus.value_d?.toFixed(5)} d{" "}
-              {data.period_consensus.std_d
-                ? `± ${data.period_consensus.std_d.toFixed(5)} d`
-                : ""}{" "}
-              <span className="text-slate-400">({data.period_consensus.source})</span>
-            </p>
+            <div className="text-xs text-slate-600 space-y-1">
+              <p>
+                <strong>Period consensus:</strong>{" "}
+                {data.period_consensus.value_d?.toFixed(5)} d{" "}
+                {data.period_consensus.std_d
+                  ? `± ${data.period_consensus.std_d.toFixed(5)} d`
+                  : ""}{" "}
+                <span className="text-slate-400">({data.period_consensus.source})</span>
+              </p>
+              {data.period_consensus.refined_median_d != null && (
+                <p className="text-slate-500">
+                  Refined (constrained-BLS sectors only):{" "}
+                  {data.period_consensus.refined_median_d.toFixed(5)} d
+                  {data.period_consensus.refined_std_d
+                    ? ` ± ${data.period_consensus.refined_std_d.toFixed(5)} d`
+                    : ""}
+                </p>
+              )}
+              {data.period_consensus.harmonic_disagreement && (
+                <p className="text-amber-700">
+                  Harmonic disagreement across sectors —{" "}
+                  {data.period_consensus.per_sector_matches
+                    ?.map(([s, h]: [number, string | null]) => `S${s}:${h ?? "?"}`)
+                    .join(", ")}
+                  . Your input period may be off by a factor of two on some sectors.
+                </p>
+              )}
+              {data.period_consensus.no_constrained_sectors && (
+                <p className="text-amber-700">
+                  No sector matched a harmonic of the supplied known period
+                  within ±2% — falling back to blind-sweep medians.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Fetch errors */}
