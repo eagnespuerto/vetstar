@@ -19,6 +19,7 @@ import ExoMinerPanel from "./ExoMinerPanel";
 import FfiCutoutPanel from "./FfiCutoutPanel";
 import ManualDipSelector from "./ManualDipSelector";
 import { ShareToImgbbButton, ShareIcon } from "./ShareButton";
+import ExofopBulkPanel, { type ExofopImage } from "./ExofopBulkPanel";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
 type Mode = "upload" | "mast";
@@ -109,10 +110,15 @@ export default function App() {
   const [scope, setScope] = useState<"single" | "multi">("single");
   // Sectors selected for a multi-sector run (max 5). Empty = backend picks newest 5.
   const [multiSectors, setMultiSectors] = useState<number[]>([]);
+  // Number of distinct objects to surface from the per-sector event clustering.
+  // Default 2 matches the backend; bump higher when the deepest dips are
+  // contaminants/EBs masking the real TOI (e.g. TOI 6568.01 on TIC 253126207).
+  const [multiMaxObjects, setMultiMaxObjects] = useState<number>(2);
   const [msData, setMsData] = useState<any>(null);
   const [msTopLoading, setMsTopLoading] = useState(false);
 
   const MAX_MULTI_SECTORS = 5;
+  const MAX_MULTI_OBJECTS = 10; // MAX_SECTORS * EVENTS_PER_SECTOR on backend
   const toggleMultiSector = (s: number) => {
     setMultiSectors((prev) =>
       prev.includes(s)
@@ -134,7 +140,7 @@ export default function App() {
     setMsData(null);
     setMsTopLoading(true);
     try {
-      const data = await fetchMultisector(tic, params, multiSectors);
+      const data = await fetchMultisector(tic, params, multiSectors, multiMaxObjects);
       setMsData(data);
       setStatus("done");
     } catch (e: any) {
@@ -381,11 +387,37 @@ export default function App() {
                 </button>
               </div>
               {scope === "multi" && (
-                <p className="text-xs text-slate-500 mt-1">
-                  Pick up to {MAX_MULTI_SECTORS} sectors below (or leave blank to use the
-                  newest 5). One representative event per sector is cross-checked for the
-                  same duration and period.
-                </p>
+                <>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Pick up to {MAX_MULTI_SECTORS} sectors below (or leave blank to use the
+                    newest 5). One representative event per sector is cross-checked for the
+                    same duration and period.
+                  </p>
+                  <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                    <label htmlFor="multi-max-objects">
+                      Look for up to
+                    </label>
+                    <input
+                      id="multi-max-objects"
+                      type="number"
+                      min={1}
+                      max={MAX_MULTI_OBJECTS}
+                      step={1}
+                      value={multiMaxObjects}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (!Number.isFinite(v)) return;
+                        setMultiMaxObjects(Math.max(1, Math.min(MAX_MULTI_OBJECTS, v)));
+                      }}
+                      className="border rounded px-2 py-0.5 font-mono w-16 text-xs"
+                    />
+                    <span>
+                      distinct object{multiMaxObjects === 1 ? "" : "s"} (max {MAX_MULTI_OBJECTS}).
+                      Raise this when the deepest dips look like a contaminant or EB and the
+                      real TOI isn't showing up.
+                    </span>
+                  </div>
+                </>
               )}
             </div>
             {/* High stellar variability — fit + subtract a sinusoid before BLS. */}
@@ -906,7 +938,7 @@ function ResultsView({ result }: { result: VettingResult }) {
     if (!result.star.tic_id) return;
     setMsLoading(true); setMsError(null);
     try {
-      const data = await fetchMultisector(result.star.tic_id);
+      const data = await fetchMultisector(result.star.tic_id, params, undefined, multiMaxObjects);
       setMultisectorData(data);
       // Re-run HCI with updated sector counts
       if (data.n_sectors_observed > 1) {
@@ -1079,11 +1111,16 @@ function ResultsView({ result }: { result: VettingResult }) {
         plots={result.plots}
         ticId={result.star.tic_id}
         sector={result.star.sector}
-        extras={
-          result.dvt?.available && result.dvt.tce?.phase_fold_plot
-            ? { spoc_dv_phase_fold: result.dvt.tce.phase_fold_plot }
-            : undefined
-        }
+        extras={(() => {
+          const e: Record<string, string> = {};
+          if (result.dvt?.available && result.dvt.tce?.phase_fold_plot) {
+            e.spoc_dv_phase_fold = result.dvt.tce.phase_fold_plot;
+          }
+          if (hciData?.hci_image) {
+            e.hci_summary = hciData.hci_image;
+          }
+          return Object.keys(e).length ? e : undefined;
+        })()}
       />
 
       {/* SPOC DVT phase-fold (MAST results only, when DVT is available) */}
@@ -1965,7 +2002,10 @@ function MultisectorPanel({ data }: { data: any }) {
       const sectors: number[] = (data.sector_verdicts || [])
         .map((s: any) => s.sector)
         .filter((s: any) => s != null);
-      const blob = await multisectorReport(data.tic_id, undefined, sectors);
+      const blob = await multisectorReport(
+        data.tic_id, undefined, sectors,
+        typeof data.max_objects === "number" ? data.max_objects : undefined,
+      );
       triggerDownload(blob, `vetting_TIC${data.tic_id}_multisector.pdf`);
     } catch (e: any) {
       setPdfErr(e?.message || String(e));
@@ -2009,6 +2049,59 @@ function MultisectorPanel({ data }: { data: any }) {
               title={`multisector_timeline_TIC${data.tic_id || ""}`}
             />
           )}
+
+          {/* ExoFOP-TESS bulk-upload ZIP — bundles the timeline plot, each
+              object's HCI summary, and ExoMiner views (per object) into one
+              archive ready for the bulk-upload form. */}
+          {(() => {
+            const imgs: ExofopImage[] = [];
+            if (data.timeline_plot) {
+              imgs.push({
+                key: "multisector-timeline",
+                label: "Multi-sector detection timeline",
+                b64: data.timeline_plot,
+                code: "O",
+              });
+            }
+            const emCodes: Record<string, string> = {
+              global_view: "L",
+              local_view: "L",
+              secondary_view: "L",
+              odd_even_view: "L",
+              centroid_global_view: "O",
+              centroid_local_view: "O",
+              diagnostic_sigmas: "O",
+            };
+            (data.objects || []).forEach((o: any) => {
+              if (o.hci_bundle?.hci_image) {
+                imgs.push({
+                  key: `obj${o.object_id}-hci`,
+                  label: `Habitability Chance Index — object ${o.object_id}`,
+                  b64: o.hci_bundle.hci_image,
+                  code: "O",
+                });
+              }
+              if (o.exominer?.plots) {
+                for (const [k, label] of MS_EXOMINER_VIEWS) {
+                  const b64 = o.exominer.plots[k];
+                  if (!b64) continue;
+                  imgs.push({
+                    key: `obj${o.object_id}-exominer-${k.replace(/_/g, "-")}`,
+                    label: `ExoMiner ${label.toLowerCase()} — object ${o.object_id}`,
+                    b64,
+                    code: emCodes[k] || "O",
+                  });
+                }
+              }
+            });
+            return (
+              <ExofopBulkPanel
+                ticId={data.tic_id}
+                images={imgs}
+                title="⬇ Build ExoFOP-TESS bulk-upload ZIP (multi-sector)"
+              />
+            );
+          })()}
 
           {/* Detected objects (up to 2), each cross-confirmed by duration + period */}
           {data.objects && data.objects.length > 0 && (
@@ -2225,6 +2318,7 @@ function PlotsSection({
     bls: "BLS periodogram",
     lomb_scargle: "Lomb-Scargle top peaks",
     spoc_dv_phase_fold: "SPOC DV phase-fold",
+    hci_summary: "Habitability Chance Index summary",
   };
   // ExoFOP file-type single-letter code per plot. L = Light Curve,
   // O = Other (used for periodograms + centroid diagnostics that aren't
@@ -2236,6 +2330,7 @@ function PlotsSection({
     bls: "O",
     lomb_scargle: "O",
     spoc_dv_phase_fold: "L",
+    hci_summary: "O",
   };
 
   const [albumResult, setAlbumResult] = useState<any>(null);

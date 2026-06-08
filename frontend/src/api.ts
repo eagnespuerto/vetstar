@@ -111,7 +111,8 @@ export async function fetchHabitability(
 export async function fetchMultisector(
   ticId: number,
   params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
-  sectors?: number[]
+  sectors?: number[],
+  maxObjects?: number,
 ) {
   const r = await fetch(`${API_BASE}/api/mast/multisector`, {
     method: "POST",
@@ -125,6 +126,7 @@ export async function fetchMultisector(
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
       ...(sectors && sectors.length ? { sectors } : {}),
+      ...(maxObjects ? { max_objects: maxObjects } : {}),
     }),
   });
   if (!r.ok) throw new Error(`Multi-sector fetch failed (${r.status}): ${await r.text()}`);
@@ -134,7 +136,8 @@ export async function fetchMultisector(
 export async function multisectorReport(
   ticId: number,
   params: DetectParams = { threshold: 0.997, minSnr: 4.0, highVariability: false, rotationPeriod: null, secondarySigma: 3.0, oddEvenSigma: 3.0 },
-  sectors?: number[]
+  sectors?: number[],
+  maxObjects?: number,
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/mast/multisector/report`, {
     method: "POST",
@@ -148,6 +151,7 @@ export async function multisectorReport(
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
       ...(sectors && sectors.length ? { sectors } : {}),
+      ...(maxObjects ? { max_objects: maxObjects } : {}),
     }),
   });
   if (!r.ok) throw new Error(`Multi-sector report failed (${r.status}): ${await r.text()}`);

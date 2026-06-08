@@ -486,6 +486,11 @@ class MultisectorQuery(BaseModel):
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
     odd_even_sigma: float = 3.0
+    # How many distinct objects to keep when clustering per-sector events by
+    # transit duration. Default 2 mirrors the historical behaviour; bumping it
+    # up to 10 (MAX_SECTORS * EVENTS_PER_SECTOR) lets a real TOI surface when
+    # the deepest dips belong to a brighter contaminant.
+    max_objects: int = 2
 
 
 def _habitability_bundle(query: HabitabilityQuery) -> dict:
@@ -998,6 +1003,7 @@ def _run_mast_multisector(query: MultisectorQuery):
         high_variability=getattr(query, "high_variability", False),
         secondary_sigma=getattr(query, "secondary_sigma", 3.0),
         odd_even_sigma=getattr(query, "odd_even_sigma", 3.0),
+        max_objects=getattr(query, "max_objects", 2),
     )
     analysis["errors"] = errors
     analysis["sectors_attempted"] = len(sectors_to_fetch)

@@ -1242,12 +1242,15 @@ def run_full_vetting(
 
 # Multi-sector runs are intentionally capped: from each of up to MAX_SECTORS
 # sectors we take up to EVENTS_PER_SECTOR (2) of the deepest events, then group
-# them into up to MAX_OBJECTS (2) distinct objects by transit duration. Each
+# them into up to MAX_OBJECTS distinct objects by transit duration. Each
 # object is confirmed by checking its members share the same duration and
-# period across sectors.
+# period across sectors. MAX_OBJECTS is the *default*; the caller can request
+# more (up to MAX_OBJECTS_HARD_CAP) when the deepest dips are blends or false
+# positives that mask the real TOI of interest.
 MAX_SECTORS = 5
 EVENTS_PER_SECTOR = 2
 MAX_OBJECTS = 2
+MAX_OBJECTS_HARD_CAP = MAX_SECTORS * EVENTS_PER_SECTOR  # 10 — every event its own bucket
 
 
 def _cluster_events_into_objects(reps: list, tol_h: float, max_objects: int = MAX_OBJECTS) -> list:
@@ -1288,13 +1291,14 @@ def run_multisector_analysis(
     secondary_sigma: float = 3.0,
     odd_even_sigma: float = 3.0,
     duration_tol_h: float = DURATION_MATCH_TOL_H,
+    max_objects: int = MAX_OBJECTS,
 ) -> dict:
     """
     Given vetting results from multiple sectors, build:
       - A detection timeline: which sectors showed events
       - Up to EVENTS_PER_SECTOR representative (deepest) events per sector,
         across up to MAX_SECTORS sectors
-      - Grouping of those events into up to MAX_OBJECTS distinct objects by
+      - Grouping of those events into up to ``max_objects`` distinct objects by
         transit duration, each confirmed to share the SAME duration (within
         ``duration_tol_h`` hours) and the SAME period across sectors
       - A consensus ephemeris (period refinement)
@@ -1303,6 +1307,14 @@ def run_multisector_analysis(
     """
     if not sector_results:
         return {"error": "No sector results provided."}
+
+    # Clamp max_objects to [1, MAX_OBJECTS_HARD_CAP]. Anything beyond the hard
+    # cap (one bucket per representative event) is meaningless.
+    try:
+        max_objects = int(max_objects)
+    except (TypeError, ValueError):
+        max_objects = MAX_OBJECTS
+    max_objects = max(1, min(max_objects, MAX_OBJECTS_HARD_CAP))
 
     # Cap to MAX_SECTORS, preferring sectors that show a dip and, among those,
     # the deepest detection (most diagnostic).
@@ -1361,8 +1373,10 @@ def run_multisector_analysis(
             "source": f"median of {len(p_arr)} sector BLS peaks",
         }
 
-    # --- Group events into up to MAX_OBJECTS distinct objects by duration ----
-    clusters = _cluster_events_into_objects(representative_events, duration_tol_h)
+    # --- Group events into up to ``max_objects`` distinct objects by duration -
+    clusters = _cluster_events_into_objects(
+        representative_events, duration_tol_h, max_objects=max_objects,
+    )
     objects = []
     for oid, members in enumerate(clusters, start=1):
         durs = [m["duration_h"] for m in members]
@@ -1447,7 +1461,9 @@ def run_multisector_analysis(
         "detection_rate": round(n_with_dip / n_total, 3) if n_total else 0,
         "max_sectors": MAX_SECTORS,
         "events_per_sector": EVENTS_PER_SECTOR,
-        "max_objects": MAX_OBJECTS,
+        "max_objects": max_objects,
+        "max_objects_default": MAX_OBJECTS,
+        "max_objects_hard_cap": MAX_OBJECTS_HARD_CAP,
         "duration_tol_h": duration_tol_h,
         "timeline": timeline,
         "period_consensus": period_consensus,
