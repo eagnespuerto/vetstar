@@ -197,6 +197,17 @@ def make_hci_summary_image(
         ax_head.text(1.0, 0.32, f"Tier: {tier}", fontsize=11,
                      color=_tier_color(score), va="top", ha="right",
                      transform=ax_head.transAxes)
+        dmod = hci.get("density_modifier") or 0
+        dlabel = hci.get("density_modifier_label")
+        if dmod and dlabel:
+            sign = "+" if dmod > 0 else "−"
+            mod_color = "#047857" if dmod > 0 else "#b91c1c"
+            ax_head.text(
+                1.0, 0.62,
+                f"Density modifier: {sign}{abs(dmod)} pts ({dlabel})",
+                fontsize=8.5, color=mod_color, va="top", ha="right",
+                transform=ax_head.transAxes,
+            )
 
     # --- sub-score metrics + weightings (horizontal bars) --------------
     ax_bar = fig.add_subplot(gs[1, :])

@@ -229,6 +229,8 @@ class HabitabilityResult:
     caveats: list = field(default_factory=list)
     stellar_estimate: Optional[dict] = None
     insolation_searth: Optional[float] = None
+    density_modifier: int = 0
+    density_modifier_label: Optional[str] = None
     paper_ref: str = "Hill et al. (2026), arXiv:2605.00170 — STEHM"
 
     def to_dict(self) -> dict:
@@ -566,6 +568,29 @@ def compute_hci(
         hci_low = max(0.0, hci - (size.score - size.score_low) * f)
         hci_high = min(100.0, hci + (size.score_high - size.score) * f)
 
+    # --- Bulk-density modifier (+/-10 pts) --------------------------------
+    # Terrestrial density (rocky-consistent) -> +10; gas-giant density
+    # (volatile / H-He envelope) -> -10; intermediate / unknown -> 0.
+    masses_for_rho = [m for m in (mass_estimates_earth
+                                  or ([planet.mass_earth] if planet.mass_earth else []))
+                      if m and m > 0]
+    density_modifier = 0
+    density_label = None
+    if rp_eff and rp_eff > 0 and masses_for_rho:
+        central_mp = (planet.mass_earth if (planet.mass_earth and planet.mass_earth > 0)
+                      else sorted(masses_for_rho)[len(masses_for_rho) // 2])
+        rho_rel = central_mp / rp_eff ** 3
+        if rho_rel >= RHO_ROCKY_REL:
+            density_modifier, density_label = 10, "terrestrial"
+        elif rho_rel < RHO_VOLATILE_REL:
+            density_modifier, density_label = -10, "gas-giant"
+    if density_modifier:
+        hci = max(0.0, min(100.0, hci + density_modifier))
+        if hci_low is not None:
+            hci_low = max(0.0, min(100.0, hci_low + density_modifier))
+        if hci_high is not None:
+            hci_high = max(0.0, min(100.0, hci_high + density_modifier))
+
     if hci >= 70:
         tier, color = "Promising", "bg-emerald-100 border-emerald-500 text-emerald-900"
     elif hci >= 45:
@@ -620,6 +645,13 @@ def compute_hci(
             "central transit (b=0). A subgiant/giant or grazing geometry biases this; "
             "ρ★ from duration is an upper bound when b is unknown."
         )
+    if density_label:
+        sign = "+" if density_modifier > 0 else ""
+        caveats.append(
+            f"Bulk-density modifier applied: {sign}{density_modifier} pts "
+            f"({density_label} density). Terrestrial densities (ρp ≳ 3.3 g/cm³) "
+            f"add +10; gas-giant densities (ρp ≲ 2.2 g/cm³) subtract 10."
+        )
     caveats.append(
         "STEHM models a pure CO₂ stagnant-lid planet as a best-case for atmosphere "
         "retention. Non-thermal escape, magnetic fields, and plate tectonics are "
@@ -636,4 +668,6 @@ def compute_hci(
         caveats=caveats,
         stellar_estimate=stellar_est if (stellar_est and (teff_estimated or rstar_estimated)) else None,
         insolation_searth=round(insol, 4) if insol is not None else None,
+        density_modifier=density_modifier,
+        density_modifier_label=density_label,
     )

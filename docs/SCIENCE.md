@@ -465,9 +465,22 @@ mapping:
 | Vetting   | Centroid / odd-even / secondary / companion-size pipeline outputs | each failed test deducts; passing all gives 1.0 |
 | Sectors   | Number of independent detections | 1 → 0.4, 2 → 0.7, 3 → 0.9, ≥ 4 → 1.0 |
 
+After the weighted sum, a **bulk-density modifier of ±10 percentage points**
+is applied to the final HCI when `ρp` is available (§8.3):
+
+- **Terrestrial density** (ρp ≳ 3.3 g cm⁻³, rocky-consistent) → **+10 pts**
+- **Gas-giant density** (ρp ≲ 2.2 g cm⁻³, volatile / H-He envelope) → **−10 pts**
+- Intermediate / unknown densities → no modifier
+
+The modifier is applied after the weighted sum and before the EB/FP cap, and
+the result is clamped to [0, 100]. This rewards a confirmed solid surface and
+penalises a puffy envelope independently of the size sub-score's own density
+band.
+
 Confirmed EBs and FPs are **hard-capped at HCI = 12** regardless of the
-weighted sum — a safety bar so that, e.g., a 0.9 R⊕ object in the HZ that
-the vetting tagged as a centroid-shift blend cannot mislead the user.
+weighted sum or density modifier — a safety bar so that, e.g., a 0.9 R⊕ object
+in the HZ that the vetting tagged as a centroid-shift blend cannot mislead the
+user.
 
 When stellar parameters are missing, the chain of fallbacks documented in
 the README (ExoFOP → TIC v8 → Gaia DR3 → Pecaut & Mamajek main sequence)
