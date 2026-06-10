@@ -603,6 +603,16 @@ def _append_hci_section(story, bundle: dict, styles):
         f"<b>Score:</b> {_fmt(hci.get('hci'), nd=1)} / 100 &nbsp;&nbsp; "
         f"<b>Tier:</b> {hci.get('tier', '—')}", body))
 
+    dmod = hci.get("density_modifier") or 0
+    dlabel = hci.get("density_modifier_label")
+    if dmod and dlabel:
+        sign = "+" if dmod > 0 else "−"
+        color = "#047857" if dmod > 0 else "#b91c1c"
+        story.append(Paragraph(
+            f"<b>Bulk-density modifier:</b> "
+            f"<font color='{color}'>{sign}{abs(dmod)} pts ({dlabel})</font> "
+            f"— applied after the weighted sum, clamped to [0, 100].", body))
+
     if bundle.get("hci_image"):
         story.append(Spacer(1, 0.08 * inch))
         story.append(_b64_image(bundle["hci_image"], max_height=6.5 * inch))

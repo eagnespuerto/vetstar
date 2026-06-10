@@ -101,9 +101,16 @@ built from six weighted sub-components:
 | **Vetting flags** (10%) | Our own pipeline's centroid / odd-even / secondary / companion-size results. |
 | **Multi-sector** (5%) | Consistent detections across multiple TESS sectors confirm periodicity. |
 
+**Bulk-density modifier (±10 pts).** After the weighted sum, the final HCI is
+adjusted by planet bulk density when `ρp` is available: **terrestrial** density
+(ρp ≳ 3.3 g cm⁻³, rocky-consistent) adds **+10 points**, **gas-giant** density
+(ρp ≲ 2.2 g cm⁻³, volatile / H-He envelope) subtracts **−10 points**, and
+intermediate / unknown densities get no modifier. The result is clamped to
+[0, 100].
+
 Tiers: **Promising** (≥70) · **Marginal** (45–69) · **Unlikely** (20–44) ·
 **Very unlikely** (<20). Confirmed EBs and false positives are hard-capped
-at 12 regardless of other scores.
+at 12 regardless of other scores or the density modifier.
 
 The HCI panel automatically queries **ExoFOP-TESS** for TOI data (planet
 radius, period, semi-major axis, disposition) and stellar parameters. If
