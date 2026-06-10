@@ -615,7 +615,7 @@ def _append_hci_section(story, bundle: dict, styles):
 
     if bundle.get("hci_image"):
         story.append(Spacer(1, 0.08 * inch))
-        story.append(_b64_image(bundle["hci_image"], max_height=6.5 * inch))
+        story.append(_b64_image(bundle["hci_image"], max_height=5.0 * inch))
         story.append(Spacer(1, 0.1 * inch))
 
     subs = hci.get("sub_scores") or []
