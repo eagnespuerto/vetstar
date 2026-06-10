@@ -615,9 +615,13 @@ def _append_hci_section(story, bundle: dict, styles):
 
     if bundle.get("hci_image"):
         story.append(Spacer(1, 0.08 * inch))
-        story.append(_b64_image(bundle["hci_image"], max_height=5.0 * inch))
+        story.append(_b64_image(bundle["hci_image"], max_height=4.0 * inch))
         story.append(Spacer(1, 0.1 * inch))
 
+    # Group the sub-score table, caveats, and reference into a single
+    # KeepTogether so the trailing caveats/reference can't orphan onto the
+    # next page when the HCI image consumes most of the page height.
+    trailing = []
     subs = hci.get("sub_scores") or []
     if subs:
         rows = [["Component", "Weight", "Sub-score", "Assessment"]]
@@ -628,17 +632,20 @@ def _append_hci_section(story, bundle: dict, styles):
                 f"{(s.get('score', 0) or 0) * 100:.0f}/100",
                 s.get("label", "—"),
             ])
-        story.append(_data_table(
+        trailing.append(_data_table(
             rows, [1.9 * inch, 0.9 * inch, 1.0 * inch, CONTENT_W - 3.8 * inch]))
 
     caveats = hci.get("caveats") or []
     if caveats:
-        story.append(Spacer(1, 0.1 * inch))
-        story.append(Paragraph("<b>Caveats</b>", body))
+        trailing.append(Spacer(1, 0.1 * inch))
+        trailing.append(Paragraph("<b>Caveats</b>", body))
         for cv in caveats:
-            story.append(Paragraph(f"• {cv}", body))
+            trailing.append(Paragraph(f"• {cv}", body))
     if hci.get("paper_ref"):
-        story.append(Paragraph(f"<i>Reference: {hci['paper_ref']}</i>", styles["caption"]))
+        trailing.append(Paragraph(f"<i>Reference: {hci['paper_ref']}</i>", styles["caption"]))
+
+    if trailing:
+        story.append(KeepTogether(trailing))
 
 
 def _append_exominer_section(story, exominer: dict, styles):
