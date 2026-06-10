@@ -1020,7 +1020,20 @@ def make_plots(
     fig, ax = plt.subplots(figsize=(10, 3))
     ax.plot(t, f, "k.", ms=1, alpha=0.4)
     # Set y-limits explicitly so we can place labels just inside the top edge.
-    ymin, ymax = float(np.nanpercentile(f, 0.3)), float(np.nanpercentile(f, 99.7))
+    # Use the 99.7 percentile on top to suppress upward outliers, but the
+    # bottom must accommodate the deepest detected dip — a percentile-based
+    # lower bound clips event troughs when the in-transit fraction exceeds
+    # the percentile (e.g. many dips on a short baseline).
+    ymax = float(np.nanpercentile(f, 99.7))
+    if events:
+        event_mins = []
+        for ev in events:
+            in_ev = (t >= ev["t_start"]) & (t <= ev["t_end"])
+            if np.any(in_ev):
+                event_mins.append(float(np.nanmin(f[in_ev])))
+        ymin = min(event_mins) if event_mins else float(np.nanpercentile(f, 0.3))
+    else:
+        ymin = float(np.nanpercentile(f, 0.3))
     y_pad = 0.05 * (ymax - ymin)
     ax.set_ylim(ymin - y_pad, ymax + y_pad)
     # IMPORTANT: disable the "+1" offset notation — it's confusing for shallow dips

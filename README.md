@@ -62,8 +62,11 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   the measured and derived quantities and ready to copy into ExoFOP. The same
   table is included in the PDF.
 - **Multi-event diagnostic plots**: full light curve with all events shaded
-  and numbered, multi-panel zoom grid showing depth + duration + SNR per
-  event, centroid behaviour, BLS and Lomb-Scargle periodograms. When the
+  and numbered (with the y-axis sized to keep every detected event's trough
+  visible — earlier versions used a fixed 0.3 percentile floor that clipped
+  the deepest dips on EB-like targets), multi-panel zoom grid showing depth
+  + duration + SNR per event, centroid behaviour, BLS and Lomb-Scargle
+  periodograms. When the
   sinusoidal-detrend toggle is on and the fit was applied, a **Stellar
   variability detrend** panel is added (raw flux + fitted sin/harmonic
   overlay + residual fed to BLS) and is shareable to ImgBB like the other
