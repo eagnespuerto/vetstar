@@ -265,6 +265,7 @@ async def analyze(
             odd_even_sigma=odd_even_sigma,
             known_period_days=known_period_days,
         )
+        _attach_hci_summary_to_plots(result)
         d = result.to_dict()
         d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
         return d
@@ -436,6 +437,7 @@ def _mast_fetch_and_analyze(query: MastQuery):
 @app.post("/api/mast/analyze")
 async def mast_analyze(query: MastQuery):
     result, info = _mast_fetch_and_analyze(query)
+    _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
     out = result.to_dict()
     out["mast"] = {
         "filename": os.path.basename(info.get("path", "")),
@@ -831,6 +833,61 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
         "exofop_source": exofop.get("source"),
         "all_tois": tois,
     }
+
+
+def _attach_hci_summary_to_plots(result, *, dvt: Optional[dict] = None) -> None:
+    """Compute the HCI summary PNG for ``result`` and stash it into
+    ``result.plots['hci_summary']`` so the frontend ZIP exporter picks it
+    up without a separate /api/habitability round-trip.
+
+    Fails soft: any error (missing TIC, ExoFOP outage, image-render failure)
+    just leaves ``plots`` untouched.
+    """
+    tic = getattr(result.star, "tic_id", None)
+    if not tic:
+        return
+    try:
+        from .dvt_fetch import best_tce as _best_tce
+        tce = _best_tce(dvt)
+        dvt_period = tce.get("period_d") if tce else None
+        period = (result.bls.get("period") if result.bls else None)
+        if dvt_period:
+            period = dvt_period
+
+        enriched_verdict = dict(result.verdict or {})
+        enriched_verdict.update(
+            {
+                "_depth": (result.events[0]["depth"] if result.events else None),
+                "_bls_depth": result.bls.get("depth") if result.bls else None,
+                "_t14_d": result.shape.get("t14_d") if result.shape else None,
+                "_bls_duration": result.bls.get("duration") if result.bls else None,
+                "_shape_class": result.shape.get("shape_class") if result.shape else None,
+                "_events": result.events,
+                "_dvt_period_d": dvt_period,
+                "_dvt_duration_h": tce.get("duration_h") if tce else None,
+                "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
+                "_dvt_impact_b": tce.get("impact_b") if tce else None,
+                "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
+            }
+        )
+        n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
+        hq = HabitabilityQuery(
+            tic_id=tic,
+            orbital_period_d=period,
+            stellar_teff=result.star.teff,
+            stellar_radius_sun=result.star.radius,
+            stellar_mass_sun=getattr(result.star, "mass", None),
+            R_companion_Rjup=(result.physics or {}).get("R_companion_Rjup"),
+            n_sectors_with_detections=n_det,
+            n_sectors_observed=1,
+            vetting_verdict=enriched_verdict,
+        )
+        bundle = _habitability_bundle(hq)
+        _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
+        if bundle.get("hci_image"):
+            result.plots["hci_summary"] = bundle["hci_image"]
+    except Exception as e:
+        log.warning("HCI summary attach failed for TIC %s: %s", tic, e)
 
 
 def _attach_hci_image(bundle: dict, title: Optional[str] = None) -> dict:

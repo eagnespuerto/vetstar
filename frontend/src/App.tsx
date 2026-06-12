@@ -2439,7 +2439,7 @@ function PlotsSection({
   sector?: number | null;
   extras?: Record<string, string>;
 }) {
-  const order = ["lightcurve", "event_zoom", "centroid", "bls", "lomb_scargle"];
+  const order = ["lightcurve", "event_zoom", "centroid", "bls", "lomb_scargle", "hci_summary"];
   const labels: Record<string, string> = {
     lightcurve: "Full detrended light curve",
     event_zoom: "Event zoom",
@@ -2546,6 +2546,15 @@ function PlotsSection({
       }[] = [];
       const collect = (k: string, b64?: string) => {
         if (!b64) return;
+        // If this key was already collected (e.g. plots[hci_summary] from
+        // /api/analyze followed by a user-recomputed extras[hci_summary]),
+        // overwrite the bytes but keep the existing filename to avoid the
+        // a/b/c suffix logic kicking in for what is logically one slot.
+        const existingIdx = all.findIndex((x) => x.key === k);
+        if (existingIdx >= 0) {
+          all[existingIdx] = { ...all[existingIdx], bytes: b64ToBytes(b64) };
+          return;
+        }
         const code = exofopTypeCode[k] ?? "O";
         const safeKey = k.replace(/_/g, "-"); // underscores allowed by spec
         let filename = `TIC${ticId}${code}-${initials}${yyyymmdd}.${safeKey}.png`;
