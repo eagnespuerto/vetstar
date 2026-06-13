@@ -148,10 +148,15 @@ def _draw_planet_diagram(ax, observables: dict, planet: Optional[dict]) -> None:
                 transform=ax.transAxes)
         return
 
+    # Keep the diagram contained in a ~4:3 W:H box (set_box_aspect) so
+    # the HZ band and orbit are only mildly stretched relative to the
+    # ExoWorld SVG. Data ranges are sized to fill that 4:3 box: xlim
+    # spans 1.20 * max_au, ylim 0.90 * max_au, so Δy/Δx = 3/4 matches
+    # the box ratio and circular patches render close to circular.
     max_au = max(hz_out * 1.20, au * 1.15, 0.02)
     ax.set_xlim(-0.10 * max_au, max_au * 1.10)
-    ax.set_ylim(-max_au * 0.62, max_au * 0.62)
-    ax.set_aspect("equal", adjustable="box")
+    ax.set_ylim(-max_au * 0.45, max_au * 0.45)
+    ax.set_box_aspect(3.0 / 4.0)
 
     band = Wedge((0, 0), hz_out, 0, 360, width=(hz_out - hz_in),
                  facecolor="#34e3a4", alpha=0.18, edgecolor="none", zorder=1)
@@ -285,7 +290,7 @@ def make_hci_summary_image(
     fig = plt.figure(figsize=(9.0, 7.4))
     gs = fig.add_gridspec(
         nrows=3, ncols=2,
-        height_ratios=[1.4, 2.2, 2.6],
+        height_ratios=[1.8, 2.0, 2.4],
         hspace=0.45, wspace=0.18,
         left=0.06, right=0.96, top=0.93, bottom=0.06,
     )
@@ -293,11 +298,11 @@ def make_hci_summary_image(
     # Split the header row: text on the left, planet-system diagram on the
     # right. Sub-gridspec keeps the diagram independent of the table columns
     # below so the observables/TLCM tables remain equal-width.
-    # Diagram column doubled in width vs. the prior layout (it now takes
-    # ~69% of the row instead of ~35%). The heading text fontsizes are
-    # tightened accordingly so the title and score still fit in the
-    # narrower left column.
-    gs_head = gs[0, :].subgridspec(1, 2, width_ratios=[0.45, 1.0], wspace=0.06)
+    # Diagram sits on the side. width_ratios give the header text the
+    # majority of the row so the full title still fits; the diagram is
+    # then constrained to a ~4:3 box inside its column via set_box_aspect
+    # (see _draw_planet_diagram) rather than stretching to fill it.
+    gs_head = gs[0, :].subgridspec(1, 2, width_ratios=[1.85, 1.0], wspace=0.06)
 
     # --- header band ---------------------------------------------------
     ax_head = fig.add_subplot(gs_head[0, 0])
@@ -306,9 +311,9 @@ def make_hci_summary_image(
     ax_head.axis("off")
     heading = title or "Habitability Chance Index"
     # Title row
-    ax_head.text(0.0, 0.95, heading, fontsize=11, fontweight="bold",
+    ax_head.text(0.0, 0.95, heading, fontsize=15, fontweight="bold",
                  color="#0f172a", va="top", transform=ax_head.transAxes)
-    ax_head.text(0.0, 0.72, hci.get("paper_ref", ""), fontsize=7,
+    ax_head.text(0.0, 0.62, hci.get("paper_ref", ""), fontsize=8,
                  style="italic", color="#64748b", va="top",
                  transform=ax_head.transAxes)
     # Score on its own line, below the title
@@ -317,11 +322,11 @@ def make_hci_summary_image(
         if hci.get("hci_low") is not None and hci.get("hci_high") is not None \
                 and (hci["hci_high"] - hci["hci_low"]) > 0.1:
             rng = f"  ({hci['hci_low']}\u2013{hci['hci_high']})"
-        ax_head.text(0.0, 0.45, f"{_fmt(score, 1)} / 100{rng}",
-                     fontsize=15, fontweight="bold", color=_tier_color(score),
+        ax_head.text(0.0, 0.30, f"{_fmt(score, 1)} / 100{rng}",
+                     fontsize=20, fontweight="bold", color=_tier_color(score),
                      va="top", ha="left", transform=ax_head.transAxes)
-        ax_head.text(0.0, 0.18, f"Tier: {tier}", fontsize=9,
-                     color=_tier_color(score), va="top", ha="left",
+        ax_head.text(1.0, 0.32, f"Tier: {tier}", fontsize=11,
+                     color=_tier_color(score), va="top", ha="right",
                      transform=ax_head.transAxes)
         dmod = hci.get("density_modifier") or 0
         dlabel = hci.get("density_modifier_label")
@@ -329,9 +334,9 @@ def make_hci_summary_image(
             sign = "+" if dmod > 0 else "−"
             mod_color = "#047857" if dmod > 0 else "#b91c1c"
             ax_head.text(
-                0.0, 0.02,
+                1.0, 0.62,
                 f"Density modifier: {sign}{abs(dmod)} pts ({dlabel})",
-                fontsize=7.5, color=mod_color, va="top", ha="left",
+                fontsize=8.5, color=mod_color, va="top", ha="right",
                 transform=ax_head.transAxes,
             )
 
