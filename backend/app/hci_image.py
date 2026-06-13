@@ -24,6 +24,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Wedge
 
 
 # ----------------------------------------------------------------------
@@ -88,6 +89,120 @@ def _table(ax, title, rows):
                 transform=ax.transAxes)
         ax.text(1.0, y, v, fontsize=8.5, color="#0f172a", va="top", ha="right",
                 family="monospace", transform=ax.transAxes)
+
+
+# ----------------------------------------------------------------------
+# planet-system diagram (mirrors the ExoWorld tuner SVG stage)
+# ----------------------------------------------------------------------
+def _star_color(teff: Optional[float]) -> str:
+    if teff is None:
+        return "#ffd76b"
+    if teff >= 7500:
+        return "#cad7ff"
+    if teff >= 6000:
+        return "#fff4e0"
+    if teff >= 5200:
+        return "#ffd76b"
+    if teff >= 3700:
+        return "#ff9a4d"
+    return "#ef5a3a"
+
+
+def _spectral_type(teff: Optional[float]) -> str:
+    if teff is None:
+        return "★"
+    for thresh, sp in (
+        (30000, "O"), (10000, "B"), (7500, "A"),
+        (6000, "F"), (5200, "G"), (3700, "K"), (2400, "M"),
+    ):
+        if teff >= thresh:
+            return sp
+    return "L"
+
+
+def _draw_planet_diagram(ax, observables: dict, planet: Optional[dict]) -> None:
+    """Render the star/HZ/orbit/planet stage diagram (ExoWorld style)."""
+    obs = observables or {}
+    inputs = obs.get("inputs") or {}
+    hz = obs.get("habitable_zone") or {}
+    orbit = obs.get("orbit") or {}
+    pl = obs.get("planet") or {}
+
+    teff = inputs.get("teff_k")
+    rstar = inputs.get("rstar_sun") or 1.0
+    au = orbit.get("semi_major_axis_au")
+    rp = pl.get("rp_earth") or (planet or {}).get("rp_earth")
+    hz_in = hz.get("inner_au")
+    hz_out = hz.get("outer_au")
+
+    ax.set_facecolor("#0c1322")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ax.spines.values():
+        sp.set_edgecolor("#1f2a3d")
+        sp.set_linewidth(0.8)
+
+    if au is None or hz_in is None or hz_out is None:
+        ax.text(0.5, 0.5, "System diagram\nunavailable",
+                ha="center", va="center", color="#64748b", fontsize=8,
+                transform=ax.transAxes)
+        return
+
+    max_au = max(hz_out * 1.20, au * 1.15, 0.02)
+    ax.set_xlim(-0.10 * max_au, max_au * 1.10)
+    ax.set_ylim(-max_au * 0.62, max_au * 0.62)
+    ax.set_aspect("equal", adjustable="box")
+
+    band = Wedge((0, 0), hz_out, 0, 360, width=(hz_out - hz_in),
+                 facecolor="#34e3a4", alpha=0.18, edgecolor="none", zorder=1)
+    ax.add_patch(band)
+    for r in (hz_in, hz_out):
+        ax.add_patch(Circle((0, 0), r, fill=False, edgecolor="#34e3a4",
+                            linestyle=(0, (3, 4)), linewidth=0.8,
+                            alpha=0.55, zorder=2))
+
+    ax.add_patch(Circle((0, 0), au, fill=False, edgecolor="#ffffff",
+                        linewidth=0.6, alpha=0.20, zorder=2))
+
+    star_col = _star_color(teff)
+    star_r = max_au * 0.050 * min(2.5, max(0.6, rstar))
+    for alpha, mult in ((0.40, 2.3), (0.20, 1.7), (0.12, 1.3)):
+        ax.add_patch(Circle((0, 0), star_r * mult, color=star_col,
+                            alpha=alpha, zorder=3, linewidth=0))
+    ax.add_patch(Circle((0, 0), star_r, color=star_col, zorder=4, linewidth=0))
+    ax.add_patch(Circle((0, 0), star_r * 0.55, color="#ffffff",
+                        alpha=0.85, zorder=5, linewidth=0))
+
+    planet_r = max_au * 0.028 * min(3.0, max(0.5, (rp or 1.0) / 1.5))
+    min_sep = star_r + planet_r + max_au * 0.012
+    px = max(au, min_sep)
+    if hz_in <= au <= hz_out:
+        planet_col = "#34e3a4"
+    elif au < hz_in:
+        planet_col = "#ef5a3a"
+    else:
+        planet_col = "#a0b4d6"
+    ax.add_patch(Circle((px, 0), planet_r, color=planet_col, zorder=6,
+                        linewidth=0))
+    ax.add_patch(Wedge((px, 0), planet_r, -90, 90,
+                       facecolor="#0a0e1a", alpha=0.55, zorder=7,
+                       edgecolor="none"))
+
+    hz_center = (hz_in + hz_out) / 2
+    ax.text(hz_center, -max_au * 0.52, "HZ", color="#34e3a4", alpha=0.85,
+            fontsize=7, ha="center", va="center",
+            family="monospace", fontweight="bold")
+
+    sp_letter = _spectral_type(teff)
+    teff_str = f"{int(round(teff))} K" if teff else "— K"
+    au_str = f"{au:.3f}" if au < 0.1 else f"{au:.2f}"
+    rp_str = f"{rp:.1f}" if rp else "—"
+    ax.text(0.985, 0.95, f"{sp_letter}-type · {teff_str}",
+            fontsize=7.5, color="#ffffff", ha="right", va="top",
+            transform=ax.transAxes, fontweight="bold")
+    ax.text(0.985, 0.83, f"{au_str} AU · {rp_str} R⊕",
+            fontsize=7.5, color="#ffffff", ha="right", va="top",
+            transform=ax.transAxes, fontweight="bold")
 
 
 # ----------------------------------------------------------------------
@@ -170,13 +285,20 @@ def make_hci_summary_image(
     fig = plt.figure(figsize=(9.0, 7.4))
     gs = fig.add_gridspec(
         nrows=3, ncols=2,
-        height_ratios=[1.0, 2.4, 2.6],
+        height_ratios=[1.4, 2.2, 2.6],
         hspace=0.45, wspace=0.18,
         left=0.06, right=0.96, top=0.93, bottom=0.06,
     )
 
+    # Split the header row: text on the left, planet-system diagram on the
+    # right. Sub-gridspec keeps the diagram independent of the table columns
+    # below so the observables/TLCM tables remain equal-width.
+    gs_head = gs[0, :].subgridspec(1, 2, width_ratios=[1.85, 1.0], wspace=0.06)
+
     # --- header band ---------------------------------------------------
-    ax_head = fig.add_subplot(gs[0, :])
+    ax_head = fig.add_subplot(gs_head[0, 0])
+    ax_diag = fig.add_subplot(gs_head[0, 1])
+    _draw_planet_diagram(ax_diag, observables or {}, planet)
     ax_head.axis("off")
     heading = title or "Habitability Chance Index"
     # Title row

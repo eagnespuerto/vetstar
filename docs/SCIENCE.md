@@ -487,6 +487,34 @@ the README (ExoFOP → TIC v8 → Gaia DR3 → Pecaut & Mamajek main sequence)
 keeps the HCI computable directly from the light curve. Every fallback
 that fires emits a `caveat` so the UI shows where the values came from.
 
+### 9.1 HCI summary image — planet-system diagram
+
+The PNG returned alongside the score (`hci_image`, embedded in the HCI page
+of the PDF report) renders a compact top-down diagram of the system that
+mirrors the ExoWorld tuner stage:
+
+- The host star is drawn at the centre with a colour derived from `Teff`
+  (M-dwarfs red, K orange, G yellow-white, F warm white, A/early bluish)
+  and a radius scaled by `R★/R⊙`.
+- The **Kopparapu / POE habitable zone** (§7.2) is a filled annulus from
+  `inner_au` to `outer_au`, with dashed circles marking the recent-Venus
+  and early-Mars edges.
+- The orbit is a thin ring at `a/AU`. The planet is placed on it, coloured
+  green when the orbit lies inside the HZ, red when interior to the inner
+  edge (too hot), and slate-blue when exterior (too cold). A terminator
+  shade darkens the anti-stellar hemisphere. When the true orbit would
+  cause the planet disc to overlap the star disc visually (M-dwarf
+  systems at ~0.05 AU, hot Jupiters), the planet is shifted outward by
+  the minimum disc separation so it stays readable; this is a display
+  guard only and does not change any numerical output.
+- An overlay in the top-right prints the spectral type, `Teff` in K,
+  semi-major axis in AU, and planet radius in `R⊕` — the same fields
+  shown in ExoWorld so the two views are directly comparable.
+
+The diagram lives in a sub-gridspec inside the existing header row, so
+the overall figure size (9.0 × 7.4 in) is unchanged from prior releases
+and PDF report layouts remain stable.
+
 ---
 
 ## 10. ExoMiner feature extraction
