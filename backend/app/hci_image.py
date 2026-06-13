@@ -148,10 +148,14 @@ def _draw_planet_diagram(ax, observables: dict, planet: Optional[dict]) -> None:
                 transform=ax.transAxes)
         return
 
+    # The ExoWorld tuner SVG uses preserveAspectRatio="none" — the stage
+    # stretches to fill its container so the HZ band, orbit and planet
+    # are rendered as ellipses that fan out across the full panel. Match
+    # that here by NOT forcing aspect=equal; the patches end up filling
+    # the entire diagram column instead of being letterboxed.
     max_au = max(hz_out * 1.20, au * 1.15, 0.02)
     ax.set_xlim(-0.10 * max_au, max_au * 1.10)
-    ax.set_ylim(-max_au * 0.62, max_au * 0.62)
-    ax.set_aspect("equal", adjustable="box")
+    ax.set_ylim(-max_au * 1.0, max_au * 1.0)
 
     band = Wedge((0, 0), hz_out, 0, 360, width=(hz_out - hz_in),
                  facecolor="#34e3a4", alpha=0.18, edgecolor="none", zorder=1)
@@ -285,7 +289,7 @@ def make_hci_summary_image(
     fig = plt.figure(figsize=(9.0, 7.4))
     gs = fig.add_gridspec(
         nrows=3, ncols=2,
-        height_ratios=[1.4, 2.2, 2.6],
+        height_ratios=[2.2, 1.9, 2.4],
         hspace=0.45, wspace=0.18,
         left=0.06, right=0.96, top=0.93, bottom=0.06,
     )
@@ -306,9 +310,15 @@ def make_hci_summary_image(
     ax_head.axis("off")
     heading = title or "Habitability Chance Index"
     # Title row
-    ax_head.text(0.0, 0.95, heading, fontsize=11, fontweight="bold",
+    # Title is clipped to a "HCI — ..." short form when long so it fits
+    # the narrower text column without spilling under the diagram, which
+    # has an opaque dark facecolor and would otherwise mask the overflow.
+    short_heading = heading
+    if heading and len(heading) > 22:
+        short_heading = heading.replace("Habitability Chance Index", "HCI")
+    ax_head.text(0.0, 0.95, short_heading, fontsize=11, fontweight="bold",
                  color="#0f172a", va="top", transform=ax_head.transAxes)
-    ax_head.text(0.0, 0.72, hci.get("paper_ref", ""), fontsize=7,
+    ax_head.text(0.0, 0.72, hci.get("paper_ref", ""), fontsize=6.5,
                  style="italic", color="#64748b", va="top",
                  transform=ax_head.transAxes)
     # Score on its own line, below the title
