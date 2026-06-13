@@ -293,7 +293,11 @@ def make_hci_summary_image(
     # Split the header row: text on the left, planet-system diagram on the
     # right. Sub-gridspec keeps the diagram independent of the table columns
     # below so the observables/TLCM tables remain equal-width.
-    gs_head = gs[0, :].subgridspec(1, 2, width_ratios=[1.85, 1.0], wspace=0.06)
+    # Diagram column doubled in width vs. the prior layout (it now takes
+    # ~69% of the row instead of ~35%). The heading text fontsizes are
+    # tightened accordingly so the title and score still fit in the
+    # narrower left column.
+    gs_head = gs[0, :].subgridspec(1, 2, width_ratios=[0.45, 1.0], wspace=0.06)
 
     # --- header band ---------------------------------------------------
     ax_head = fig.add_subplot(gs_head[0, 0])
@@ -302,9 +306,9 @@ def make_hci_summary_image(
     ax_head.axis("off")
     heading = title or "Habitability Chance Index"
     # Title row
-    ax_head.text(0.0, 0.95, heading, fontsize=15, fontweight="bold",
+    ax_head.text(0.0, 0.95, heading, fontsize=11, fontweight="bold",
                  color="#0f172a", va="top", transform=ax_head.transAxes)
-    ax_head.text(0.0, 0.62, hci.get("paper_ref", ""), fontsize=8,
+    ax_head.text(0.0, 0.72, hci.get("paper_ref", ""), fontsize=7,
                  style="italic", color="#64748b", va="top",
                  transform=ax_head.transAxes)
     # Score on its own line, below the title
@@ -313,11 +317,11 @@ def make_hci_summary_image(
         if hci.get("hci_low") is not None and hci.get("hci_high") is not None \
                 and (hci["hci_high"] - hci["hci_low"]) > 0.1:
             rng = f"  ({hci['hci_low']}\u2013{hci['hci_high']})"
-        ax_head.text(0.0, 0.30, f"{_fmt(score, 1)} / 100{rng}",
-                     fontsize=20, fontweight="bold", color=_tier_color(score),
+        ax_head.text(0.0, 0.45, f"{_fmt(score, 1)} / 100{rng}",
+                     fontsize=15, fontweight="bold", color=_tier_color(score),
                      va="top", ha="left", transform=ax_head.transAxes)
-        ax_head.text(1.0, 0.32, f"Tier: {tier}", fontsize=11,
-                     color=_tier_color(score), va="top", ha="right",
+        ax_head.text(0.0, 0.18, f"Tier: {tier}", fontsize=9,
+                     color=_tier_color(score), va="top", ha="left",
                      transform=ax_head.transAxes)
         dmod = hci.get("density_modifier") or 0
         dlabel = hci.get("density_modifier_label")
@@ -325,9 +329,9 @@ def make_hci_summary_image(
             sign = "+" if dmod > 0 else "−"
             mod_color = "#047857" if dmod > 0 else "#b91c1c"
             ax_head.text(
-                1.0, 0.62,
+                0.0, 0.02,
                 f"Density modifier: {sign}{abs(dmod)} pts ({dlabel})",
-                fontsize=8.5, color=mod_color, va="top", ha="right",
+                fontsize=7.5, color=mod_color, va="top", ha="left",
                 transform=ax_head.transAxes,
             )
 
