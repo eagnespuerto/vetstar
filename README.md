@@ -140,9 +140,15 @@ computed from the light curve alone:
 
 **HCI summary image (shareable).** Each HCI run also returns a single
 Python-generated PNG (`hci_image`) that gathers, in one figure, the headline
-score and tier, the six sub-score **metrics with their weightings**, and
-side-by-side tables of the **predicted observables (POE)** and the **TLCM**
-geometry values. The HCI panel keeps its interactive breakdown unchanged and
+score and tier, a top-down **planet-system diagram** (host star colored by
+Teff, habitable-zone band with dashed inner/outer guides, orbit ring, planet
+on its orbit, plus a star-type / Teff / semi-major-axis / planet-radius
+overlay — the same visual language as the ExoWorld tuner stage), the six
+sub-score **metrics with their weightings**, and side-by-side tables of the
+**predicted observables (POE)** and the **TLCM** geometry values. The system
+diagram is laid out inside the existing header band via a sub-gridspec, so
+the overall summary-image footprint is unchanged. The HCI panel keeps its
+interactive breakdown unchanged and
 adds a collapsible **"Show HCI summary image"** section with a one-click
 **Share** button (uploads to ImgBB for a link / Markdown / BBCode) and a PNG
 download link. The same image is embedded on the HCI page of the PDF report.
