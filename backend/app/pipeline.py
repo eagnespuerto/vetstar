@@ -24,12 +24,25 @@ from scipy.ndimage import median_filter
 
 
 # ----------------------------------------------------------------------
-# External catalog cross-match (Gaia DR3 + SIMBAD)
+# External catalog cross-match (Gaia DR3 + SIMBAD + exoplanets.org)
 # ----------------------------------------------------------------------
-# Cone-search radius for matching a TIC position to a Gaia DR3 / SIMBAD
-# entry. TESS pixels are ~21", so a few arcsec is plenty for an unambiguous
-# match on the target star itself without dragging in nearby blends.
+# Cone-search radius for matching a TIC position to a Gaia DR3 / SIMBAD /
+# exoplanets.org entry. TESS pixels are ~21", so a few arcsec is plenty for
+# an unambiguous match on the target star itself without dragging in nearby
+# blends.
 CROSSMATCH_RADIUS_ARCSEC = 5.0
+
+# exoplanets.org full-catalog CSV. The site has been static since ~2018 but
+# remains the canonical machine-readable mirror of the original Exoplanet
+# Orbit Database. We pull the whole table once per process and cone-search
+# in memory — it's only ~5k rows.
+_EXOPLANETS_ORG_CSV_URL = "http://exoplanets.org/csv-files/exoplanets.csv"
+_EXOPLANETS_ORG_CACHE: Optional[object] = None  # cached astropy Table or False on failure
+
+# NASA Exoplanet Archive TAP service. Unlike exoplanets.org this is actively
+# maintained, so we use it as the authoritative confirmed-planet source and
+# fall back to exoplanets.org only when the live query fails.
+_NEA_TAP_SYNC = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 
 # SIMBAD object-type prefixes that we treat as "known" classifications. The
 # value is the verdict headline we substitute in when one is matched.
@@ -80,6 +93,148 @@ def _gaia_nss_description(nss_flag) -> Optional[str]:
     return ("Gaia DR3 NSS solution: " + " + ".join(parts)) if parts else None
 
 
+def _row_get(row, *names):
+    """Return the first column present in a row, case-insensitively.
+
+    astroquery flipped SIMBAD column casing (``MAIN_ID`` → ``main_id``) in
+    0.4.8; we accept either so the cross-match keeps working across versions.
+    """
+    try:
+        cols = row.colnames
+    except AttributeError:
+        return None
+    lower_map = {c.lower(): c for c in cols}
+    for n in names:
+        if n in cols:
+            val = row[n]
+        elif n.lower() in lower_map:
+            val = row[lower_map[n.lower()]]
+        else:
+            continue
+        if val is None:
+            return None
+        s = str(val).strip()
+        return s if s and s.lower() != "nan" else None
+    return None
+
+
+def _load_exoplanets_org_table():
+    """Download the exoplanets.org catalog once and cache it.
+
+    Returns an astropy Table on success, or ``None`` on failure (offline,
+    HTTP error, parse error). Cached for the process lifetime.
+    """
+    global _EXOPLANETS_ORG_CACHE
+    if _EXOPLANETS_ORG_CACHE is not None:
+        return _EXOPLANETS_ORG_CACHE if _EXOPLANETS_ORG_CACHE is not False else None
+    try:
+        from urllib.request import Request, urlopen
+        from astropy.io import ascii as ascii_io
+        req = Request(
+            _EXOPLANETS_ORG_CSV_URL,
+            headers={"User-Agent": "vetstar/known-obj-fix"},
+        )
+        with urlopen(req, timeout=20) as resp:
+            data = resp.read().decode("utf-8", errors="replace")
+        tbl = ascii_io.read(data, format="csv", fast_reader=False)
+        _EXOPLANETS_ORG_CACHE = tbl
+        return tbl
+    except Exception:
+        _EXOPLANETS_ORG_CACHE = False
+        return None
+
+
+def _query_exoplanets_org(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
+    """Cone-search exoplanets.org for a confirmed planet host at (ra, dec).
+
+    Returns ``None`` if the catalog can't be loaded. Returns ``{"matched":
+    False, ...}`` if no row falls within the radius, otherwise the closest
+    match with its planet name, host star, period, and separation.
+    """
+    tbl = _load_exoplanets_org_table()
+    if tbl is None:
+        return {"error": "exoplanets.org catalog unavailable"}
+
+    # exoplanets.org uses RA/DEC in degrees (columns "RA" and "DEC"); some
+    # rows are blank. Build a numeric mask once.
+    try:
+        ra_col = np.array(tbl["RA"], dtype=float)
+        dec_col = np.array(tbl["DEC"], dtype=float)
+    except Exception:
+        return {"error": "exoplanets.org missing RA/DEC columns"}
+
+    finite = np.isfinite(ra_col) & np.isfinite(dec_col)
+    if not finite.any():
+        return {"matched": False, "n_rows": 0}
+
+    # Small-angle haversine for cone search; fine for arcsec-scale radii.
+    cos_dec = math.cos(math.radians(dec))
+    dra = (ra_col - ra) * cos_dec
+    ddec = dec_col - dec
+    sep_arcsec = np.sqrt(dra * dra + ddec * ddec) * 3600.0
+    sep_arcsec[~finite] = np.inf
+
+    idx = int(np.argmin(sep_arcsec))
+    best = float(sep_arcsec[idx])
+    if best > radius_arcsec:
+        return {"matched": False, "closest_arcsec": best}
+
+    row = tbl[idx]
+    name = _row_get(row, "NAME") or "exoplanets.org candidate"
+    host = _row_get(row, "STAR", "HOSTNAME")
+    period = _row_get(row, "PER")
+    return {
+        "matched": True,
+        "name": name,
+        "host": host,
+        "period_days": period,
+        "dist_arcsec": best,
+    }
+
+
+def _query_nasa_exoplanet_archive(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
+    """Cone-search the NASA Exoplanet Archive ``ps`` (planetary systems) table.
+
+    Uses the public TAP sync endpoint with an ADQL CONTAINS query so we only
+    pull rows actually inside the radius. Returns ``{"matched": False}`` when
+    no rows come back, or an error dict on network/parse failure.
+    """
+    try:
+        from urllib.parse import urlencode
+        from urllib.request import Request, urlopen
+        from astropy.io import ascii as ascii_io
+        radius_deg = radius_arcsec / 3600.0
+        adql = (
+            "SELECT TOP 1 pl_name, hostname, ra, dec, pl_orbper, "
+            "DISTANCE(POINT('ICRS', ra, dec), "
+            f"POINT('ICRS', {ra}, {dec})) * 3600 AS dist_arcsec "
+            "FROM ps "
+            f"WHERE CONTAINS(POINT('ICRS', ra, dec), "
+            f"CIRCLE('ICRS', {ra}, {dec}, {radius_deg})) = 1 "
+            "ORDER BY dist_arcsec ASC"
+        )
+        url = _NEA_TAP_SYNC + "?" + urlencode({
+            "query": adql,
+            "format": "csv",
+        })
+        req = Request(url, headers={"User-Agent": "vetstar/known-obj-fix"})
+        with urlopen(req, timeout=20) as resp:
+            data = resp.read().decode("utf-8", errors="replace")
+        tbl = ascii_io.read(data, format="csv", fast_reader=False)
+        if len(tbl) == 0:
+            return {"matched": False}
+        row = tbl[0]
+        return {
+            "matched": True,
+            "name":   _row_get(row, "pl_name"),
+            "host":   _row_get(row, "hostname"),
+            "period_days": _row_get(row, "pl_orbper"),
+            "dist_arcsec": float(row["dist_arcsec"]) if "dist_arcsec" in row.colnames else None,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def crossmatch_known_object(
     ra: Optional[float],
     dec: Optional[float],
@@ -119,6 +274,8 @@ def crossmatch_known_object(
     sources_tried = []
     gaia_match = None
     simbad_match = None
+    exoplanets_org_match = None
+    nea_match = None
 
     # ----- Gaia DR3 ----------------------------------------------------
     try:
@@ -159,31 +316,72 @@ def crossmatch_known_object(
         sources_tried.append("SIMBAD")
         sb = Simbad()
         sb.TIMEOUT = 15
-        sb.add_votable_fields("otype", "ids")
+        # otype is included by default in newer astroquery; ids is opt-in.
+        # Wrap each in try/except so version drift doesn't crash the query.
+        for field_name in ("otype", "ids"):
+            try:
+                sb.add_votable_fields(field_name)
+            except Exception:
+                pass
         tbl = sb.query_region(coord, radius=radius)
         if tbl is not None and len(tbl) > 0:
             row = tbl[0]
-            main_id = str(row["MAIN_ID"]) if "MAIN_ID" in row.colnames else None
-            otype = str(row["OTYPE"]) if "OTYPE" in row.colnames else ""
-            ids = str(row["IDS"]) if "IDS" in row.colnames else ""
             simbad_match = {
-                "main_id": main_id,
-                "otype": otype,
-                "ids": ids,
+                "main_id": _row_get(row, "MAIN_ID", "main_id"),
+                "otype":   _row_get(row, "OTYPE", "otype") or "",
+                "ids":     _row_get(row, "IDS", "ids") or "",
             }
     except Exception as exc:
         simbad_match = {"error": str(exc)}
+
+    # ----- NASA Exoplanet Archive (live TAP) --------------------------
+    try:
+        sources_tried.append("NASA Exoplanet Archive")
+        nea_match = _query_nasa_exoplanet_archive(ra, dec, radius_arcsec)
+    except Exception as exc:
+        nea_match = {"error": str(exc)}
+
+    # ----- exoplanets.org (fallback / corroborating) ------------------
+    # Only hit exoplanets.org when NEA didn't give us a confirmed match —
+    # NEA is the authoritative live source, the .org mirror is frozen at 2018.
+    if not (nea_match and nea_match.get("matched")):
+        try:
+            sources_tried.append("exoplanets.org")
+            exoplanets_org_match = _query_exoplanets_org(ra, dec, radius_arcsec)
+        except Exception as exc:
+            exoplanets_org_match = {"error": str(exc)}
 
     # ----- Decide whether this counts as a "known" classification -----
     headline = None
     description_bits = []
     name_bits = []
 
+    # Confirmed-planet sources are the most specific (and outrank SIMBAD's
+    # generic otype). NEA is authoritative; exoplanets.org is the legacy
+    # mirror used only when NEA didn't return a hit.
+    for src_label, m in (
+        ("NASA Exoplanet Archive", nea_match),
+        ("exoplanets.org",         exoplanets_org_match),
+    ):
+        if m and m.get("matched"):
+            headline = "Known Planet"
+            bits = [f"{src_label}: {m.get('name')}"]
+            if m.get("period_days"):
+                bits.append(f"P={m['period_days']} d")
+            description_bits.append("; ".join(bits))
+            if m.get("host"):
+                name_bits.append(m["host"])
+            elif m.get("name"):
+                name_bits.append(m["name"])
+            break
+
     if simbad_match and "otype" in simbad_match:
         otype = simbad_match["otype"]
         for prefix, label in _SIMBAD_OTYPE_MAP:
             if otype.startswith(prefix):
-                headline = label
+                # Don't overwrite the more-specific exoplanets.org label.
+                if headline is None:
+                    headline = label
                 description_bits.append(f"SIMBAD object type '{otype}'")
                 break
         if simbad_match.get("main_id"):
@@ -205,15 +403,24 @@ def crossmatch_known_object(
         "sources_tried": sources_tried,
         "gaia": gaia_match,
         "simbad": simbad_match,
+        "exoplanets_org": exoplanets_org_match,
+        "nasa_exoplanet_archive": nea_match,
     }
     if matched:
         out["headline"] = headline
-        out["name"] = " / ".join(name_bits) if name_bits else None
+        # De-dupe while preserving order.
+        seen = set()
+        unique_names = [n for n in name_bits if n and not (n in seen or seen.add(n))]
+        out["name"] = " / ".join(unique_names) if unique_names else None
         out["description"] = "; ".join(description_bits)
-        # Closest-match distance (Gaia is sub-arcsec accurate; SIMBAD has
-        # no distance in this minimal query, so prefer Gaia's).
+        # Closest-match distance: prefer Gaia (sub-arcsec), then NEA, then
+        # the legacy exoplanets.org cone-search separation.
         if gaia_match and "dist_arcsec" in gaia_match:
             out["distance_arcsec"] = gaia_match["dist_arcsec"]
+        elif nea_match and nea_match.get("dist_arcsec") is not None:
+            out["distance_arcsec"] = nea_match["dist_arcsec"]
+        elif exoplanets_org_match and exoplanets_org_match.get("dist_arcsec") is not None:
+            out["distance_arcsec"] = exoplanets_org_match["dist_arcsec"]
     return out
 
 
