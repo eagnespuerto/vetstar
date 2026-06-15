@@ -503,7 +503,6 @@ def mast_download_fits(tic_id: int, sector: int):
 
 from .habitability import PlanetCandidate, compute_hci
 from .exofop import query_exofop
-from .pipeline import run_multisector_analysis
 
 
 class HabitabilityQuery(BaseModel):
@@ -1022,31 +1021,42 @@ def _build_report_extras(
 
 @app.post("/api/mast/multisector")
 async def mast_multisector(query: MultisectorQuery):
-    analysis, _rep_star, _sector_results = _run_mast_multisector(query)
-    return analysis
+    result, info = _run_mast_multisector(query)
+    _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
+    out = result.to_dict()
+    out["mast"] = {
+        "sectors_used": info.get("sectors_used", []),
+        "sectors_attempted": info.get("sectors_attempted", 0),
+        "sectors_succeeded": info.get("sectors_succeeded", 0),
+        "errors": info.get("errors", []),
+    }
+    out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, None)
+    out["dvt"] = _summarize_dvt(info.get("dvt"))
+    return out
 
 
 @app.post("/api/mast/multisector/report")
 async def mast_multisector_report(query: MultisectorQuery):
-    """Build a multi-sector PDF report — same clean layout as the
-    single-sector report, with an overview, per-sector verdicts, and a full
-    section (HCI summary, ExoFOP TOI parameters, ExoMiner) per identified
-    object."""
-    from .report import build_multisector_pdf
-
-    analysis, rep_star, sector_results = _run_mast_multisector(query)
+    """Build a PDF report from the stitched multi-sector light curve — uses
+    the single-sector report layout because multi-sector is now just one
+    long lightcurve through the same pipeline."""
+    result, info = _run_mast_multisector(query)
     try:
-        ffi = None
-        if rep_star is not None and getattr(rep_star, "ra", None) is not None:
-            ffi = _get_ffi_cutout(
-                query.tic_id, getattr(rep_star, "sector", None),
-                rep_star.ra, rep_star.dec,
-            )
-        pdf = build_multisector_pdf(
-            analysis, ffi_cutout=ffi, sector_results=sector_results,
+        dvt = info.get("dvt")
+        extras = _build_report_extras(
+            result,
+            n_sectors_observed=len(info.get("sectors_used", [])) or 1,
+            dvt=dvt,
+        )
+        pdf = build_pdf(
+            result,
+            hci_bundle=extras.get("hci_bundle"),
+            exominer=extras.get("exominer"),
+            ffi_cutout=extras.get("ffi_cutout"),
+            dvt=dvt,
         )
     except Exception as e:
-        raise _handle_exception("build_multisector_pdf", e)
+        raise _handle_exception("build_pdf", e)
 
     fname = f"vetting_TIC{query.tic_id}_multisector.pdf"
     return Response(
@@ -1056,9 +1066,15 @@ async def mast_multisector_report(query: MultisectorQuery):
 
 
 def _run_mast_multisector(query: MultisectorQuery):
-    """Fetch + analyse multiple sectors for a TIC. Returns
-    ``(analysis_dict, representative_star)``. Used by both the JSON endpoint
-    and the PDF report endpoint so they stay in lock-step."""
+    """Fetch each requested sector's lightcurve, stitch them together by
+    BJD/BTJD, and run the standard single-sector pipeline once on the
+    combined series.
+
+    Stitching by time (rather than running the pipeline per sector and
+    reconciling afterwards) keeps peak RAM under ~512 MB: only the raw
+    arrays survive each iteration, and each FITS file is deleted as soon
+    as it's parsed. Returns ``(VettingResult, info_dict)``.
+    """
     from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
 
     try:
@@ -1075,107 +1091,113 @@ def _run_mast_multisector(query: MultisectorQuery):
         wanted = set(int(s) for s in query.sectors)
         sectors_to_fetch = [s for s in all_sectors if s["sector"] in wanted][:MAX_SECTORS]
     else:
-        # Newest sectors first, capped — most likely to share an ephemeris.
         sectors_to_fetch = all_sectors[-MAX_SECTORS:]
 
-    sector_results = []
-    errors = []
+    t_parts: list = []
+    flux_parts: list = []
+    err_parts: list = []
+    qual_parts: list = []
+    momx_parts: list = []
+    momy_parts: list = []
+    rep_star = None
+    sectors_used: list = []
+    errors: list = []
 
     for sec_info in sectors_to_fetch:
         sec_num = sec_info["sector"]
+        path = None
         try:
-            info = fetch_spoc_lightcurve(query.tic_id, sec_num)
-            parsed = parse_upload(info["path"], info["filename"])
-            result = _run_pipeline(
-                parsed,
-                query.detect_threshold, query.detect_min_snr,
-                high_variability=query.high_variability,
-                rotation_period_days=query.rotation_period_days,
-                secondary_sigma=query.secondary_sigma,
-                odd_even_sigma=query.odd_even_sigma,
-                known_period_days=query.known_period_days,
+            fetched = fetch_spoc_lightcurve(query.tic_id, sec_num)
+            path = fetched.get("path")
+            parsed = parse_upload(path, fetched["filename"])
+            if parsed.get("t") is None or parsed.get("flux") is None:
+                raise RuntimeError("parser returned no time series")
+            t_parts.append(np.asarray(parsed["t"], dtype=float))
+            flux_parts.append(np.asarray(parsed["flux"], dtype=float))
+            n = len(parsed["t"])
+            err = parsed.get("flux_err")
+            err_parts.append(
+                np.asarray(err, dtype=float) if err is not None
+                else np.full(n, np.nan)
             )
-            # Cache the cleaned LC per sector so ExoMiner can reuse it below.
-            _cache_lc(parsed)
-            sector_results.append((sec_num, result))
+            q = parsed.get("quality")
+            qual_parts.append(
+                np.asarray(q, dtype=int) if q is not None else np.zeros(n, dtype=int)
+            )
+            mx = parsed.get("mom_x")
+            my = parsed.get("mom_y")
+            momx_parts.append(
+                np.asarray(mx, dtype=float) if mx is not None
+                else np.full(n, np.nan)
+            )
+            momy_parts.append(
+                np.asarray(my, dtype=float) if my is not None
+                else np.full(n, np.nan)
+            )
+            if rep_star is None:
+                rep_star = parsed.get("star")
+            sectors_used.append(sec_num)
+            del parsed
         except Exception as e:
             log.warning("Sector %s failed for TIC %s: %s", sec_num, query.tic_id, e)
             errors.append({"sector": sec_num, "error": str(e)})
+        finally:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
-    if not sector_results:
+    if not sectors_used:
         raise HTTPException(502, f"All sector fetches failed. Errors: {errors}")
 
-    # Opportunistically fetch the SPOC DVT for the TIC (one DV run spans all
-    # processed sectors), so the per-object geometry below can use the fitted
-    # a/R* + impact parameter, and the frontend can show a fetch-status badge.
+    t_all = np.concatenate(t_parts)
+    flux_all = np.concatenate(flux_parts)
+    err_all = np.concatenate(err_parts)
+    qual_all = np.concatenate(qual_parts)
+    momx_all = np.concatenate(momx_parts)
+    momy_all = np.concatenate(momy_parts)
+    # Free the per-sector arrays before allocating the sorted copies.
+    t_parts.clear(); flux_parts.clear(); err_parts.clear()
+    qual_parts.clear(); momx_parts.clear(); momy_parts.clear()
+
+    order = np.argsort(t_all, kind="mergesort")
+    parsed_all = {
+        "t": t_all[order],
+        "flux": flux_all[order],
+        "flux_err": err_all[order],
+        "quality": qual_all[order],
+        "mom_x": momx_all[order],
+        "mom_y": momy_all[order],
+        "star": rep_star,
+    }
+
+    result = _run_pipeline(
+        parsed_all,
+        query.detect_threshold, query.detect_min_snr,
+        high_variability=query.high_variability,
+        rotation_period_days=query.rotation_period_days,
+        secondary_sigma=query.secondary_sigma,
+        odd_even_sigma=query.odd_even_sigma,
+        known_period_days=query.known_period_days,
+    )
+    _cache_lc(parsed_all)
+
     dvt = None
     try:
         from .dvt_fetch import fetch_dvt
         dvt = fetch_dvt(query.tic_id, None)
     except Exception as _e:
         log.warning("DVT fetch skipped for TIC %s (multisector): %s", query.tic_id, _e)
-        dvt = None
 
-    analysis = run_multisector_analysis(
-        sector_results,
-        detect_threshold=query.detect_threshold,
-        detect_min_snr=query.detect_min_snr,
-        high_variability=query.high_variability,
-        secondary_sigma=query.secondary_sigma,
-        odd_even_sigma=query.odd_even_sigma,
-        known_period_days=query.known_period_days,
-        max_objects=query.max_objects,
-    )
-    analysis["errors"] = errors
-    analysis["sectors_attempted"] = len(sectors_to_fetch)
-    analysis["sectors_succeeded"] = len(sector_results)
-    analysis["tic_id"] = query.tic_id
-    analysis["dvt"] = _summarize_dvt(dvt)
-
-    analysis["sector_verdicts"] = [
-        {
-            "sector": sec,
-            "verdict": res.verdict.get("headline"),
-            "category": res.verdict.get("category"),
-            "n_events": len(res.events),
-            "bls_period_d": res.bls.get("period"),
-            "bls_sde": res.bls.get("sde"),
-        }
-        for sec, res in sector_results
-    ]
-
-    # --- HCI + ExoMiner per identified object --------------------------------
-    # For each object (up to MAX_OBJECTS), pick the sector with its deepest
-    # event as the representative light curve, then recompute HCI (with the
-    # real multi-sector counts) and ExoMiner (from that sector's cached LC),
-    # pinned to the object's consensus period.
-    res_by_sector = {sec: res for sec, res in sector_results}
-    for obj in analysis.get("objects", []):
-        try:
-            members = obj.get("members") or []
-            if not members:
-                continue
-            best = max(members, key=lambda m: m.get("depth_pct", 0.0))
-            rep = res_by_sector.get(best["sector"])
-            if rep is None:
-                continue
-            extras = _build_report_extras(
-                rep,
-                n_sectors_observed=analysis.get("n_sectors_observed", 1),
-                n_sectors_with_detections=len(obj.get("sectors", [])) or None,
-                period_override=obj.get("period_d_median"),
-                dvt=dvt,
-            )
-            obj["representative_sector"] = best["sector"]
-            obj["hci_bundle"] = extras.get("hci_bundle")
-            obj["exominer"] = extras.get("exominer")
-        except Exception as e:
-            log.warning("Multi-sector HCI/ExoMiner enrich failed for object: %s", e)
-            obj["hci_bundle"] = obj.get("hci_bundle")
-            obj["exominer"] = obj.get("exominer")
-
-    rep_star = sector_results[0][1].star if sector_results else None
-    return analysis, rep_star, sector_results
+    info = {
+        "sectors_used": sectors_used,
+        "sectors_attempted": len(sectors_to_fetch),
+        "sectors_succeeded": len(sectors_used),
+        "errors": errors,
+        "dvt": dvt,
+    }
+    return result, info
 
 
 # -------------------------------------------------

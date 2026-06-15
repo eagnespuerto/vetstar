@@ -84,10 +84,10 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   server-side at report time, so a single click yields a report covering every
   analysis the studio offers (each block is skipped gracefully if the
   underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
-- **Multi-sector PDF report**: the multi-sector panel can export its own PDF
-  in the same clean format — an overview, the target FFI cutout, the detection
-  timeline, a per-sector verdict table, and a full section (HCI summary,
-  ExoFOP TOI parameters, ExoMiner) for each identified object.
+- **Multi-sector PDF report**: the multi-sector panel can export the same
+  single-sector report, computed against the stitched-LC pass — one verdict,
+  one set of diagnostic plots, one HCI / ExoMiner section — with a banner
+  noting which sectors were combined.
 
 ### Habitability Chance Index (HCI)
 
@@ -273,8 +273,7 @@ cached — an on-target test, via `POST /api/manual_dip`.
 ### Plot sharing (ImgBB)
 
 Every generated image — the diagnostic and phase-folded plots, the HCI
-summary image, the ExoMiner views, and the multi-sector timeline / per-object
-HCI / per-object ExoMiner views — has a share button that uploads the PNG to
+summary image, and the ExoMiner views — has a share button that uploads the PNG to
 ImgBB and returns a public link (with Markdown and BBCode embeds); an "upload
 all plots" action bundles the full set into a single shareable album for
 pasting into issues or collaboration threads. Single-image exports — including
@@ -302,19 +301,17 @@ spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
   a DVT is available), and — once you've clicked **Compute HCI** — the
   **Habitability Chance Index summary image** with its metrics, weightings,
   predicted observables, and TLCM geometry.
-- **Multi-sector contents** — the detection-timeline plot, plus, for each
-  identified object, its HCI summary image and the full ExoMiner feature
-  views (global / local / secondary / odd-vs-even, plus centroid global /
-  local and the σ diagnostic). Filenames carry the object id (`obj1`,
-  `obj2`, …) so each object's plots stay grouped on ExoFOP.
+- **Multi-sector contents** — identical to single-sector, because the
+  multi-sector pipeline produces a single stitched-LC verdict with the same
+  plot set.
 - **Each plot** is renamed to the
   `targetnameC-xxDATESTAMP[optional_info][y].ext` convention, with the
   correct single-letter type code: `L` (Light Curve) for raw photometry
   views (the full and zoomed light-curve plots, SPOC DV phase-fold, and the
   ExoMiner global / local / secondary / odd-even phase folds), `O` (Other)
-  for periodograms, centroid diagnostics, the HCI summary image, and the
-  multi-sector timeline. Filenames stay under the 100-character cap and are
-  suffixed `a`, `b`, … if a sibling would collide.
+  for periodograms, centroid diagnostics, and the HCI summary image.
+  Filenames stay under the 100-character cap and are suffixed `a`, `b`, …
+  if a sibling would collide.
 - **Descriptor rows** have the five pipe-delimited columns ExoFOP expects
   — `filename | data tag | group | proprietary period | description` —
   with group blank and proprietary period set to `0` (the spec mandates
@@ -334,52 +331,29 @@ producing anything ExoFOP would reject.
 Chosen up front (a **Single sector / Multi-sector** toggle on the MAST card,
 no need to run a single sector first). Fetches up to **5** TESS sectors for a
 TIC from MAST — your selected sectors, capped to 5, or the newest 5 by
-default — runs the vetting pipeline on each, and produces:
+default — then **stitches their lightcurves together by BJD/BTJD** and runs
+the standard single-sector pipeline **once** on the combined series.
 
-- A **detection timeline** bar chart (red = dip detected, grey = no dip)
-  showing detection consistency across sectors
-- **Object identification** — the **2 deepest events per sector** are pooled
-  and grouped by transit duration into **up to N distinct objects** (N
-  defaults to 2, configurable per run from 1 up to
-  `MAX_SECTORS × EVENTS_PER_SECTOR = 10` via a small input next to the
-  scope toggle, or the `max_objects` field on the multi-sector API). Bump
-  it up when the deepest dips in a TIC are a contaminant or eclipsing
-  binary and the real TOI of interest would otherwise be merged away — for
-  example, TIC 253126207 / TOI 6568.01 (a ~17-day orbit) only emerges as
-  its own object when N is raised above the default 2. Each object is
-  **cross-confirmed** when it appears in ≥2 sectors with the *same transit
-  duration* (within a ±0.05 h tolerance, `DURATION_MATCH_TOL_H`) and the
-  *same period*. This separates, e.g., a real repeating planet from a
-  second signal of different duration in the same target.
-- A **per-sector verdict table** with event counts, BLS period, and SDE
-- A **period consensus** estimate from sectors where BLS SDE > 6
-- **Per-object HCI + ExoMiner** — for each identified object the pipeline
-  recomputes the **Habitability Chance Index** (using the real multi-sector
-  detection counts and the object's consensus period) and the full **ExoMiner**
-  feature views, taken from the sector showing that object's deepest event.
-- Automatic **HCI score update** with real multi-sector counts
+Stitching (rather than running the pipeline per sector and reconciling
+afterwards) is what keeps peak RAM under ~512 MB: each sector's FITS file is
+deleted as soon as its arrays are appended, and only one pipeline pass ever
+holds a model. The multi-sector verdict, BLS, plots, and HCI are therefore
+directly comparable to single-sector output — there is no separate
+"per-object" view because there is only one analysis.
 
-Every image in the multi-sector panel — the detection timeline, each object's
-HCI summary, and each ExoMiner view — has its own **Share** button (ImgBB
-link / Markdown / BBCode). The same panel offers a **⬇ Build ExoFOP-TESS
-bulk-upload ZIP (multi-sector)** section that bundles the timeline plus
-every object's HCI summary and ExoMiner views into a single spec-compliant
-archive (see [Bulk ZIP for ExoFOP-TESS upload](#bulk-zip-for-exofop-tess-upload)).
+The panel shows:
 
-A **Download multi-sector PDF** button on the panel exports the whole analysis
-as a PDF in the same clean format as the single-sector report: an overview
-(sectors observed / with detections, consensus period), the target FFI cutout,
-the detection timeline, the per-sector verdict table, and a full section per
-identified object — its summary, HCI summary image, **ExoFOP TOI parameters**
-(epoch taken from the object's deepest member), and ExoMiner views — plus a
-list of any sectors that failed to fetch. The report re-runs the analysis on
-the same sectors the panel displayed, so the PDF always matches the screen.
+- A banner listing which sectors were stitched (and any that failed to fetch)
+- The standard verdict headline, BLS period / SDE / depth
+- The full single-sector plot set (light curve, event zoom, centroid, BLS,
+  Lomb-Scargle, HCI summary) computed over all stitched sectors
+- The SPOC DVT phase-fold panel (one DV run spans every processed sector)
 
-The sector cap, events-per-sector, default object cap, and hard object
-cap are tunable constants (`MAX_SECTORS`, `EVENTS_PER_SECTOR`,
-`MAX_OBJECTS`, `MAX_OBJECTS_HARD_CAP`) at the top of `pipeline.py`.
-`MAX_OBJECTS` is just the default — each multi-sector request can override
-it up to `MAX_OBJECTS_HARD_CAP` (one bucket per representative event).
+A **Download multi-sector PDF** button exports the same report layout as
+the single-sector PDF, computed against the stitched LC.
+
+The sector cap is the tunable constant `MAX_SECTORS` at the top of
+`pipeline.py`.
 
 ### MAST integration
 
@@ -579,24 +553,17 @@ computes the Habitability Chance Index. The score panel shows:
 Pick **Multi-sector (≤5)** in the scope toggle on the MAST card (you can do
 this from the start — no single-sector run required). Optionally click up to
 5 sectors to include, or leave blank for the newest 5. Click **Run
-multi-sector**. The app fetches the sectors, runs the full pipeline on each,
-and displays:
+multi-sector**. The app downloads each sector's lightcurve, **stitches them
+together by BJD/BTJD**, and runs the standard single-sector pipeline once on
+the combined series. It then displays:
 
-- A **detection timeline** bar chart across sectors
-- **Up to N identified objects** (default 2; raise the **Look for up to N
-  distinct objects** input next to the scope toggle, max 10, when the deepest
-  dips are a contaminant masking the real TOI), each shown with its median
-  duration, depth, period, the sectors it appears in, and a confirmed /
-  mismatch banner from the same-duration (±0.05 h) and same-period cross-check
-- For **each object**, its **HCI score + summary image** and full **ExoMiner
-  feature views**, recomputed from the sector with that object's deepest event
-- A **per-sector verdict table** with event counts and BLS results
-- A **period consensus** from consistent BLS peaks
-- The **HCI score automatically updates** with the real sector counts
+- A banner with the stitched sector list and any fetch errors
+- The standard verdict + BLS summary (period, SDE, depth)
+- The full plot set (light curve, event zoom, centroid, BLS, Lomb-Scargle,
+  HCI summary) computed over the stitched LC
+- The SPOC DVT phase-fold (one DV run spans every processed sector)
 
-Every image in the panel (timeline, HCI summaries, ExoMiner views) has a
-**Share** button, and a **Download multi-sector PDF** button exports the whole
-analysis (see Step 6).
+A **Download multi-sector PDF** button exports the whole analysis (see Step 6).
 
 ### Step 6 — download PDF
 
@@ -606,12 +573,11 @@ verdict, all vetting tables, diagnostic plots, the FFI cutout, the HCI
 summary (including the combined HCI/observables/TLCM image), the **ExoFOP TOI
 parameters** table, and the ExoMiner feature set.
 
-From the multi-sector panel, **Download multi-sector PDF** produces the same
-clean format for the whole run: overview, target FFI cutout, detection
-timeline, per-sector verdicts, and a per-object section (HCI summary, ExoFOP
-TOI parameters, ExoMiner). It re-runs the analysis on the displayed sectors,
-so the file matches what's on screen — expect a short build time for several
-sectors.
+From the multi-sector panel, **Download multi-sector PDF** produces the
+single-sector report layout against the stitched LC: verdict, vetting tables,
+diagnostic plots, FFI cutout, HCI summary, ExoFOP TOI parameters, and
+ExoMiner. The filename is suffixed `_multisector` and the report covers the
+same stitched lightcurve shown on screen.
 
 
 ## Verdict logic
@@ -708,8 +674,8 @@ POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, ?max_objects (1–10, default 2)} → timeline + up-to-N objects (each w/ HCI + ExoMiner) JSON
-POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, ?max_objects (1–10, default 2)} → multi-sector PDF (overview, per-sector, per-object HCI + ExoFOP + ExoMiner)
+POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single VettingResult on stitched LC + mast.sectors_used / errors JSON
+POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single-sector-format PDF computed on the stitched LC
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
