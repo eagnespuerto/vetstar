@@ -2089,25 +2089,30 @@ function MultisectorPanel({ data }: { data: any }) {
   const [pdfErr, setPdfErr] = useState<string | null>(null);
   if (!data) return null;
 
+  const ticId: number | null = data.star?.tic_id ?? null;
+  const mast = data.mast || {};
+  const sectorsUsed: number[] = mast.sectors_used || [];
+  const errors: { sector: number; error: string }[] = mast.errors || [];
+  const verdict = data.verdict || {};
+  const bls = data.bls || {};
+
   const downloadPdf = async () => {
-    if (!data.tic_id) return;
+    if (!ticId) return;
     setPdfBusy(true);
     setPdfErr(null);
     try {
-      const sectors: number[] = (data.sector_verdicts || [])
-        .map((s: any) => s.sector)
-        .filter((s: any) => s != null);
-      const blob = await multisectorReport(
-        data.tic_id, undefined, sectors,
-        typeof data.max_objects === "number" ? data.max_objects : undefined,
-      );
-      triggerDownload(blob, `vetting_TIC${data.tic_id}_multisector.pdf`);
+      const blob = await multisectorReport(ticId, undefined, sectorsUsed);
+      triggerDownload(blob, `vetting_TIC${ticId}_multisector.pdf`);
     } catch (e: any) {
       setPdfErr(e?.message || String(e));
     } finally {
       setPdfBusy(false);
     }
   };
+
+  const sectorChips = sectorsUsed
+    .map((s) => `S${String(s).padStart(3, "0")}`)
+    .join(", ");
 
   return (
     <div className="mt-4 border-t pt-4 space-y-3">
@@ -2117,11 +2122,13 @@ function MultisectorPanel({ data }: { data: any }) {
           className="text-left font-semibold text-slate-700 flex items-center gap-1 text-sm"
         >
           <span>{expanded ? "▲" : "▼"}</span>
-          🔭 Multi-sector analysis — {data.summary}
+          🔭 Multi-sector analysis — {sectorsUsed.length} sector
+          {sectorsUsed.length === 1 ? "" : "s"} stitched
+          {verdict.headline ? ` · ${verdict.headline}` : ""}
         </button>
         <button
           onClick={downloadPdf}
-          disabled={pdfBusy}
+          disabled={pdfBusy || !ticId}
           className="shrink-0 text-xs px-3 py-1.5 bg-slate-700 text-white rounded hover:bg-slate-800 disabled:bg-slate-300 transition"
         >
           {pdfBusy ? "Building…" : "Download multi-sector PDF"}
@@ -2131,294 +2138,70 @@ function MultisectorPanel({ data }: { data: any }) {
         <div className="rounded bg-emerald-50 border border-emerald-200 p-3 text-emerald-900 text-sm">
           <CyclingLoader messages={PDF_LOADING_MSGS} />
           <span className="block mt-1 text-xs text-emerald-700">
-            Stitching every sector's plots into one PDF — this can take a minute.
+            Building the multi-sector PDF — this can take a minute.
           </span>
         </div>
       )}
       {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
 
-      {/* SPOC DV time series fetch status for this multi-sector run */}
       <div>
         <DvtStatus dvt={data.dvt} />
       </div>
 
       {expanded && (
         <div className="space-y-3">
-          {/* Timeline plot */}
-          {data.timeline_plot && (
-            <SharePlot
-              b64={data.timeline_plot}
-              label="Detection timeline across all fetched sectors"
-              title={`multisector_timeline_TIC${data.tic_id || ""}`}
+          <div className="rounded bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700 space-y-1">
+            <p>
+              <strong>Sectors stitched:</strong>{" "}
+              <span className="font-mono">{sectorChips || "none"}</span>{" "}
+              <span className="text-slate-400">
+                ({mast.sectors_succeeded ?? sectorsUsed.length}/
+                {mast.sectors_attempted ?? sectorsUsed.length} fetched)
+              </span>
+            </p>
+            <p>
+              Each sector's lightcurve was downloaded, concatenated by BJD/BTJD,
+              and run once through the standard single-sector pipeline — this
+              keeps peak RAM under ~512 MB and makes the multi-sector verdict
+              directly comparable to a single-sector one.
+            </p>
+            {bls.period != null && (
+              <p>
+                <strong>BLS:</strong> P ={" "}
+                <span className="font-mono">{Number(bls.period).toFixed(5)} d</span>
+                {bls.sde != null && (
+                  <>
+                    {" "}· SDE ={" "}
+                    <span className="font-mono">{Number(bls.sde).toFixed(2)}</span>
+                  </>
+                )}
+                {bls.depth != null && (
+                  <>
+                    {" "}· depth ={" "}
+                    <span className="font-mono">
+                      {(Number(bls.depth) * 100).toFixed(3)}%
+                    </span>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+          {/* Standard pipeline plots from the stitched lightcurve. */}
+          {data.plots && (
+            <PlotsSection
+              plots={data.plots}
+              ticId={ticId}
+              sector={null}
             />
           )}
 
-          {/* ExoFOP-TESS bulk-upload ZIP — bundles the timeline plot, each
-              object's HCI summary, and ExoMiner views (per object) into one
-              archive ready for the bulk-upload form. */}
-          {(() => {
-            const imgs: ExofopImage[] = [];
-            if (data.timeline_plot) {
-              imgs.push({
-                key: "multisector-timeline",
-                label: "Multi-sector detection timeline",
-                b64: data.timeline_plot,
-                code: "O",
-              });
-            }
-            const emCodes: Record<string, string> = {
-              global_view: "L",
-              local_view: "L",
-              secondary_view: "L",
-              odd_even_view: "L",
-              centroid_global_view: "O",
-              centroid_local_view: "O",
-              diagnostic_sigmas: "O",
-            };
-            (data.objects || []).forEach((o: any) => {
-              if (o.hci_bundle?.hci_image) {
-                imgs.push({
-                  key: `obj${o.object_id}-hci`,
-                  label: `Habitability Chance Index — object ${o.object_id}`,
-                  b64: o.hci_bundle.hci_image,
-                  code: "O",
-                });
-              }
-              if (o.exominer?.plots) {
-                for (const [k, label] of MS_EXOMINER_VIEWS) {
-                  const b64 = o.exominer.plots[k];
-                  if (!b64) continue;
-                  imgs.push({
-                    key: `obj${o.object_id}-exominer-${k.replace(/_/g, "-")}`,
-                    label: `ExoMiner ${label.toLowerCase()} — object ${o.object_id}`,
-                    b64,
-                    code: emCodes[k] || "O",
-                  });
-                }
-              }
-            });
-            return (
-              <ExofopBulkPanel
-                ticId={data.tic_id}
-                images={imgs}
-                title="⬇ Build ExoFOP-TESS bulk-upload ZIP (multi-sector)"
-              />
-            );
-          })()}
-
-          {/* Detected objects (up to 2), each cross-confirmed by duration + period */}
-          {data.objects && data.objects.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-sm font-semibold text-slate-700">
-                {data.n_objects_detected} object
-                {data.n_objects_detected === 1 ? "" : "s"} identified
-                <span className="text-xs font-normal text-slate-500">
-                  {" "}(≤{data.events_per_sector} events/sector, ≤{data.max_objects} objects,
-                  duration tolerance ±{data.duration_tol_h} h)
-                </span>
-              </p>
-              {data.objects.map((o: any) => {
-                const ok = o.confirmed_multisector;
-                const single = o.sectors.length < 2;
-                return (
-                  <div
-                    key={o.object_id}
-                    className={`rounded border p-3 text-sm ${
-                      ok
-                        ? "bg-emerald-50 border-emerald-300 text-emerald-900"
-                        : single
-                        ? "bg-slate-50 border-slate-300 text-slate-700"
-                        : "bg-amber-50 border-amber-300 text-amber-900"
-                    }`}
-                  >
-                    <p className="font-medium">
-                      {ok ? "✓ " : single ? "" : "⚠ "}
-                      Object {o.object_id} — {o.duration_h_median} h ·{" "}
-                      {o.depth_pct_median}% deep · {o.sectors.length} sector
-                      {o.sectors.length === 1 ? "" : "s"}
-                      {o.period_d_median ? ` · P ≈ ${o.period_d_median} d` : ""}
-                    </p>
-                    <p className="text-xs mt-1">{o.note}</p>
-                    <table className="w-full text-xs mt-2">
-                      <thead className="text-left opacity-70">
-                        <tr>
-                          <th className="py-0.5">Sector</th>
-                          <th>t_center</th>
-                          <th>Duration (h)</th>
-                          <th>Depth (%)</th>
-                          <th>Period (d)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {o.members.map((e: any, i: number) => (
-                          <tr key={`${e.sector}-${i}`}>
-                            <td className="py-0.5 font-mono">S{String(e.sector).padStart(3, "0")}</td>
-                            <td className="font-mono">{e.t_center}</td>
-                            <td className="font-mono">{e.duration_h}</td>
-                            <td className="font-mono">{e.depth_pct}</td>
-                            <td className="font-mono">{e.bls_period_d?.toFixed?.(4) ?? "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-
-                    {/* HCI for this object */}
-                    {o.hci_bundle && (
-                      <div className="mt-3 rounded bg-white/70 border border-slate-200 p-2">
-                        <p className="text-xs font-semibold text-slate-700">
-                          Habitability Chance Index
-                          {o.hci_bundle.hci && o.hci_bundle.hci.hci != null
-                            ? ` — ${Math.round(o.hci_bundle.hci.hci)}/100 (${o.hci_bundle.hci.tier})`
-                            : ""}
-                          {o.representative_sector
-                            ? ` · from S${String(o.representative_sector).padStart(3, "0")}`
-                            : ""}
-                        </p>
-                        {o.hci_bundle.hci_image && (
-                          <div className="mt-2">
-                            <SharePlot
-                              b64={o.hci_bundle.hci_image}
-                              label="HCI summary"
-                              title={`HCI_obj${o.object_id}_TIC${data.tic_id || ""}`}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* ExoMiner views for this object */}
-                    {o.exominer?.plots && (
-                      <div className="mt-3 rounded bg-white/70 border border-slate-200 p-2 space-y-3">
-                        <p className="text-xs font-semibold text-slate-700">
-                          ExoMiner feature views
-                          {o.representative_sector
-                            ? ` · from S${String(o.representative_sector).padStart(3, "0")}`
-                            : ""}
-                        </p>
-                        {MS_EXOMINER_VIEWS.filter(([k]) => o.exominer.plots[k]).map(
-                          ([k, label]) => (
-                            <SharePlot
-                              key={k}
-                              b64={o.exominer.plots[k]}
-                              label={label}
-                              title={`exominer_${k}_obj${o.object_id}_TIC${data.tic_id || ""}`}
-                            />
-                          )
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Per-sector table */}
-          {data.sector_verdicts && (
-            <>
-            <p className="text-xs text-slate-500 italic">
-              Per-sector verdict summary below. Full per-sector vetting (detrend, BLS
-              periodogram, light curve, centroid / odd-even / secondary / shape /
-              physics, and ExoFOP-TESS TOI parameters) is included in the multi-sector
-              PDF — inlining every sector's plots in the live page would balloon the
-              JSON payload to several MB per request and bog down the server, so we
-              keep the on-site view light and route the full picture into the PDF.
-            </p>
-            <table className="w-full text-xs">
-              <thead className="border-b text-slate-500 text-left">
-                <tr>
-                  <th className="py-1">Sector</th>
-                  <th>Events</th>
-                  <th>Verdict</th>
-                  <th>BLS period (d)</th>
-                  <th>SDE</th>
-                  <th>FITS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.sector_verdicts.map((v: any) => (
-                  <tr key={v.sector} className="border-b">
-                    <td className="py-0.5 font-mono">S{String(v.sector).padStart(3, "0")}</td>
-                    <td className="text-center">{v.n_events}</td>
-                    <td>
-                      <span
-                        className={`px-1 rounded ${
-                          v.category === "planet_candidate"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : v.category === "eclipsing_binary_candidate"
-                            ? "bg-amber-100 text-amber-800"
-                            : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {v.verdict ?? v.category ?? "—"}
-                      </span>
-                    </td>
-                    <td className="text-center font-mono">{v.bls_period_d?.toFixed(4) ?? "—"}</td>
-                    <td className="text-center">{v.bls_sde?.toFixed(1) ?? "—"}</td>
-                    <td className="text-center">
-                      {data.tic_id != null ? (
-                        <a
-                          href={fitsDownloadUrl(data.tic_id, v.sector)}
-                          className="text-blue-600 hover:underline"
-                          download
-                          title={`Download TIC ${data.tic_id} S${String(v.sector).padStart(3, "0")} FITS`}
-                        >
-                          ↓
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </>
-          )}
-
-          {/* Period consensus */}
-          {data.period_consensus && (
-            <div className="text-xs text-slate-600 space-y-1">
-              <p>
-                <strong>Period consensus:</strong>{" "}
-                {data.period_consensus.value_d?.toFixed(5)} d{" "}
-                {data.period_consensus.std_d
-                  ? `± ${data.period_consensus.std_d.toFixed(5)} d`
-                  : ""}{" "}
-                <span className="text-slate-400">({data.period_consensus.source})</span>
-              </p>
-              {data.period_consensus.refined_median_d != null && (
-                <p className="text-slate-500">
-                  Refined (constrained-BLS sectors only):{" "}
-                  {data.period_consensus.refined_median_d.toFixed(5)} d
-                  {data.period_consensus.refined_std_d
-                    ? ` ± ${data.period_consensus.refined_std_d.toFixed(5)} d`
-                    : ""}
-                </p>
-              )}
-              {data.period_consensus.harmonic_disagreement && (
-                <p className="text-amber-700">
-                  Harmonic disagreement across sectors —{" "}
-                  {data.period_consensus.per_sector_matches
-                    ?.map(([s, h]: [number, string | null]) => `S${s}:${h ?? "?"}`)
-                    .join(", ")}
-                  . Your input period may be off by a factor of two on some sectors.
-                </p>
-              )}
-              {data.period_consensus.no_constrained_sectors && (
-                <p className="text-amber-700">
-                  No sector matched a harmonic of the supplied known period
-                  within ±2% — falling back to blind-sweep medians.
-                </p>
-              )}
-            </div>
-          )}
-
           {/* Fetch errors */}
-          {data.errors?.length > 0 && (
-            <div className="text-xs text-slate-400 bg-slate-50 p-2 rounded">
-              {data.errors.length} sector(s) could not be fetched:{" "}
-              {data.errors.map((e: any) => `S${e.sector}`).join(", ")}
+          {errors.length > 0 && (
+            <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded">
+              {errors.length} sector(s) could not be fetched:{" "}
+              <span className="font-mono">
+                {errors.map((e) => `S${String(e.sector).padStart(3, "0")}`).join(", ")}
+              </span>
             </div>
           )}
         </div>
