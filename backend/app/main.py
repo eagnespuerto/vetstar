@@ -1151,13 +1151,18 @@ def _run_mast_multisector(query: MultisectorQuery):
     if not sectors_used:
         raise HTTPException(502, f"All sector fetches failed. Errors: {errors}")
 
+    # Concatenate-then-sort allocates one full extra copy per array; build the
+    # sorted view, then drop the unsorted concatenation immediately so we
+    # don't carry 2× the stitched LC into the pipeline run.
+    import gc
+    import matplotlib.pyplot as _plt
+
     t_all = np.concatenate(t_parts)
     flux_all = np.concatenate(flux_parts)
     err_all = np.concatenate(err_parts)
     qual_all = np.concatenate(qual_parts)
     momx_all = np.concatenate(momx_parts)
     momy_all = np.concatenate(momy_parts)
-    # Free the per-sector arrays before allocating the sorted copies.
     t_parts.clear(); flux_parts.clear(); err_parts.clear()
     qual_parts.clear(); momx_parts.clear(); momy_parts.clear()
 
@@ -1171,6 +1176,8 @@ def _run_mast_multisector(query: MultisectorQuery):
         "mom_y": momy_all[order],
         "star": rep_star,
     }
+    del t_all, flux_all, err_all, qual_all, momx_all, momy_all, order
+    gc.collect()
 
     result = _run_pipeline(
         parsed_all,
@@ -1182,6 +1189,14 @@ def _run_mast_multisector(query: MultisectorQuery):
         known_period_days=query.known_period_days,
     )
     _cache_lc(parsed_all)
+    # Matplotlib's pyplot module retains figure objects in a global registry
+    # even after each plot helper calls plt.close(fig); on long stitched LCs
+    # that registry can hold tens of MB of axis/glyph state. Drop it all
+    # before the DVT fetch (which generates another figure) and before the
+    # JSON response (which has to hold every base64 PNG in memory at once).
+    _plt.close("all")
+    del parsed_all
+    gc.collect()
 
     dvt = None
     try:
@@ -1189,6 +1204,8 @@ def _run_mast_multisector(query: MultisectorQuery):
         dvt = fetch_dvt(query.tic_id, None)
     except Exception as _e:
         log.warning("DVT fetch skipped for TIC %s (multisector): %s", query.tic_id, _e)
+    _plt.close("all")
+    gc.collect()
 
     info = {
         "sectors_used": sectors_used,
