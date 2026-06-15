@@ -337,9 +337,14 @@ the standard single-sector pipeline **once** on the combined series.
 Stitching (rather than running the pipeline per sector and reconciling
 afterwards) is what keeps peak RAM under ~512 MB: each sector's FITS file is
 deleted as soon as its arrays are appended, and only one pipeline pass ever
-holds a model. The multi-sector verdict, BLS, plots, and HCI are therefore
-directly comparable to single-sector output — there is no separate
-"per-object" view because there is only one analysis.
+holds a model. If the stitched series exceeds `MULTISECTOR_MAX_PTS` (30 000
+cadences), it is **median-binned into equal-time windows** before the
+pipeline runs — the bin width is always far shorter than a typical 1–3 h
+transit, so BLS depth / duration / period stay recoverable while the
+periodogram, plot glyphs, and base64 PNG payload all shrink proportionally.
+The multi-sector verdict, BLS, plots, and HCI are therefore directly
+comparable to single-sector output — there is no separate "per-object" view
+because there is only one analysis.
 
 The panel shows:
 
