@@ -84,10 +84,10 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   server-side at report time, so a single click yields a report covering every
   analysis the studio offers (each block is skipped gracefully if the
   underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
-- **Multi-sector PDF report**: the multi-sector panel can export the same
-  single-sector report, computed against the stitched-LC pass — one verdict,
-  one set of diagnostic plots, one HCI / ExoMiner section — with a banner
-  noting which sectors were combined.
+- **Multi-sector PDF report**: the multi-sector panel can export the
+  representative sector's single-sector report (the sector with the highest
+  BLS SDE), with the HCI section rebuilt against the real multi-sector
+  detection counts.
 
 ### Habitability Chance Index (HCI)
 
@@ -329,33 +329,41 @@ producing anything ExoFOP would reject.
 ### Multi-sector analysis
 
 Chosen up front (a **Single sector / Multi-sector** toggle on the MAST card,
-no need to run a single sector first). Fetches up to **5** TESS sectors for a
-TIC from MAST — your selected sectors, capped to 5, or the newest 5 by
-default — then **stitches their lightcurves together by BJD/BTJD** and runs
-the standard single-sector pipeline **once** on the combined series.
+no need to run a single sector first). Fetches up to **`MAX_SECTORS = 3`**
+TESS sectors for a TIC from MAST — your selected sectors, capped to 3, or
+the newest 3 by default — then runs the **standard single-sector pipeline
+back-to-back** on each one and compares the final results.
 
-Stitching (rather than running the pipeline per sector and reconciling
-afterwards) is what keeps peak RAM under ~512 MB: each sector's FITS file is
-deleted as soon as its arrays are appended, and only one pipeline pass ever
-holds a model. If the stitched series exceeds `MULTISECTOR_MAX_PTS` (30 000
-cadences), it is **median-binned into equal-time windows** before the
-pipeline runs — the bin width is always far shorter than a typical 1–3 h
-transit, so BLS depth / duration / period stay recoverable while the
-periodogram, plot glyphs, and base64 PNG payload all shrink proportionally.
-The multi-sector verdict, BLS, plots, and HCI are therefore directly
-comparable to single-sector output — there is no separate "per-object" view
-because there is only one analysis.
+Running sectors consecutively (rather than stitching them into one long
+lightcurve) is what keeps peak RAM under ~512 MB: each sector's FITS file
+is deleted as soon as it's parsed, the previous sector's full pipeline
+result is freed before the next sector starts, and matplotlib's pyplot
+figure registry is cleared between runs. At any given moment only **one**
+pipeline run's worth of arrays, BLS periodogram, and plots is alive.
+
+After all sectors run, the sector with the **highest BLS SDE** is kept as
+the **representative result** — its verdict, plots, and ExoMiner views are
+what the panel and PDF display. Every other sector is reduced to a short
+summary row (verdict, BLS period / depth / duration / SDE, event count) for
+the per-sector comparison table.
+
+**HCI still reflects the use of multi-sector**: the Habitability Chance
+Index bundle is rebuilt with the real `(n_sectors_with_detections,
+n_sectors_observed)` counts derived from the per-sector summaries, not
+the representative sector alone.
 
 The panel shows:
 
-- A banner listing which sectors were stitched (and any that failed to fetch)
-- The standard verdict headline, BLS period / SDE / depth
-- The full single-sector plot set (light curve, event zoom, centroid, BLS,
-  Lomb-Scargle, HCI summary) computed over all stitched sectors
-- The SPOC DVT phase-fold panel (one DV run spans every processed sector)
+- A banner listing which sectors were compared (and any that failed) plus
+  the representative sector and multi-sector detection counts
+- A **per-sector comparison table** — verdict, event count, BLS period /
+  depth / SDE — with the representative sector marked ★
+- The standard plot set (light curve, event zoom, centroid, BLS,
+  Lomb-Scargle, HCI summary) from the representative sector
 
-A **Download multi-sector PDF** button exports the same report layout as
-the single-sector PDF, computed against the stitched LC.
+A **Download multi-sector PDF** button exports the standard single-sector
+PDF for the representative sector, with the HCI block recomputed using the
+multi-sector counts.
 
 The sector cap is the tunable constant `MAX_SECTORS` at the top of
 `pipeline.py`.
@@ -555,18 +563,21 @@ computes the Habitability Chance Index. The score panel shows:
 
 ### Step 5 — multi-sector analysis
 
-Pick **Multi-sector (≤5)** in the scope toggle on the MAST card (you can do
+Pick **Multi-sector (≤3)** in the scope toggle on the MAST card (you can do
 this from the start — no single-sector run required). Optionally click up to
-5 sectors to include, or leave blank for the newest 5. Click **Run
-multi-sector**. The app downloads each sector's lightcurve, **stitches them
-together by BJD/BTJD**, and runs the standard single-sector pipeline once on
-the combined series. It then displays:
+3 sectors to include, or leave blank for the newest 3. Click **Run
+multi-sector**. The app runs the **standard single-sector pipeline on each
+sector back-to-back**, frees the previous pipeline result before the next
+sector starts, and at the end keeps only the **highest-SDE sector** as the
+representative result. The panel then displays:
 
-- A banner with the stitched sector list and any fetch errors
-- The standard verdict + BLS summary (period, SDE, depth)
-- The full plot set (light curve, event zoom, centroid, BLS, Lomb-Scargle,
-  HCI summary) computed over the stitched LC
-- The SPOC DVT phase-fold (one DV run spans every processed sector)
+- A banner with the compared sectors, the representative sector, and the
+  multi-sector detection counts that drive HCI
+- A **per-sector comparison table** (verdict, event count, BLS
+  period / depth / SDE) — the representative sector is marked ★
+- The standard plot set (light curve, event zoom, centroid, BLS,
+  Lomb-Scargle, HCI summary) from the representative sector — HCI is
+  rebuilt with the real multi-sector counts
 
 A **Download multi-sector PDF** button exports the whole analysis (see Step 6).
 
@@ -579,10 +590,9 @@ summary (including the combined HCI/observables/TLCM image), the **ExoFOP TOI
 parameters** table, and the ExoMiner feature set.
 
 From the multi-sector panel, **Download multi-sector PDF** produces the
-single-sector report layout against the stitched LC: verdict, vetting tables,
-diagnostic plots, FFI cutout, HCI summary, ExoFOP TOI parameters, and
-ExoMiner. The filename is suffixed `_multisector` and the report covers the
-same stitched lightcurve shown on screen.
+standard single-sector report for the **representative sector** (the one
+with the highest BLS SDE), with the HCI block recomputed using the
+multi-sector detection counts. The filename is suffixed `_multisector`.
 
 
 ## Verdict logic
@@ -679,8 +689,8 @@ POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
 POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single VettingResult on stitched LC + mast.sectors_used / errors JSON
-POST /api/mast/multisector/report  {tic_id, ?sectors (≤5), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single-sector-format PDF computed on the stitched LC
+POST /api/mast/multisector     {tic_id, ?sectors (≤3), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → representative-sector VettingResult + mast.{sectors_used, comparison[], representative_sector, n_sectors_observed, n_sectors_with_detections, errors} JSON
+POST /api/mast/multisector/report  {tic_id, ?sectors (≤3), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single-sector PDF for the representative sector, HCI recomputed with multi-sector counts
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation

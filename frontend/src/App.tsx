@@ -2093,6 +2093,8 @@ function MultisectorPanel({ data }: { data: any }) {
   const mast = data.mast || {};
   const sectorsUsed: number[] = mast.sectors_used || [];
   const errors: { sector: number; error: string }[] = mast.errors || [];
+  const comparison: any[] = mast.comparison || [];
+  const repSector: number | null = mast.representative_sector ?? null;
   const verdict = data.verdict || {};
   const bls = data.bls || {};
 
@@ -2123,7 +2125,7 @@ function MultisectorPanel({ data }: { data: any }) {
         >
           <span>{expanded ? "▲" : "▼"}</span>
           🔭 Multi-sector analysis — {sectorsUsed.length} sector
-          {sectorsUsed.length === 1 ? "" : "s"} stitched
+          {sectorsUsed.length === 1 ? "" : "s"} compared
           {verdict.headline ? ` · ${verdict.headline}` : ""}
         </button>
         <button
@@ -2144,30 +2146,37 @@ function MultisectorPanel({ data }: { data: any }) {
       )}
       {pdfErr && <p className="text-xs text-red-600">PDF error: {pdfErr}</p>}
 
-      <div>
-        <DvtStatus dvt={data.dvt} />
-      </div>
-
       {expanded && (
         <div className="space-y-3">
           <div className="rounded bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700 space-y-1">
             <p>
-              <strong>Sectors stitched:</strong>{" "}
+              <strong>Sectors compared:</strong>{" "}
               <span className="font-mono">{sectorChips || "none"}</span>{" "}
               <span className="text-slate-400">
                 ({mast.sectors_succeeded ?? sectorsUsed.length}/
-                {mast.sectors_attempted ?? sectorsUsed.length} fetched)
+                {mast.sectors_attempted ?? sectorsUsed.length} succeeded)
               </span>
             </p>
             <p>
-              Each sector's lightcurve was downloaded, concatenated by BJD/BTJD,
-              and run once through the standard single-sector pipeline — this
-              keeps peak RAM under ~512 MB and makes the multi-sector verdict
-              directly comparable to a single-sector one.
+              Each sector ran through the standard single-sector pipeline
+              back-to-back; only the per-sector summary survives between runs.
+              The sector with the highest BLS SDE
+              {repSector != null && (
+                <>
+                  {" "}
+                  (<span className="font-mono">S{String(repSector).padStart(3, "0")}</span>)
+                </>
+              )}{" "}
+              is kept as the representative result and its plots, HCI summary,
+              and ExoMiner views are shown below. HCI is rebuilt with the
+              real multi-sector detection counts (
+              <strong>{mast.n_sectors_with_detections ?? 0}</strong>/
+              <strong>{mast.n_sectors_observed ?? sectorsUsed.length}</strong>
+              ).
             </p>
             {bls.period != null && (
               <p>
-                <strong>BLS:</strong> P ={" "}
+                <strong>Representative BLS:</strong> P ={" "}
                 <span className="font-mono">{Number(bls.period).toFixed(5)} d</span>
                 {bls.sde != null && (
                   <>
@@ -2186,12 +2195,76 @@ function MultisectorPanel({ data }: { data: any }) {
               </p>
             )}
           </div>
-          {/* Standard pipeline plots from the stitched lightcurve. */}
+
+          {/* Per-sector comparison table */}
+          {comparison.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-700 mb-1">
+                Per-sector comparison
+              </p>
+              <table className="w-full text-xs">
+                <thead className="border-b text-slate-500 text-left">
+                  <tr>
+                    <th className="py-1">Sector</th>
+                    <th>Events</th>
+                    <th>Verdict</th>
+                    <th>BLS period (d)</th>
+                    <th>Depth (%)</th>
+                    <th>SDE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparison.map((s: any) => {
+                    const isRep = s.sector === repSector;
+                    return (
+                      <tr key={s.sector} className={`border-b ${isRep ? "bg-emerald-50" : ""}`}>
+                        <td className="py-0.5 font-mono">
+                          S{String(s.sector).padStart(3, "0")}
+                          {isRep && <span className="ml-1 text-emerald-700">★</span>}
+                        </td>
+                        <td className="text-center">{s.n_events}</td>
+                        <td>
+                          <span
+                            className={`px-1 rounded ${
+                              s.category === "planet_candidate"
+                                ? "bg-emerald-100 text-emerald-800"
+                                : s.category === "eclipsing_binary_candidate"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {s.verdict ?? s.category ?? "—"}
+                          </span>
+                        </td>
+                        <td className="text-center font-mono">
+                          {s.bls_period_d?.toFixed?.(4) ?? "—"}
+                        </td>
+                        <td className="text-center font-mono">
+                          {s.bls_depth != null
+                            ? (Number(s.bls_depth) * 100).toFixed(3)
+                            : "—"}
+                        </td>
+                        <td className="text-center font-mono">
+                          {s.bls_sde?.toFixed?.(2) ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="text-xs text-slate-400 mt-1">
+                ★ representative sector — full plots, HCI, and ExoMiner below
+                are drawn from this run.
+              </p>
+            </div>
+          )}
+
+          {/* Representative-sector plots */}
           {data.plots && (
             <PlotsSection
               plots={data.plots}
               ticId={ticId}
-              sector={null}
+              sector={repSector}
             />
           )}
 
