@@ -2211,11 +2211,13 @@ function MultisectorPanel({ data }: { data: any }) {
                     <th>BLS period (d)</th>
                     <th>Depth (%)</th>
                     <th>SDE</th>
+                    <th>Period agrees with</th>
                   </tr>
                 </thead>
                 <tbody>
                   {comparison.map((s: any) => {
                     const isRep = s.sector === repSector;
+                    const aligned: number[] = s.period_aligned_with || [];
                     return (
                       <tr key={s.sector} className={`border-b ${isRep ? "bg-emerald-50" : ""}`}>
                         <td className="py-0.5 font-mono">
@@ -2247,14 +2249,23 @@ function MultisectorPanel({ data }: { data: any }) {
                         <td className="text-center font-mono">
                           {s.bls_sde?.toFixed?.(2) ?? "—"}
                         </td>
+                        <td className="text-center font-mono">
+                          {aligned.length > 0
+                            ? aligned
+                                .map((sn: number) => `S${String(sn).padStart(3, "0")}`)
+                                .join(", ")
+                            : "—"}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
               <p className="text-xs text-slate-400 mt-1">
-                ★ representative sector — full plots, HCI, and ExoMiner below
-                are drawn from this run.
+                ★ representative sector — chosen by verdict, then by BLS
+                period agreement with other sectors (rounded to the nearest
+                integer day), then by SDE. Full plots, HCI, and ExoMiner
+                below are drawn from this run.
               </p>
             </div>
           )}
