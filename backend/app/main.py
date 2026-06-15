@@ -1080,17 +1080,65 @@ async def mast_multisector_report(query: MultisectorQuery):
     )
 
 
-def _run_mast_multisector(query: MultisectorQuery):
-    """Run up to ``MAX_SECTORS`` consecutive single-sector pipelines and
-    keep only the representative result (highest BLS SDE) plus a short
-    per-sector summary.
+#: Higher score = "more interesting candidate" for representative-sector picks.
+_VERDICT_PRIORITY = {
+    "planet_candidate": 5,
+    "known_object": 4,
+    "eclipsing_binary_candidate": 3,
+    "ambiguous": 2,
+    "no_signal": 1,
+    "false_positive_blend": 0,
+}
 
-    Memory peaks at one single-sector pipeline at a time: the previous
-    "best" result is freed before the next sector's full result is bound,
-    the FITS file is deleted as soon as it's parsed, and matplotlib's
-    pyplot figure registry is cleared between sectors. The HCI bundle is
-    rebuilt with the real multi-sector detection counts (which the
-    representative sector alone wouldn't reflect).
+
+def _pick_representative_sector(summaries: list) -> Optional[int]:
+    """Choose the representative sector for a multi-sector run.
+
+    Ranks each sector by ``(verdict_score, period_alignment_count, sde)``
+    in that order — so a single planet-candidate sector always beats a
+    false-positive sector with a higher SDE, and within a tied verdict
+    a sector whose BLS period rounds to the same integer day as another
+    sector wins over a lone outlier.
+    """
+    if not summaries:
+        return None
+    int_periods = [
+        round(s["bls_period_d"]) if s.get("bls_period_d") else None
+        for s in summaries
+    ]
+
+    def score(i: int):
+        s = summaries[i]
+        v = _VERDICT_PRIORITY.get(s.get("category"), -1)
+        ip = int_periods[i]
+        aligned = (
+            sum(1 for j, jp in enumerate(int_periods) if j != i and jp == ip)
+            if ip is not None else 0
+        )
+        sde = float(s.get("bls_sde") or 0.0)
+        return (v, aligned, sde)
+
+    best = max(range(len(summaries)), key=score)
+    return summaries[best]["sector"]
+
+
+def _run_mast_multisector(query: MultisectorQuery):
+    """Run up to ``MAX_SECTORS`` consecutive single-sector pipelines, pick
+    the representative sector by verdict / period agreement / SDE, then
+    re-run that sector's pipeline to surface its full result.
+
+    Two passes keep memory bounded to **one** single-sector pipeline at a
+    time. Pass 1 walks each sector, runs the pipeline, captures a short
+    summary, then frees every per-sector object before the next iteration.
+    Pass 2 re-runs only the chosen representative and keeps its full
+    result for the response. The extra run is the price of getting the
+    representative choice right — picking on streamed state can drop a
+    real planet candidate the moment a later sector happens to outrank
+    it on raw SDE.
+
+    HCI is rebuilt downstream with the real multi-sector detection counts
+    (n_sectors_with_detections / n_sectors_observed) rather than the
+    representative sector's lone count.
 
     Returns ``(VettingResult, info_dict)``.
     """
@@ -1115,30 +1163,34 @@ def _run_mast_multisector(query: MultisectorQuery):
     import gc
     import matplotlib.pyplot as _plt
 
+    def _run_sector(sec_num: int):
+        """Fetch, parse, and pipeline a single sector. Returns
+        ``(result, parsed)``; caller owns deleting the FITS file."""
+        fetched = fetch_spoc_lightcurve(query.tic_id, sec_num)
+        path = fetched.get("path")
+        parsed = parse_upload(path, fetched["filename"])
+        if parsed.get("t") is None or parsed.get("flux") is None:
+            raise RuntimeError("parser returned no time series")
+        result = _run_pipeline(
+            parsed,
+            query.detect_threshold, query.detect_min_snr,
+            high_variability=query.high_variability,
+            rotation_period_days=query.rotation_period_days,
+            secondary_sigma=query.secondary_sigma,
+            odd_even_sigma=query.odd_even_sigma,
+            known_period_days=query.known_period_days,
+        )
+        return result, parsed, path
+
+    # ---- Pass 1: summaries only ------------------------------------------
     summaries: list = []
     errors: list = []
-    best_result = None
-    best_sector: Optional[int] = None
-    best_sde = -float("inf")
 
     for sec_info in sectors_to_fetch:
         sec_num = sec_info["sector"]
         path = None
         try:
-            fetched = fetch_spoc_lightcurve(query.tic_id, sec_num)
-            path = fetched.get("path")
-            parsed = parse_upload(path, fetched["filename"])
-            if parsed.get("t") is None or parsed.get("flux") is None:
-                raise RuntimeError("parser returned no time series")
-            result = _run_pipeline(
-                parsed,
-                query.detect_threshold, query.detect_min_snr,
-                high_variability=query.high_variability,
-                rotation_period_days=query.rotation_period_days,
-                secondary_sigma=query.secondary_sigma,
-                odd_even_sigma=query.odd_even_sigma,
-                known_period_days=query.known_period_days,
-            )
+            result, parsed, path = _run_sector(sec_num)
             sde = (result.bls.get("sde") if result.bls else None) or 0.0
             summaries.append({
                 "sector": sec_num,
@@ -1150,18 +1202,7 @@ def _run_mast_multisector(query: MultisectorQuery):
                 "bls_duration_d": result.bls.get("duration") if result.bls else None,
                 "bls_sde": float(sde),
             })
-            # Keep only the highest-SDE result in memory at a time.
-            if best_result is None or sde > best_sde:
-                if best_result is not None:
-                    del best_result
-                    gc.collect()
-                _cache_lc(parsed)  # ExoMiner endpoint reads this cache
-                best_result = result
-                best_sector = sec_num
-                best_sde = float(sde)
-            else:
-                del result
-            del parsed
+            del result, parsed
         except Exception as e:
             log.warning("Sector %s failed for TIC %s: %s", sec_num, query.tic_id, e)
             errors.append({"sector": sec_num, "error": str(e)})
@@ -1174,8 +1215,56 @@ def _run_mast_multisector(query: MultisectorQuery):
             _plt.close("all")
             gc.collect()
 
-    if best_result is None:
+    if not summaries:
         raise HTTPException(502, f"All sector pipelines failed. Errors: {errors}")
+
+    # ---- Pick representative ---------------------------------------------
+    rep_sector = _pick_representative_sector(summaries)
+    log.info(
+        "Multi-sector rep TIC %s: sector S%03d (verdicts=%s, periods=%s, sdes=%s)",
+        query.tic_id, rep_sector or -1,
+        [s.get("category") for s in summaries],
+        [s.get("bls_period_d") for s in summaries],
+        [s.get("bls_sde") for s in summaries],
+    )
+
+    # Annotate each summary with its period-alignment count for the UI.
+    int_periods = [
+        round(s["bls_period_d"]) if s.get("bls_period_d") else None
+        for s in summaries
+    ]
+    for i, s in enumerate(summaries):
+        ip = int_periods[i]
+        s["period_aligned_with"] = (
+            [
+                summaries[j]["sector"]
+                for j, jp in enumerate(int_periods)
+                if j != i and jp == ip and ip is not None
+            ]
+        )
+
+    # ---- Pass 2: re-run the chosen representative ------------------------
+    best_result = None
+    best_path = None
+    try:
+        best_result, best_parsed, best_path = _run_sector(rep_sector)
+        _cache_lc(best_parsed)  # ExoMiner endpoint reads this cache
+        del best_parsed
+    except Exception as e:
+        # Fall back: re-raise so the user sees the error instead of a partial
+        # response. Pass 1 already succeeded for this sector, so a Pass-2
+        # failure is genuinely unexpected.
+        raise HTTPException(
+            502, f"Representative sector S{rep_sector:03d} re-run failed: {e}"
+        )
+    finally:
+        if best_path and os.path.exists(best_path):
+            try:
+                os.remove(best_path)
+            except OSError:
+                pass
+        _plt.close("all")
+        gc.collect()
 
     n_with_dets = sum(1 for s in summaries if s["n_events"] > 0)
     info = {
@@ -1184,7 +1273,7 @@ def _run_mast_multisector(query: MultisectorQuery):
         "sectors_succeeded": len(summaries),
         "errors": errors,
         "comparison": summaries,
-        "representative_sector": best_sector,
+        "representative_sector": rep_sector,
         "n_sectors_observed": len(summaries),
         "n_sectors_with_detections": n_with_dets,
     }

@@ -341,11 +341,27 @@ result is freed before the next sector starts, and matplotlib's pyplot
 figure registry is cleared between runs. At any given moment only **one**
 pipeline run's worth of arrays, BLS periodogram, and plots is alive.
 
-After all sectors run, the sector with the **highest BLS SDE** is kept as
-the **representative result** — its verdict, plots, and ExoMiner views are
-what the panel and PDF display. Every other sector is reduced to a short
-summary row (verdict, BLS period / depth / duration / SDE, event count) for
-the per-sector comparison table.
+After all sectors run, the **representative sector** is picked by:
+
+1. **Verdict** — `planet_candidate` and `known_object` outrank
+   `eclipsing_binary_candidate`, which outranks `ambiguous` / `no_signal`,
+   which outrank `false_positive_blend`. A single planet-candidate sector
+   always wins over a false-positive sector even if the FP has a higher
+   SDE — without this rule a noise-driven blend can shove a real
+   candidate out of the headline result.
+2. **Period agreement** — among sectors of the same verdict, the one
+   whose BLS period rounds to the same integer day as at least one other
+   sector wins (a period that recurs across sectors is more trustworthy
+   than a lone outlier).
+3. **BLS SDE** as the final tiebreaker.
+
+To keep memory bounded the pipeline runs **two passes**: pass 1 walks
+each sector, captures the short summary, and frees every per-sector
+object before the next iteration; pass 2 re-runs only the chosen
+representative so its full result (plots, events, BLS periodogram, HCI,
+ExoMiner) can be returned. Worst case is `MAX_SECTORS + 1` pipeline
+runs — the extra run is the price of getting the choice right when the
+streaming order would otherwise drop a real candidate.
 
 **HCI still reflects the use of multi-sector**: the Habitability Chance
 Index bundle is rebuilt with the real `(n_sectors_with_detections,
@@ -567,9 +583,10 @@ Pick **Multi-sector (≤3)** in the scope toggle on the MAST card (you can do
 this from the start — no single-sector run required). Optionally click up to
 3 sectors to include, or leave blank for the newest 3. Click **Run
 multi-sector**. The app runs the **standard single-sector pipeline on each
-sector back-to-back**, frees the previous pipeline result before the next
-sector starts, and at the end keeps only the **highest-SDE sector** as the
-representative result. The panel then displays:
+sector back-to-back** (freeing each result before the next), picks the
+**representative sector** by verdict → period agreement (rounded to nearest
+integer day) → SDE, and re-runs that one sector's pipeline to surface its
+full result. The panel then displays:
 
 - A banner with the compared sectors, the representative sector, and the
   multi-sector detection counts that drive HCI
@@ -590,9 +607,9 @@ summary (including the combined HCI/observables/TLCM image), the **ExoFOP TOI
 parameters** table, and the ExoMiner feature set.
 
 From the multi-sector panel, **Download multi-sector PDF** produces the
-standard single-sector report for the **representative sector** (the one
-with the highest BLS SDE), with the HCI block recomputed using the
-multi-sector detection counts. The filename is suffixed `_multisector`.
+standard single-sector report for the **representative sector** (picked by
+verdict → period agreement → SDE), with the HCI block recomputed using
+the multi-sector detection counts. The filename is suffixed `_multisector`.
 
 
 ## Verdict logic
