@@ -1553,7 +1553,7 @@ def run_full_vetting(
 # period across sectors. MAX_OBJECTS is the *default*; the caller can request
 # more (up to MAX_OBJECTS_HARD_CAP) when the deepest dips are blends or false
 # positives that mask the real TOI of interest.
-MAX_SECTORS = 5
+MAX_SECTORS = 3
 EVENTS_PER_SECTOR = 2
 MAX_OBJECTS = 2
 MAX_OBJECTS_HARD_CAP = MAX_SECTORS * EVENTS_PER_SECTOR  # 10 — every event its own bucket
