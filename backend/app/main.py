@@ -1167,16 +1167,51 @@ def _run_mast_multisector(query: MultisectorQuery):
     qual_parts.clear(); momx_parts.clear(); momy_parts.clear()
 
     order = np.argsort(t_all, kind="mergesort")
+    t_s = t_all[order]
+    flux_s = flux_all[order]
+    err_s = err_all[order]
+    qual_s = qual_all[order]
+    momx_s = momx_all[order]
+    momy_s = momy_all[order]
+    del t_all, flux_all, err_all, qual_all, momx_all, momy_all, order
+
+    # Cap the stitched-LC point count so a worst-case 3-sector run fits in
+    # 512 MB after astropy/matplotlib/scipy take their slice. Beyond
+    # MULTISECTOR_MAX_PTS we median-bin into equal-time windows: the bin
+    # width is always << typical transit duration (1-3 h), so BLS depth /
+    # duration / period stay recoverable, while the periodogram, plot
+    # glyphs, and base64 PNG payload all shrink proportionally.
+    MULTISECTOR_MAX_PTS = 30000
+    if t_s.size > MULTISECTOR_MAX_PTS:
+        bin_n = int(np.ceil(t_s.size / MULTISECTOR_MAX_PTS))
+        log.info(
+            "Stitched LC has %d pts; median-binning by %d -> ~%d pts",
+            t_s.size, bin_n, t_s.size // bin_n,
+        )
+        n_keep = (t_s.size // bin_n) * bin_n
+        def _bin_mean(arr):
+            return arr[:n_keep].reshape(-1, bin_n).mean(axis=1)
+        def _bin_median(arr):
+            return np.median(arr[:n_keep].reshape(-1, bin_n), axis=1)
+        def _bin_or(arr):
+            return np.bitwise_or.reduce(arr[:n_keep].reshape(-1, bin_n), axis=1)
+        t_s = _bin_mean(t_s)
+        flux_s = _bin_median(flux_s)  # robust to single-cadence outliers
+        err_s = _bin_mean(err_s) / np.sqrt(bin_n)
+        qual_s = _bin_or(qual_s)
+        momx_s = _bin_mean(momx_s)
+        momy_s = _bin_mean(momy_s)
+
     parsed_all = {
-        "t": t_all[order],
-        "flux": flux_all[order],
-        "flux_err": err_all[order],
-        "quality": qual_all[order],
-        "mom_x": momx_all[order],
-        "mom_y": momy_all[order],
+        "t": t_s,
+        "flux": flux_s,
+        "flux_err": err_s,
+        "quality": qual_s,
+        "mom_x": momx_s,
+        "mom_y": momy_s,
         "star": rep_star,
     }
-    del t_all, flux_all, err_all, qual_all, momx_all, momy_all, order
+    del t_s, flux_s, err_s, qual_s, momx_s, momy_s
     gc.collect()
 
     result = _run_pipeline(
