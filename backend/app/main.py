@@ -834,7 +834,13 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
     }
 
 
-def _attach_hci_summary_to_plots(result, *, dvt: Optional[dict] = None) -> None:
+def _attach_hci_summary_to_plots(
+    result,
+    *,
+    dvt: Optional[dict] = None,
+    n_sectors_observed: int = 1,
+    n_sectors_with_detections: Optional[int] = None,
+) -> None:
     """Compute the HCI summary PNG for ``result`` and stash it into
     ``result.plots['hci_summary']`` so the frontend ZIP exporter picks it
     up without a separate /api/habitability round-trip.
@@ -869,7 +875,10 @@ def _attach_hci_summary_to_plots(result, *, dvt: Optional[dict] = None) -> None:
                 "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
             }
         )
-        n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
+        if n_sectors_with_detections is None:
+            n_sectors_with_detections = (
+                1 if result.summary.get("n_events_detected", 0) > 0 else 0
+            )
         hq = HabitabilityQuery(
             tic_id=tic,
             orbital_period_d=period,
@@ -877,8 +886,8 @@ def _attach_hci_summary_to_plots(result, *, dvt: Optional[dict] = None) -> None:
             stellar_radius_sun=result.star.radius,
             stellar_mass_sun=getattr(result.star, "mass", None),
             R_companion_Rjup=(result.physics or {}).get("R_companion_Rjup"),
-            n_sectors_with_detections=n_det,
-            n_sectors_observed=1,
+            n_sectors_with_detections=int(n_sectors_with_detections),
+            n_sectors_observed=int(n_sectors_observed),
             vetting_verdict=enriched_verdict,
         )
         bundle = _habitability_bundle(hq)
@@ -1022,38 +1031,44 @@ def _build_report_extras(
 @app.post("/api/mast/multisector")
 async def mast_multisector(query: MultisectorQuery):
     result, info = _run_mast_multisector(query)
-    _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
+    _attach_hci_summary_to_plots(
+        result,
+        n_sectors_observed=info.get("n_sectors_observed", 1),
+        n_sectors_with_detections=info.get("n_sectors_with_detections"),
+    )
     out = result.to_dict()
     out["mast"] = {
         "sectors_used": info.get("sectors_used", []),
         "sectors_attempted": info.get("sectors_attempted", 0),
         "sectors_succeeded": info.get("sectors_succeeded", 0),
         "errors": info.get("errors", []),
+        "comparison": info.get("comparison", []),
+        "representative_sector": info.get("representative_sector"),
+        "n_sectors_observed": info.get("n_sectors_observed", 1),
+        "n_sectors_with_detections": info.get("n_sectors_with_detections", 0),
     }
-    out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, None)
-    out["dvt"] = _summarize_dvt(info.get("dvt"))
+    out["lightcurve"] = _downsample_cached_lc(
+        result.star.tic_id, info.get("representative_sector")
+    )
     return out
 
 
 @app.post("/api/mast/multisector/report")
 async def mast_multisector_report(query: MultisectorQuery):
-    """Build a PDF report from the stitched multi-sector light curve — uses
-    the single-sector report layout because multi-sector is now just one
-    long lightcurve through the same pipeline."""
+    """Build a PDF report from the representative single-sector run, with
+    the HCI section pegged to the multi-sector detection counts."""
     result, info = _run_mast_multisector(query)
     try:
-        dvt = info.get("dvt")
         extras = _build_report_extras(
             result,
-            n_sectors_observed=len(info.get("sectors_used", [])) or 1,
-            dvt=dvt,
+            n_sectors_observed=info.get("n_sectors_observed", 1),
+            n_sectors_with_detections=info.get("n_sectors_with_detections"),
         )
         pdf = build_pdf(
             result,
             hci_bundle=extras.get("hci_bundle"),
             exominer=extras.get("exominer"),
             ffi_cutout=extras.get("ffi_cutout"),
-            dvt=dvt,
         )
     except Exception as e:
         raise _handle_exception("build_pdf", e)
@@ -1066,14 +1081,18 @@ async def mast_multisector_report(query: MultisectorQuery):
 
 
 def _run_mast_multisector(query: MultisectorQuery):
-    """Fetch each requested sector's lightcurve, stitch them together by
-    BJD/BTJD, and run the standard single-sector pipeline once on the
-    combined series.
+    """Run up to ``MAX_SECTORS`` consecutive single-sector pipelines and
+    keep only the representative result (highest BLS SDE) plus a short
+    per-sector summary.
 
-    Stitching by time (rather than running the pipeline per sector and
-    reconciling afterwards) keeps peak RAM under ~512 MB: only the raw
-    arrays survive each iteration, and each FITS file is deleted as soon
-    as it's parsed. Returns ``(VettingResult, info_dict)``.
+    Memory peaks at one single-sector pipeline at a time: the previous
+    "best" result is freed before the next sector's full result is bound,
+    the FITS file is deleted as soon as it's parsed, and matplotlib's
+    pyplot figure registry is cleared between sectors. The HCI bundle is
+    rebuilt with the real multi-sector detection counts (which the
+    representative sector alone wouldn't reflect).
+
+    Returns ``(VettingResult, info_dict)``.
     """
     from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
 
@@ -1093,15 +1112,14 @@ def _run_mast_multisector(query: MultisectorQuery):
     else:
         sectors_to_fetch = all_sectors[-MAX_SECTORS:]
 
-    t_parts: list = []
-    flux_parts: list = []
-    err_parts: list = []
-    qual_parts: list = []
-    momx_parts: list = []
-    momy_parts: list = []
-    rep_star = None
-    sectors_used: list = []
+    import gc
+    import matplotlib.pyplot as _plt
+
+    summaries: list = []
     errors: list = []
+    best_result = None
+    best_sector: Optional[int] = None
+    best_sde = -float("inf")
 
     for sec_info in sectors_to_fetch:
         sec_num = sec_info["sector"]
@@ -1112,31 +1130,37 @@ def _run_mast_multisector(query: MultisectorQuery):
             parsed = parse_upload(path, fetched["filename"])
             if parsed.get("t") is None or parsed.get("flux") is None:
                 raise RuntimeError("parser returned no time series")
-            t_parts.append(np.asarray(parsed["t"], dtype=float))
-            flux_parts.append(np.asarray(parsed["flux"], dtype=float))
-            n = len(parsed["t"])
-            err = parsed.get("flux_err")
-            err_parts.append(
-                np.asarray(err, dtype=float) if err is not None
-                else np.full(n, np.nan)
+            result = _run_pipeline(
+                parsed,
+                query.detect_threshold, query.detect_min_snr,
+                high_variability=query.high_variability,
+                rotation_period_days=query.rotation_period_days,
+                secondary_sigma=query.secondary_sigma,
+                odd_even_sigma=query.odd_even_sigma,
+                known_period_days=query.known_period_days,
             )
-            q = parsed.get("quality")
-            qual_parts.append(
-                np.asarray(q, dtype=int) if q is not None else np.zeros(n, dtype=int)
-            )
-            mx = parsed.get("mom_x")
-            my = parsed.get("mom_y")
-            momx_parts.append(
-                np.asarray(mx, dtype=float) if mx is not None
-                else np.full(n, np.nan)
-            )
-            momy_parts.append(
-                np.asarray(my, dtype=float) if my is not None
-                else np.full(n, np.nan)
-            )
-            if rep_star is None:
-                rep_star = parsed.get("star")
-            sectors_used.append(sec_num)
+            sde = (result.bls.get("sde") if result.bls else None) or 0.0
+            summaries.append({
+                "sector": sec_num,
+                "verdict": result.verdict.get("headline") if result.verdict else None,
+                "category": result.verdict.get("category") if result.verdict else None,
+                "n_events": len(result.events) if result.events else 0,
+                "bls_period_d": result.bls.get("period") if result.bls else None,
+                "bls_depth": result.bls.get("depth") if result.bls else None,
+                "bls_duration_d": result.bls.get("duration") if result.bls else None,
+                "bls_sde": float(sde),
+            })
+            # Keep only the highest-SDE result in memory at a time.
+            if best_result is None or sde > best_sde:
+                if best_result is not None:
+                    del best_result
+                    gc.collect()
+                _cache_lc(parsed)  # ExoMiner endpoint reads this cache
+                best_result = result
+                best_sector = sec_num
+                best_sde = float(sde)
+            else:
+                del result
             del parsed
         except Exception as e:
             log.warning("Sector %s failed for TIC %s: %s", sec_num, query.tic_id, e)
@@ -1147,109 +1171,24 @@ def _run_mast_multisector(query: MultisectorQuery):
                     os.remove(path)
                 except OSError:
                     pass
+            _plt.close("all")
+            gc.collect()
 
-    if not sectors_used:
-        raise HTTPException(502, f"All sector fetches failed. Errors: {errors}")
+    if best_result is None:
+        raise HTTPException(502, f"All sector pipelines failed. Errors: {errors}")
 
-    # Concatenate-then-sort allocates one full extra copy per array; build the
-    # sorted view, then drop the unsorted concatenation immediately so we
-    # don't carry 2× the stitched LC into the pipeline run.
-    import gc
-    import matplotlib.pyplot as _plt
-
-    t_all = np.concatenate(t_parts)
-    flux_all = np.concatenate(flux_parts)
-    err_all = np.concatenate(err_parts)
-    qual_all = np.concatenate(qual_parts)
-    momx_all = np.concatenate(momx_parts)
-    momy_all = np.concatenate(momy_parts)
-    t_parts.clear(); flux_parts.clear(); err_parts.clear()
-    qual_parts.clear(); momx_parts.clear(); momy_parts.clear()
-
-    order = np.argsort(t_all, kind="mergesort")
-    t_s = t_all[order]
-    flux_s = flux_all[order]
-    err_s = err_all[order]
-    qual_s = qual_all[order]
-    momx_s = momx_all[order]
-    momy_s = momy_all[order]
-    del t_all, flux_all, err_all, qual_all, momx_all, momy_all, order
-
-    # Cap the stitched-LC point count so a worst-case 3-sector run fits in
-    # 512 MB after astropy/matplotlib/scipy take their slice. Beyond
-    # MULTISECTOR_MAX_PTS we median-bin into equal-time windows: the bin
-    # width is always << typical transit duration (1-3 h), so BLS depth /
-    # duration / period stay recoverable, while the periodogram, plot
-    # glyphs, and base64 PNG payload all shrink proportionally.
-    MULTISECTOR_MAX_PTS = 30000
-    if t_s.size > MULTISECTOR_MAX_PTS:
-        bin_n = int(np.ceil(t_s.size / MULTISECTOR_MAX_PTS))
-        log.info(
-            "Stitched LC has %d pts; median-binning by %d -> ~%d pts",
-            t_s.size, bin_n, t_s.size // bin_n,
-        )
-        n_keep = (t_s.size // bin_n) * bin_n
-        def _bin_mean(arr):
-            return arr[:n_keep].reshape(-1, bin_n).mean(axis=1)
-        def _bin_median(arr):
-            return np.median(arr[:n_keep].reshape(-1, bin_n), axis=1)
-        def _bin_or(arr):
-            return np.bitwise_or.reduce(arr[:n_keep].reshape(-1, bin_n), axis=1)
-        t_s = _bin_mean(t_s)
-        flux_s = _bin_median(flux_s)  # robust to single-cadence outliers
-        err_s = _bin_mean(err_s) / np.sqrt(bin_n)
-        qual_s = _bin_or(qual_s)
-        momx_s = _bin_mean(momx_s)
-        momy_s = _bin_mean(momy_s)
-
-    parsed_all = {
-        "t": t_s,
-        "flux": flux_s,
-        "flux_err": err_s,
-        "quality": qual_s,
-        "mom_x": momx_s,
-        "mom_y": momy_s,
-        "star": rep_star,
-    }
-    del t_s, flux_s, err_s, qual_s, momx_s, momy_s
-    gc.collect()
-
-    result = _run_pipeline(
-        parsed_all,
-        query.detect_threshold, query.detect_min_snr,
-        high_variability=query.high_variability,
-        rotation_period_days=query.rotation_period_days,
-        secondary_sigma=query.secondary_sigma,
-        odd_even_sigma=query.odd_even_sigma,
-        known_period_days=query.known_period_days,
-    )
-    _cache_lc(parsed_all)
-    # Matplotlib's pyplot module retains figure objects in a global registry
-    # even after each plot helper calls plt.close(fig); on long stitched LCs
-    # that registry can hold tens of MB of axis/glyph state. Drop it all
-    # before the DVT fetch (which generates another figure) and before the
-    # JSON response (which has to hold every base64 PNG in memory at once).
-    _plt.close("all")
-    del parsed_all
-    gc.collect()
-
-    dvt = None
-    try:
-        from .dvt_fetch import fetch_dvt
-        dvt = fetch_dvt(query.tic_id, None)
-    except Exception as _e:
-        log.warning("DVT fetch skipped for TIC %s (multisector): %s", query.tic_id, _e)
-    _plt.close("all")
-    gc.collect()
-
+    n_with_dets = sum(1 for s in summaries if s["n_events"] > 0)
     info = {
-        "sectors_used": sectors_used,
+        "sectors_used": [s["sector"] for s in summaries],
         "sectors_attempted": len(sectors_to_fetch),
-        "sectors_succeeded": len(sectors_used),
+        "sectors_succeeded": len(summaries),
         "errors": errors,
-        "dvt": dvt,
+        "comparison": summaries,
+        "representative_sector": best_sector,
+        "n_sectors_observed": len(summaries),
+        "n_sectors_with_detections": n_with_dets,
     }
-    return result, info
+    return best_result, info
 
 
 # -------------------------------------------------
