@@ -13,6 +13,9 @@ export interface DetectParams {
   secondarySigma: number;        // 0.5..20, default 3
   oddEvenSigma: number;          // 0.5..20, default 3 — EB-flag threshold
   knownPeriod?: number | null;   // optional known period (days) — constrains BLS to ±2% around P, P/2, 2P
+  // Plot-only knobs (don't affect detection). Backend re-renders the LC PNG with these.
+  plotDetrend?: boolean;             // 1-day rolling-median flatten on the LC plot. Default true.
+  plotBinMinutes?: number | null;    // bin overlay in minutes; null = no overlay. Default 30.
 }
 
 const DEFAULT_PARAMS: DetectParams = {
@@ -23,6 +26,8 @@ const DEFAULT_PARAMS: DetectParams = {
   secondarySigma: 3.0,
   oddEvenSigma: 3.0,
   knownPeriod: null,
+  plotDetrend: true,
+  plotBinMinutes: 30,
 };
 
 function hasKnownPeriod(p: DetectParams): p is DetectParams & { knownPeriod: number } {
@@ -75,6 +80,17 @@ export async function mastSectors(ticId: number): Promise<SectorInfo[]> {
   return data.sectors as SectorInfo[];
 }
 
+function plotKwargs(p: DetectParams): Record<string, any> {
+  // Only emit keys when set so older backends that ignore unknown fields
+  // keep working unchanged.
+  const out: Record<string, any> = {};
+  if (typeof p.plotDetrend === "boolean") out.plot_detrend = p.plotDetrend;
+  if (p.plotBinMinutes === null || typeof p.plotBinMinutes === "number") {
+    out.plot_bin_minutes = p.plotBinMinutes;
+  }
+  return out;
+}
+
 export async function mastAnalyze(ticId: number, sector: number, params: DetectParams = DEFAULT_PARAMS) {
   const r = await fetch(`${API_BASE}/api/mast/analyze`, {
     method: "POST",
@@ -88,10 +104,85 @@ export async function mastAnalyze(ticId: number, sector: number, params: DetectP
       secondary_sigma: params.secondarySigma,
       odd_even_sigma: params.oddEvenSigma,
       ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
+      ...plotKwargs(params),
     }),
   });
   if (!r.ok) throw new Error(`MAST analyze failed (${r.status}): ${await r.text()}`);
   return r.json();
+}
+
+// ---------- Progress-tracked variant of mastAnalyze ---------------------
+//
+// Calls /api/mast/analyze_async, then subscribes to the SSE stream and
+// invokes ``onProgress(stage, percent, message)`` for each event. Resolves
+// with the final result dict (same shape as mastAnalyze) or rejects with
+// the backend error message.
+//
+// Falls back to a one-shot mastAnalyze() call if the kickoff POST fails
+// with anything other than a successful 200 — keeps older backends working.
+// ----------------------------------------------------------------------
+
+export interface ProgressEvent {
+  stage: string;
+  percent: number;
+  message: string;
+}
+
+export async function mastAnalyzeWithProgress(
+  ticId: number,
+  sector: number,
+  params: DetectParams = DEFAULT_PARAMS,
+  onProgress?: (e: ProgressEvent) => void,
+): Promise<any> {
+  const body = JSON.stringify({
+    tic_id: ticId, sector,
+    detect_threshold: params.threshold,
+    detect_min_snr: params.minSnr,
+    high_variability: params.highVariability,
+    rotation_period_days: params.rotationPeriod,
+    secondary_sigma: params.secondarySigma,
+    odd_even_sigma: params.oddEvenSigma,
+    ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
+    ...plotKwargs(params),
+  });
+
+  // Kick off the job. If the async endpoint is missing (older deployment),
+  // fall back to the blocking endpoint so the user still gets a result.
+  const kickoff = await fetch(`${API_BASE}/api/mast/analyze_async`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  if (!kickoff.ok) {
+    if (kickoff.status === 404) {
+      return mastAnalyze(ticId, sector, params);
+    }
+    throw new Error(`MAST analyze kickoff failed (${kickoff.status}): ${await kickoff.text()}`);
+  }
+  const { job_id } = await kickoff.json();
+
+  return new Promise<any>((resolve, reject) => {
+    const url = `${API_BASE}/api/jobs/${job_id}/stream`;
+    const es = new EventSource(url);
+    es.onmessage = (msg) => {
+      let data: any;
+      try { data = JSON.parse(msg.data); } catch { return; }
+      if (data.type === "progress") {
+        onProgress?.({ stage: data.stage, percent: data.percent, message: data.message });
+      } else if (data.type === "done") {
+        onProgress?.({ stage: "done", percent: 100, message: "complete" });
+        es.close();
+        resolve(data.result);
+      } else if (data.type === "error") {
+        es.close();
+        reject(new Error(data.message || "analysis failed"));
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      reject(new Error("Progress stream disconnected"));
+    };
+  });
 }
 
 export async function fetchHabitability(

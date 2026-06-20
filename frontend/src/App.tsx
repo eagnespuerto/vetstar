@@ -8,9 +8,11 @@ import {
   fetchRadialVelocity,
   fitsDownloadUrl,
   mastAnalyze,
+  mastAnalyzeWithProgress,
   mastReport,
   mastSectors,
   multisectorReport,
+  type ProgressEvent,
   type SectorInfo,
   type DetectParams,
 } from "./api";
@@ -147,6 +149,9 @@ export default function App() {
   const [msData, setMsData] = useState<any>(null);
   const [msTopLoading, setMsTopLoading] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  // Live progress for the single-sector MAST run (SSE-backed).
+  // null while idle/after error; populated by mastAnalyzeWithProgress.
+  const [analyzeProgress, setAnalyzeProgress] = useState<ProgressEvent | null>(null);
 
   const MAX_MULTI_SECTORS = 5;
   const MAX_MULTI_OBJECTS = 10; // MAX_SECTORS * EVENTS_PER_SECTOR on backend
@@ -252,13 +257,16 @@ export default function App() {
     setStatus("analyzing");
     setError(null);
     setResult(null);
+    setAnalyzeProgress({ stage: "starting", percent: 0, message: "Starting analysis…" });
     try {
-      const r = await mastAnalyze(tic, sec, params);
+      const r = await mastAnalyzeWithProgress(tic, sec, params, (e) => setAnalyzeProgress(e));
       setResult(r);
       setStatus("done");
     } catch (e: any) {
       setError(e.message || String(e));
       setStatus("error");
+    } finally {
+      setAnalyzeProgress(null);
     }
   };
 
@@ -620,6 +628,25 @@ export default function App() {
                 ? "Multi-sector runs can take a minute or two — we're crunching several sectors at once."
                 : "This can take 10–30 seconds for a 2-min cadence sector."}
             </span>
+            {!msTopLoading && analyzeProgress && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-xs font-mono text-blue-800 mb-1">
+                  <span>{analyzeProgress.message}</span>
+                  <span>{analyzeProgress.percent.toFixed(0)}%</span>
+                </div>
+                <div className="h-2 w-full rounded bg-blue-100 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                    style={{ width: `${Math.max(2, Math.min(100, analyzeProgress.percent))}%` }}
+                    role="progressbar"
+                    aria-valuenow={Math.round(analyzeProgress.percent)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`Analysis progress: ${analyzeProgress.message}`}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -632,7 +659,49 @@ export default function App() {
           </div>
         )}
 
-        {result && <ResultsView result={result} />}
+        {result && (
+          <ResultsView
+            result={result}
+            lcControls={
+              // Only enable toggle re-runs in MAST mode (we need tic+sector to re-fetch).
+              result.star?.tic_id != null && result.star?.sector != null
+                ? {
+                    detrend: params.plotDetrend ?? true,
+                    binMinutes:
+                      params.plotBinMinutes === undefined ? 30 : params.plotBinMinutes,
+                    busy: status === "analyzing",
+                    onChange: ({ detrend, binMinutes }) => {
+                      const next: DetectParams = {
+                        ...params,
+                        plotDetrend: detrend,
+                        plotBinMinutes: binMinutes,
+                      };
+                      setParams(next);
+                      // Re-run the single-sector analysis with new plot params.
+                      // Uses the same progress-tracked path so the bar shows.
+                      void (async () => {
+                        const tic = result.star.tic_id!;
+                        const sec = result.star.sector!;
+                        setStatus("analyzing");
+                        setError(null);
+                        setAnalyzeProgress({ stage: "starting", percent: 0, message: "Re-rendering plot…" });
+                        try {
+                          const r = await mastAnalyzeWithProgress(tic, sec, next, (e) => setAnalyzeProgress(e));
+                          setResult(r);
+                          setStatus("done");
+                        } catch (err: any) {
+                          setError(err.message || String(err));
+                          setStatus("error");
+                        } finally {
+                          setAnalyzeProgress(null);
+                        }
+                      })();
+                    },
+                  }
+                : undefined
+            }
+          />
+        )}
 
         {msData && (
           <div className="mt-2">
@@ -965,7 +1034,66 @@ function triggerDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function ResultsView({ result }: { result: VettingResult }) {
+export interface LcViewControls {
+  detrend: boolean;
+  binMinutes: number | null;
+  onChange: (next: { detrend: boolean; binMinutes: number | null }) => void;
+  busy: boolean;
+}
+
+function LcViewToggleBar({ controls }: { controls: LcViewControls }) {
+  const binChoices: Array<{ label: string; value: number | null }> = [
+    { label: "off", value: null },
+    { label: "10 min", value: 10 },
+    { label: "30 min", value: 30 },
+  ];
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 mb-2 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded"
+      aria-label="Light-curve plot controls"
+    >
+      <label className="flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={controls.detrend}
+          disabled={controls.busy}
+          onChange={(e) => controls.onChange({ detrend: e.target.checked, binMinutes: controls.binMinutes })}
+          className="h-3.5 w-3.5"
+        />
+        <span>Detrend (1-day rolling median)</span>
+      </label>
+      <span className="text-slate-300">|</span>
+      <span className="text-slate-500">Bin overlay:</span>
+      <div className="flex items-center gap-1">
+        {binChoices.map((c) => {
+          const active = controls.binMinutes === c.value;
+          return (
+            <button
+              key={String(c.value)}
+              type="button"
+              disabled={controls.busy}
+              onClick={() => controls.onChange({ detrend: controls.detrend, binMinutes: c.value })}
+              className={
+                "px-2 py-0.5 rounded border text-xs transition-colors " +
+                (active
+                  ? "bg-blue-600 border-blue-600 text-white"
+                  : "bg-white border-slate-300 text-slate-700 hover:bg-slate-100") +
+                (controls.busy ? " opacity-50 cursor-not-allowed" : "")
+              }
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      {controls.busy && (
+        <span className="text-blue-700 italic">re-rendering…</span>
+      )}
+    </div>
+  );
+}
+
+function ResultsView({ result, lcControls }: { result: VettingResult; lcControls?: LcViewControls }) {
   const [hciData, setHciData] = useState<any>(null);
   const [hciLoading, setHciLoading] = useState(false);
   const [hciError, setHciError] = useState<string | null>(null);
@@ -1185,6 +1313,7 @@ function ResultsView({ result }: { result: VettingResult }) {
           per-cadence noise floor — no detrend applied.
         </p>
       )}
+      {lcControls && <LcViewToggleBar controls={lcControls} />}
       <PlotsSection
         plots={result.plots}
         ticId={result.star.tic_id}

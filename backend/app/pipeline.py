@@ -1169,11 +1169,85 @@ def make_verdict(
 # ----------------------------------------------------------------------
 # Plot generation
 # ----------------------------------------------------------------------
+def _rolling_median_detrend(t: np.ndarray, f: np.ndarray, window_days: float = 1.0) -> np.ndarray:
+    """Lightweight per-cadence detrend for plotting only.
+
+    Subtracts a rolling-median trend in a ``window_days``-wide window and
+    re-normalises to median=1. Robust to single-cadence outliers (no
+    Gaussian smoothing). This is *plot-only* — BLS still sees the
+    unfiltered f_c from run_full_vetting.
+    """
+    if len(t) < 8:
+        return f
+    n = len(t)
+    out = np.empty(n, dtype=float)
+    half = window_days / 2.0
+    # Pointers for the sliding window — O(n) over a sorted t.
+    lo = 0
+    hi = 0
+    for i in range(n):
+        t_lo = t[i] - half
+        t_hi = t[i] + half
+        while lo < n and t[lo] < t_lo:
+            lo += 1
+        while hi < n and t[hi] <= t_hi:
+            hi += 1
+        seg = f[lo:hi]
+        if seg.size == 0:
+            out[i] = f[i]
+        else:
+            out[i] = float(np.nanmedian(seg))
+    trend = out
+    # Avoid divide-by-zero on a pathological all-zero trend
+    safe = np.where(np.isfinite(trend) & (trend != 0), trend, np.nanmedian(f) or 1.0)
+    flat = f / safe
+    med = np.nanmedian(flat)
+    if not np.isfinite(med) or med == 0:
+        return flat
+    return flat / med
+
+
+def _time_bin(t: np.ndarray, f: np.ndarray, bin_minutes: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Bin (t, f) by ``bin_minutes`` in time. Returns (t_bin, f_bin, err_bin)
+    where err_bin is the standard error of the mean in each bin (empty bins
+    are dropped).
+    """
+    if bin_minutes is None or bin_minutes <= 0 or len(t) == 0:
+        return t, f, np.zeros_like(f)
+    bin_days = bin_minutes / 1440.0
+    t_min = float(np.nanmin(t))
+    idx = np.floor((t - t_min) / bin_days).astype(int)
+    n_bins = int(idx.max()) + 1
+    sums_t = np.zeros(n_bins)
+    sums_f = np.zeros(n_bins)
+    sums_ff = np.zeros(n_bins)
+    counts = np.zeros(n_bins, dtype=int)
+    for i in range(len(t)):
+        b = idx[i]
+        if not (np.isfinite(t[i]) and np.isfinite(f[i])):
+            continue
+        sums_t[b] += t[i]
+        sums_f[b] += f[i]
+        sums_ff[b] += f[i] * f[i]
+        counts[b] += 1
+    mask = counts > 0
+    t_b = sums_t[mask] / counts[mask]
+    f_b = sums_f[mask] / counts[mask]
+    # Standard error of the mean per bin; use ddof=1 where possible.
+    mean_sq = sums_ff[mask] / counts[mask]
+    var = np.maximum(0.0, mean_sq - f_b * f_b)
+    n = counts[mask]
+    sem = np.sqrt(var / np.maximum(1, n))
+    return t_b, f_b, sem
+
+
 def make_plots(
     t, f, fe, mom_x, mom_y, events, primary_event,
     bls_periodogram, ls_periodogram,
     detrend_meta: Optional[dict] = None,
     f_raw: Optional[np.ndarray] = None,
+    plot_detrend: bool = True,
+    bin_minutes: Optional[int] = 30,
 ) -> dict:
     """Generate diagnostic plots.
 
@@ -1181,6 +1255,12 @@ def make_plots(
     is the one chosen for centroid/shape analysis (typically the deepest).
     The full-LC plot shades EVERY event; the zoom plot shows up to 6 events
     in a grid, with the primary one highlighted.
+
+    Plot-presentation kwargs (don't affect detection):
+      plot_detrend  — apply a 1-day rolling-median flatten to the LC plot
+                      so long-term variability doesn't drown shallow dips.
+      bin_minutes   — when set, overplot time-binned points in red. Default
+                      30 min beats per-cadence noise down ~3-4× for 2-min LCs.
     """
     plots = {}
     events = events or []
@@ -1224,23 +1304,37 @@ def make_plots(
         plots["detrend"] = _fig_to_b64(fig)
 
     # 1. Full LC with all events shaded.
+    # When plot_detrend is on, flatten with a 1-day rolling median so
+    # long-period variability doesn't drown shallow dips. Detection
+    # (BLS/events) is unaffected — they already ran on f.
+    f_plot = _rolling_median_detrend(t, f, window_days=1.0) if plot_detrend else f
     fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(t, f, "k.", ms=1, alpha=0.4)
+    ax.plot(t, f_plot, "k.", ms=1, alpha=0.35, label="cadences")
+    if bin_minutes and len(t) > 0:
+        t_b, f_b, e_b = _time_bin(t, f_plot, bin_minutes)
+        if len(t_b) > 0:
+            ax.errorbar(
+                t_b, f_b, yerr=e_b,
+                fmt="o", ms=3.2, color="crimson", ecolor="crimson",
+                elinewidth=0.6, capsize=0, alpha=0.85,
+                label=f"{bin_minutes}-min bins",
+            )
+        ax.legend(loc="upper right", fontsize=8, framealpha=0.85)
     # Set y-limits explicitly so we can place labels just inside the top edge.
     # Use the 99.7 percentile on top to suppress upward outliers, but the
     # bottom must accommodate the deepest detected dip — a percentile-based
     # lower bound clips event troughs when the in-transit fraction exceeds
     # the percentile (e.g. many dips on a short baseline).
-    ymax = float(np.nanpercentile(f, 99.7))
+    ymax = float(np.nanpercentile(f_plot, 99.7))
     if events:
         event_mins = []
         for ev in events:
             in_ev = (t >= ev["t_start"]) & (t <= ev["t_end"])
             if np.any(in_ev):
-                event_mins.append(float(np.nanmin(f[in_ev])))
-        ymin = min(event_mins) if event_mins else float(np.nanpercentile(f, 0.3))
+                event_mins.append(float(np.nanmin(f_plot[in_ev])))
+        ymin = min(event_mins) if event_mins else float(np.nanpercentile(f_plot, 0.3))
     else:
-        ymin = float(np.nanpercentile(f, 0.3))
+        ymin = float(np.nanpercentile(f_plot, 0.3))
     y_pad = 0.05 * (ymax - ymin)
     ax.set_ylim(ymin - y_pad, ymax + y_pad)
     # IMPORTANT: disable the "+1" offset notation — it's confusing for shallow dips
@@ -1264,7 +1358,9 @@ def make_plots(
         )
     ax.set_xlabel("Time (BTJD or similar)")
     ax.set_ylabel("Normalised flux")
-    title = "Detrended light curve"
+    title = "Flattened light curve" if plot_detrend else "Light curve"
+    if bin_minutes:
+        title += f" — {bin_minutes}-min binned overlay"
     if events:
         title += f" — {len(events)} dip event{'s' if len(events) != 1 else ''} detected"
     ax.set_title(title)
@@ -1378,23 +1474,34 @@ def run_full_vetting(
     known_period_days: Optional[float] = None,
     secondary_sigma: float = 3.0,
     odd_even_sigma: float = 3.0,
+    reporter=None,
+    plot_detrend: bool = True,
+    plot_bin_minutes: Optional[int] = 30,
 ) -> VettingResult:
     from .detrend import apply_variability_detrend
+    if reporter is None:
+        from .progress import make_noop_reporter
+        reporter = make_noop_reporter()
 
     # Clean
+    reporter("clean", 0.0)
     t_c, f_c, fe_c = clean_lightcurve(t, flux, flux_err, quality)
     if mom_x is not None and quality is not None:
         m = np.isfinite(t) & np.isfinite(flux) & (flux > 0) & (quality == 0)
         mom_x = mom_x[m]
         mom_y = mom_y[m]
+    reporter("clean", 1.0)
 
     # Stats
     span = float(t_c.max() - t_c.min())
 
     # Lomb-Scargle (cap at half the baseline)
+    reporter("lomb_scargle", 0.0)
     ls = run_lomb_scargle(t_c, f_c, fe_c, p_min=0.1, p_max=min(20.0, span / 2))
+    reporter("lomb_scargle", 1.0)
 
     # --- Optional sinusoidal detrend before BLS ----------------------------
+    reporter("detrend", 0.0)
     detrend_meta: dict
     f_raw_for_plot = f_c.copy() if high_variability else None
     if high_variability:
@@ -1415,8 +1522,10 @@ def run_full_vetting(
             "period_days": None, "amplitude_ppm": None,
             "harmonic_amplitude_ppm": None, "rms_reduction_pct": None,
         }
+    reporter("detrend", 1.0)
 
     # BLS (runs on detrended residual when high_variability was enabled)
+    reporter("bls", 0.0)
     if (known_period_days is not None
             and np.isfinite(known_period_days)
             and 0 < known_period_days <= 0.7 * span):
@@ -1427,14 +1536,17 @@ def run_full_vetting(
             bls["constrained_fallback_reason"] = (
                 "known_period_days outside valid range"
             )
+    reporter("bls", 1.0)
 
     # Direct event detection (user-tunable sensitivity).
+    reporter("events", 0.0)
     events = detect_events(
         t_c, f_c,
         threshold=detect_threshold,
         min_pts=10,
         min_snr=detect_min_snr,
     )
+    reporter("events", 1.0)
 
     # If exactly one in-sector event, anchor centroid/shape on it.
     primary_event = events[0] if len(events) == 1 else None
@@ -1442,33 +1554,44 @@ def run_full_vetting(
         primary_event = max(events, key=lambda e: e["depth"])
 
     # Centroid
+    reporter("centroid", 0.0)
     centroid = {"available": False}
     if primary_event and mom_x is not None and mom_y is not None and len(mom_x) == len(t_c):
         centroid = centroid_check(
             t_c, mom_x, mom_y, primary_event["t_start"], primary_event["t_end"]
         )
+    reporter("centroid", 1.0)
 
     # Shape
+    reporter("shape", 0.0)
     shape = {"available": False}
     if primary_event:
         shape = measure_shape(t_c, f_c, primary_event["t_start"], primary_event["t_end"])
+    reporter("shape", 1.0)
 
     # Odd/even and secondary (both threshold-tunable)
+    reporter("odd_even", 0.0)
     odd_even = odd_even_check(
         t_c, f_c, bls["period"], bls["t0"], bls["duration"],
         odd_even_sigma=odd_even_sigma,
     )
+    reporter("odd_even", 1.0)
+    reporter("secondary", 0.0)
     secondary = secondary_eclipse_search(
         t_c, f_c, bls["period"], bls["t0"], bls["duration"],
         secondary_sigma=secondary_sigma,
     )
+    reporter("secondary", 1.0)
 
     # Physics
+    reporter("physics", 0.0)
     depth_for_physics = primary_event["depth"] if primary_event else bls.get("depth")
     t14_for_physics = shape.get("t14_d") if shape.get("available") else bls.get("duration")
     physics = physics_interpretation(star, depth_for_physics, t14_for_physics)
+    reporter("physics", 1.0)
 
     # Verdict
+    reporter("verdict", 0.0)
     verdict = make_verdict(
         n_events=len(events),
         physics=physics,
@@ -1477,8 +1600,10 @@ def run_full_vetting(
         secondary=secondary,
         bls_sde=bls["sde"],
     )
+    reporter("verdict", 1.0)
 
     # External catalog cross-match (unchanged).
+    reporter("crossmatch", 0.0)
     known = crossmatch_known_object(star.ra, star.dec)
     if known.get("matched"):
         verdict["original_headline"] = verdict.get("headline")
@@ -1498,15 +1623,20 @@ def run_full_vetting(
         )
         verdict.setdefault("reasons", []).insert(0, match_reason)
         verdict.setdefault("flags", []).append("known_object_override")
+    reporter("crossmatch", 1.0)
 
     # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.
     # For now keep the existing call signature; Task 7 adds the new kwargs.
+    reporter("plots", 0.0)
     plots = make_plots(
         t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
         bls.get("_periodogram"), ls,
         detrend_meta=detrend_meta,
         f_raw=f_raw_for_plot,
+        plot_detrend=plot_detrend,
+        bin_minutes=plot_bin_minutes,
     )
+    reporter("plots", 1.0)
 
     summary = {
         "n_points": int(len(t_c)),
