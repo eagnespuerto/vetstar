@@ -16,9 +16,11 @@ import numpy as np
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
+
+from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -175,7 +177,10 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   rotation_period_days: Optional[float] = None,
                   secondary_sigma: float = 3.0,
                   odd_even_sigma: float = 3.0,
-                  known_period_days: Optional[float] = None):
+                  known_period_days: Optional[float] = None,
+                  reporter: Optional[ProgressReporter] = None,
+                  plot_detrend: bool = True,
+                  plot_bin_minutes: Optional[int] = 30):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
     sec_sig = _validate_secondary_sigma(secondary_sigma)
     oe_sig = _validate_odd_even_sigma(odd_even_sigma)
@@ -194,6 +199,9 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
         known_period_days=known_period_days,
         secondary_sigma=sec_sig,
         odd_even_sigma=oe_sig,
+        reporter=reporter,
+        plot_detrend=plot_detrend,
+        plot_bin_minutes=plot_bin_minutes,
     )
 
 
@@ -361,6 +369,9 @@ class MastQuery(BaseModel):
     rotation_period_days: Optional[float] = None
     secondary_sigma: float = 3.0
     odd_even_sigma: float = 3.0
+    # Plot-presentation knobs — do not affect detection.
+    plot_detrend: bool = True            # 1-day rolling-median flatten on the LC plot
+    plot_bin_minutes: Optional[int] = 30 # set null to hide the binned overlay
     known_period_days: Optional[float] = Field(
         default=None,
         description=(
@@ -391,31 +402,39 @@ async def mast_sectors(tic_id: int):
         raise _handle_exception("mast_sectors", e)
 
 
-def _mast_fetch_and_analyze(query: MastQuery):
+def _mast_fetch_and_analyze(query: MastQuery, reporter: Optional[ProgressReporter] = None):
+    rep = reporter or make_noop_reporter()
+
+    rep("mast_fetch", 0.0)
     try:
         info = fetch_spoc_lightcurve(query.tic_id, query.sector)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise _handle_exception("mast_fetch", e)
+    rep("mast_fetch", 1.0)
 
     # Opportunistically fetch the companion DVT file produced by SPOC DV.
     # Provides fitted period, a/R★ (ARAT), impact parameter, and a phase-fold
     # plot with the transit model overlay — cleaner than BLS-only estimates.
     # Fails soft: None when not yet available (recent sector, FFI-only target).
+    rep("dvt_fetch", 0.0)
     try:
         from .dvt_fetch import fetch_dvt
         info["dvt"] = fetch_dvt(query.tic_id, query.sector)
     except Exception as _e:
         log.warning("DVT fetch skipped for TIC %s S%s: %s", query.tic_id, query.sector, _e)
         info["dvt"] = None
+    rep("dvt_fetch", 1.0)
 
+    rep("parse", 0.0)
     try:
         parsed = parse_upload(info["path"], info["filename"])
     except Exception as e:
         raise _handle_exception(
             f"parse downloaded FITS ({os.path.basename(info.get('path', ''))})", e
         )
+    rep("parse", 1.0)
 
     _cache_lc(parsed)
 
@@ -427,6 +446,9 @@ def _mast_fetch_and_analyze(query: MastQuery):
             secondary_sigma=query.secondary_sigma,
             odd_even_sigma=query.odd_even_sigma,
             known_period_days=query.known_period_days,
+            reporter=rep,
+            plot_detrend=query.plot_detrend,
+            plot_bin_minutes=query.plot_bin_minutes,
         )
     except Exception as e:
         raise _handle_exception("pipeline", e)
@@ -452,6 +474,96 @@ async def mast_analyze(query: MastQuery):
     # Include DVT summary for the frontend (phase-fold plot + fitted parameters).
     out["dvt"] = _summarize_dvt(info.get("dvt"))
     return out
+
+
+# -------------------------------------------------
+# Async progress-tracked variant of /api/mast/analyze.
+#
+# Client flow:
+#   1. POST /api/mast/analyze_async  → {job_id}
+#   2. GET  /api/jobs/{job_id}/stream  (Server-Sent Events)
+#        Yields lines like: data: {"type":"progress","stage":"bls","percent":42,"message":"..."}
+#        Final line is either {"type":"done","result":{...}} or {"type":"error","message":"..."}
+#
+# Falls back gracefully: clients that don't support SSE can keep using the
+# synchronous /api/mast/analyze endpoint above.
+# -------------------------------------------------
+
+def _run_mast_job(query: MastQuery, job: JobState) -> None:
+    """Worker-thread body: run the full analyze flow and push events."""
+    reporter = JOBS.reporter_for(job)
+    try:
+        result, info = _mast_fetch_and_analyze(query, reporter=reporter)
+        _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
+        out = result.to_dict()
+        out["mast"] = {
+            "filename": os.path.basename(info.get("path", "")),
+            "obs_id": info.get("obs_id"),
+            "matched_observations": info.get("matched"),
+            "author": info.get("author"),
+            "exptime": info.get("exptime"),
+            "fallback": info.get("fallback", False),
+            "tried": info.get("tried", []),
+        }
+        out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+        out["dvt"] = _summarize_dvt(info.get("dvt"))
+        JOBS.finish_ok(job, out)
+    except HTTPException as e:
+        JOBS.finish_err(job, f"{e.status_code}: {e.detail}")
+    except Exception as e:
+        log.exception("async mast job failed")
+        JOBS.finish_err(job, f"{type(e).__name__}: {e}")
+
+
+@app.post("/api/mast/analyze_async")
+async def mast_analyze_async(query: MastQuery):
+    job = JOBS.create()
+    import threading as _t
+    _t.Thread(target=_run_mast_job, args=(query, job), daemon=True).start()
+    return {"job_id": job.job_id}
+
+
+@app.get("/api/jobs/{job_id}/stream")
+async def job_stream(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"unknown job_id: {job_id}")
+
+    import asyncio
+    import json
+
+    async def event_gen():
+        # If the job already finished before the client connected, drain
+        # the queue (which still holds the final event) and exit.
+        timeout_ticks = 0
+        while True:
+            try:
+                # poll the synchronous queue without blocking the event loop
+                evt = await asyncio.to_thread(job.queue.get, True, 0.5)
+                timeout_ticks = 0
+                yield f"data: {json.dumps(evt)}\n\n"
+                if evt.get("type") in ("done", "error"):
+                    return
+            except Exception:
+                # queue.Empty raises; turn it into a heartbeat comment so
+                # proxies (nginx, Cloudflare) don't drop the connection.
+                timeout_ticks += 1
+                yield ": keepalive\n\n"
+                # Safety valve: if the worker died without writing a final
+                # event, give up after ~10 min so the client gets an error.
+                if timeout_ticks > 1200:
+                    yield f"data: {json.dumps({'type':'error','message':'stream timed out'})}\n\n"
+                    return
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx response buffering
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.post("/api/mast/report")
