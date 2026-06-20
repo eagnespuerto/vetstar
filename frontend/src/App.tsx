@@ -1101,6 +1101,16 @@ function ResultsView({ result, lcControls }: { result: VettingResult; lcControls
   const [msLoading, setMsLoading] = useState(false);
   const [msError, setMsError] = useState<string | null>(null);
 
+  // Auto-run HCI as soon as a result with a TIC ID is available.
+  // Deps are scalars, so this fires once per (tic, sector) — plot-toggle
+  // re-renders that swap in a new ``result`` object don't retrigger it.
+  useEffect(() => {
+    if (result.star.tic_id && !hciData && !hciLoading && !hciError) {
+      runHci();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result.star.tic_id, result.star.sector]);
+
   const runHci = async (massEarth?: number) => {
     if (!result.star.tic_id) return;
     setHciLoading(true); setHciError(null);
@@ -1416,15 +1426,6 @@ function ResultsView({ result, lcControls }: { result: VettingResult; lcControls
           <div className="flex gap-2">
             {result.star.tic_id && (
               <button
-                onClick={() => runHci()}
-                disabled={hciLoading}
-                className="text-sm px-3 py-1.5 bg-teal-600 text-white rounded hover:bg-teal-700 disabled:bg-slate-300"
-              >
-                {hciLoading ? "Computing…" : hciData ? "Refresh" : "Compute HCI"}
-              </button>
-            )}
-            {result.star.tic_id && (
-              <button
                 onClick={runMultisector}
                 disabled={msLoading}
                 className="text-sm px-3 py-1.5 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:bg-slate-300"
@@ -1435,20 +1436,23 @@ function ResultsView({ result, lcControls }: { result: VettingResult; lcControls
           </div>
         </div>
 
-        {hciError && <p className="text-sm text-red-700 mb-2">HCI error: {hciError}</p>}
+        {hciError && (
+          <div className="flex items-center gap-2 text-sm text-red-700 mb-2">
+            <span>HCI error: {hciError}</span>
+            <button
+              onClick={() => { setHciError(null); runHci(); }}
+              className="text-xs px-2 py-0.5 rounded border border-red-300 hover:bg-red-50"
+            >
+              retry
+            </button>
+          </div>
+        )}
         {msError && <p className="text-sm text-red-700 mb-2">Multi-sector error: {msError}</p>}
 
         {hciLoading && (
           <div className="rounded bg-teal-50 border border-teal-200 p-3 text-teal-900 text-sm mb-2">
             <CyclingLoader messages={HCI_LOADING_MSGS} />
           </div>
-        )}
-
-        {!hciData && !hciLoading && (
-          <p className="text-sm text-slate-500">
-            Click <strong>Compute HCI</strong> to query ExoFOP-TESS for TOI data and
-            calculate a habitability score for this target using the STEHM framework.
-          </p>
         )}
 
         {hciData && <HabitabilityPanel data={hciData} />}
