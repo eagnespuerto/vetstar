@@ -71,6 +71,23 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   variability detrend** panel is added (raw flux + fitted sin/harmonic
   overlay + residual fed to BLS) and is shareable to ImgBB like the other
   plots
+- **LC plot view controls** (presentation only — detection logic is
+  unaffected). The full-LC plot defaults to a **1-day rolling-median flatten
+  + 30-min binned overlay**, so shallow dips don't drown in long-period
+  variability on noisy targets. Toggles above the plot let you turn the
+  detrend on/off and pick the bin width (off / 10 min / 30 min); switching
+  re-renders the plot via the same progress-tracked path as a fresh run, so
+  the bar climbs while it works. The same toggles are available on the
+  in-browser **Manual tiny-dip selector**, applied client-side so dragging
+  stays snappy. Analysis still always runs on the raw cadences.
+- **Live progress bar** during analysis. Vetstar streams stage-by-stage
+  progress (MAST fetch → clean → Lomb-Scargle → detrend → BLS → events →
+  centroid/shape → odd-even / secondary → physics → verdict → cross-match →
+  plots) over Server-Sent Events to the UI, replacing the previous
+  indeterminate spinner with a labelled percent bar. The async kickoff
+  endpoint (`POST /api/mast/analyze_async` + `GET /api/jobs/{id}/stream`)
+  runs alongside the blocking `POST /api/mast/analyze`, which stays
+  available as a fallback for older clients.
 - **PDF report** for archiving — a clean, consistent multi-page layout: every
   page carries the same header band and a footer with page numbers, tables
   share one zebra-striped style, section headings stay attached to their
@@ -115,10 +132,13 @@ Tiers: **Promising** (≥70) · **Marginal** (45–69) · **Unlikely** (20–44)
 **Very unlikely** (<20). Confirmed EBs and false positives are hard-capped
 at 12 regardless of other scores or the density modifier.
 
-The HCI panel automatically queries **ExoFOP-TESS** for TOI data (planet
-radius, period, semi-major axis, disposition) and stellar parameters. If
-ExoFOP is unavailable it falls back to the TIC v8 catalog via astroquery.
-All ExoFOP-derived values can be overridden from the request body.
+The HCI panel **auto-runs** as soon as the vetting result lands (previously
+required clicking *Compute HCI*) and queries **ExoFOP-TESS** for TOI data
+(planet radius, period, semi-major axis, disposition) and stellar parameters.
+If ExoFOP is unavailable it falls back to the TIC v8 catalog via astroquery.
+All ExoFOP-derived values can be overridden from the request body. Toggling
+the LC view (detrend / bin) does not re-trigger HCI — it's keyed on
+`(tic_id, sector)` and cached for the lifetime of the result panel.
 
 **Light-curve-driven inputs.** Three sub-scores now fall back to direct
 transit observables when catalogue values are missing, so the HCI can be
@@ -298,9 +318,10 @@ spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
   `xxYYYYMMDD-nnn.txt` (matching base names, as the spec requires).
 - **Single-sector contents** — full light curve, event-zoom grid, centroid
   behaviour, BLS and Lomb-Scargle periodograms, the SPOC DV phase-fold (when
-  a DVT is available), and — once you've clicked **Compute HCI** — the
-  **Habitability Chance Index summary image** with its metrics, weightings,
-  predicted observables, and TLCM geometry.
+  a DVT is available), and the **Habitability Chance Index summary image**
+  with its metrics, weightings, predicted observables, and TLCM geometry
+  (HCI auto-runs with the result, so the summary image is ready by the time
+  you build the archive).
 - **Multi-sector contents** — identical to single-sector, because the
   multi-sector pipeline produces a single stitched-LC verdict with the same
   plot set.
@@ -542,7 +563,10 @@ This means:
 ### Step 3 — run vetting
 
 Click **Run vetting** (Upload tab) or **Fetch & vet** (MAST tab). Analysis
-takes 10–30 seconds. You'll see:
+takes 10–30 seconds; a **stage-labelled progress bar** below the loader
+shows real progress (MAST fetch → clean → Lomb-Scargle → detrend → BLS →
+events → centroid/shape → odd-even / secondary → physics → verdict →
+cross-match → plots), driven by an SSE stream from the backend. You'll see:
 
 - A **verdict banner** (planet candidate / large planet candidate / EB
   candidate / blend / ambiguous) with confidence
@@ -552,7 +576,11 @@ takes 10–30 seconds. You'll see:
 - **Diagnostic plots**: full detrended light curve with all events shaded
   (primary in red, others in orange, each numbered), a zoom grid showing
   each event's shape / depth / duration / SNR, centroid behaviour, BLS and
-  Lomb-Scargle periodograms
+  Lomb-Scargle periodograms. A small toggle bar above the full-LC plot lets
+  you switch the rolling-median **Detrend** on/off and pick the binned
+  overlay (**off / 10 min / 30 min**, default 30 min). Re-rendering uses
+  the same progress-tracked path as the initial run; the bar reappears
+  while the server re-plots.
 - **Test tables**: BLS, Lomb-Scargle, centroid, odd/even, secondary
   eclipse, transit shape, physical interpretation
 - **Event table** listing every dip with timing and depth
@@ -562,11 +590,14 @@ takes 10–30 seconds. You'll see:
   forward model, the TLCM transit geometry, and the ExoFOP-TESS TOI parameter
   table — all independent of the habitability score below
 
-### Step 4 — compute habitability score
+### Step 4 — habitability score (auto)
 
-At the bottom of the results, click **Compute HCI**. The app queries
-ExoFOP-TESS for the target's TOI data and stellar parameters, then
-computes the Habitability Chance Index. The score panel shows:
+The **Habitability Chance Index** panel at the bottom of the results runs
+automatically once vetting finishes — no extra button to click. The app
+queries ExoFOP-TESS for the target's TOI data and stellar parameters, then
+computes the score. If the query fails, the panel surfaces the error with
+a **retry** link rather than blocking the rest of the page. The score
+panel shows:
 
 - A large **score / 100** with a colour-coded tier and progress bar
 - The **planet and TOI info** used (radius, period, semi-major axis,
@@ -701,7 +732,9 @@ python app.py --api-only           # API only, no SPA
 POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → JSON
 POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → PDF (incl. HCI + ExoFOP + ExoMiner)
 GET  /api/mast/sectors/{tic}                                                        → sector list
-POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → JSON
+POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, plot_detrend?, plot_bin_minutes?}   → JSON
+POST /api/mast/analyze_async   {tic_id, sector, ...same as /api/mast/analyze}                              → {"job_id": "..."}
+GET  /api/jobs/{job_id}/stream                                                                            → Server-Sent Events; data: {"type":"progress","stage":..., "percent":..., "message":...} per stage, final {"type":"done","result":{...}} or {"type":"error","message":"..."}
 POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → PDF (incl. HCI + ExoFOP + ExoMiner)
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
@@ -723,8 +756,9 @@ vetstar/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py             FastAPI endpoints + SPA mount
-│   │   ├── pipeline.py         BLS, LS, adaptive detection, centroid, shape, physics
+│   │   ├── pipeline.py         BLS, LS, adaptive detection, centroid, shape, physics; rolling-median + time-bin helpers for the plot view
 │   │   ├── detrend.py          Optional sinusoid + first-harmonic regression detrender (pre-BLS)
+│   │   ├── progress.py         ProgressReporter + JobRegistry backing the SSE progress stream
 │   │   ├── parsers.py          FITS + ExoFOP JSON readers
 │   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
 │   │   ├── dvt_fetch.py        SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)

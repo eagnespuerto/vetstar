@@ -17,6 +17,7 @@ standard astrophysics convention: `★` = host star, `p` = planet/companion,
 1. [Light-curve ingestion & detrending](#1-light-curve-ingestion--detrending)
    - 1.1 [Savitzky-Golay baseline removal](#11-savitzky-golay-baseline-removal)
    - 1.2 [Optional sinusoidal-regression detrend (high stellar variability)](#12-optional-sinusoidal-regression-detrend-high-stellar-variability)
+   - 1.3 [Plot-only rolling-median flatten and time-binned overlay](#13-plot-only-rolling-median-flatten-and-time-binned-overlay)
 2. [Adaptive dip detection](#2-adaptive-dip-detection)
 3. [Periodograms — BLS & Lomb-Scargle](#3-periodograms--bls--lomb-scargle)
 4. [Phase folding & transit-model fit](#4-phase-folding--transit-model-fit)
@@ -149,6 +150,57 @@ does internally before its BLS pass.
 the entire block is bypassed and `f_resid ≡ f`; the regression test
 `test_defaults_match_pre_change_pipeline_output` locks BLS period, SDE,
 secondary-detected, and verdict category to their pre-change values.
+
+### 1.3 Plot-only rolling-median flatten and time-binned overlay
+
+The Savitzky-Golay (§1.1) and sinusoidal-regression (§1.2) detrends both
+operate on the **flux fed into detection** — they change what BLS and the
+adaptive event scan see. A noisy faint target can still look like a
+shotgun-blast scatter plot in the diagnostic LC even after detection has
+already flattened it for its own purposes. The full-LC diagnostic plot in
+`make_plots()` therefore runs an additional **presentation-only**
+flatten + bin pass that does not feed back into detection or the
+periodograms:
+
+**Rolling-median flatten.** For a sorted time series `t` with a window
+half-width `w_½ = 0.5 d`, the trend at sample `i` is
+
+```
+trend(i) = median{ f(j) : t_i − w_½ ≤ t(j) ≤ t_i + w_½ }
+```
+
+evaluated by an O(n) two-pointer sweep over the sorted `t`. The displayed
+flux is `f(i) / trend(i)`, then re-normalised so the global median is unity.
+A 1-day window is long enough to leave a transit-shaped dip (typically
+1–10 h) almost untouched — the median inside the window is dominated by
+out-of-transit cadences — while still scrubbing the slow variability that
+makes shallow dips invisible to the eye. Robustness to single-cadence
+outliers comes for free (median, not mean). The frontend ships the same
+helper in JS (`rollingMedianDetrend` in `ManualDipSelector.tsx`) so the
+in-browser drag-to-select tool sees the same view without a round trip.
+
+**Time binning.** When `plot_bin_minutes = b` is set, samples are grouped
+into equal-width bins of `b` minutes in `t`. The per-bin mean and standard
+error of the mean
+
+```
+f̄_k = (1/N_k) Σ_{i∈k} f_i,        SEM_k = √( Var_k / max(1, N_k) )
+```
+
+are overplotted as red points (Var_k from the second-moment running sum,
+clipped to ≥ 0). Empty bins are dropped. Binning beats white per-cadence
+noise down by **√N_k**, so on a 2-min SPOC LC a 30-min bin reduces scatter
+by √15 ≈ 3.9× — typically enough to make a 0.1% transit visible to the eye.
+The overlay is purely visual; events / BLS / SNR all still run on the raw
+cadences.
+
+**Defaults and toggles.** `plot_detrend` defaults to `True` and
+`plot_bin_minutes` defaults to `30`. Both are exposed on `POST
+/api/mast/analyze*` (and threaded through `run_full_vetting → make_plots`)
+and on a toggle bar above the LC plot in the UI. Setting either to its
+"off" value reverts to the legacy view (raw flux, no overlay). Detection
+output, verdict, periodograms, and PDF tables are byte-identical regardless
+of these knobs — only the rendered LC PNG differs.
 
 ---
 
