@@ -10,6 +10,7 @@ $equations = @{
     "transit_depth"        = '\delta \;=\; \left(\dfrac{R_{p}}{R_{\star}}\right)^{2}'
     "integrated_snr"       = '\mathrm{SNR}_{\mathrm{int}} \;=\; \dfrac{\bar{\delta}\,\sqrt{N_{\mathrm{in}}}}{\sigma_{\mathrm{out}}}'
     "mad"                  = '\sigma_{\mathrm{out}} \;=\; 1.4826 \cdot \mathrm{median}\!\left(\bigl|x_{i}-\mathrm{median}(x)\bigr|\right)'
+    "noise_floor"          = '\sigma_{\mathrm{floor}} \;\approx\; \dfrac{1.4826 \cdot \mathrm{median}\!\bigl(|\Delta f|\bigr)}{\sqrt{2}}'
     "adaptive_threshold"   = 'T_{\mathrm{eff}} \;=\; \min\!\bigl(T_{\mathrm{abs}},\; 1 - k\,\sigma_{\mathrm{out}}\bigr)'
     "bls_sde"              = '\mathrm{SDE} \;=\; \dfrac{\mathrm{SR}_{\mathrm{peak}} - \langle\mathrm{SR}\rangle}{\mathrm{std}(\mathrm{SR})}'
     "ls_power"             = 'P_{\mathrm{LS}}(\omega) \;=\; \dfrac{1}{2\sigma^{2}}\!\left[\dfrac{\left(\sum_{i}(x_i-\bar x)\cos\omega(t_i-\tau)\right)^{2}}{\sum_{i}\cos^{2}\omega(t_i-\tau)} + \dfrac{\left(\sum_{i}(x_i-\bar x)\sin\omega(t_i-\tau)\right)^{2}}{\sum_{i}\sin^{2}\omega(t_i-\tau)}\right]'
