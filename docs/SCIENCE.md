@@ -109,7 +109,7 @@ amplitude `√(A₂² + B₂²)` is reported separately.
 non-zero amplitude purely by chance. Vetstar therefore estimates the
 per-cadence high-frequency noise floor
 
-![photometric noise floor](images/equations/mad.png)
+![photometric noise floor](images/equations/noise_floor.png)
 
 using the point-to-point MAD on the *flux differences*,
 
