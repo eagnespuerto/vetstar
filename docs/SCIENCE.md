@@ -5,9 +5,11 @@ every stage of the Vetstar pipeline. It is the companion to the user-facing
 [README](../README.md): the README tells you **what** the app does, this
 document tells you **how** and **why**.
 
-Each equation below is rendered as a LaTeX-generated PNG
-(see `docs/render_equations.ps1` to regenerate them). Symbols follow
-standard astrophysics convention: `★` = host star, `p` = planet/companion,
+Each equation below is written inline as LaTeX and rendered natively by
+GitHub's MathJax support; PNG fallbacks are kept under
+`docs/images/equations/` for viewers without MathJax (see
+`docs/render_equations.ps1` to regenerate them). Symbols follow standard
+astrophysics convention: `★` = host star, `p` = planet/companion,
 `⊕` = Earth, `☉` = Sun.
 
 ---
@@ -64,7 +66,7 @@ as one very wide "dip".
 The robust scatter of the out-of-dip baseline is measured with the **median
 absolute deviation** (MAD), scaled to a Gaussian-equivalent σ:
 
-![sigma_out from MAD](images/equations/mad.png)
+$$\sigma_{\mathrm{out}} \;=\; 1.4826 \cdot \mathrm{median}\!\left(\bigl|x_{i}-\mathrm{median}(x)\bigr|\right)$$
 
 The 1.4826 factor is the standard MAD→σ conversion for a Gaussian. MAD is
 preferred over the sample standard deviation because real light curves carry
@@ -109,7 +111,7 @@ amplitude `√(A₂² + B₂²)` is reported separately.
 non-zero amplitude purely by chance. Vetstar therefore estimates the
 per-cadence high-frequency noise floor
 
-![photometric noise floor](images/equations/noise_floor.png)
+$$\sigma_{\mathrm{floor}} \;\approx\; \dfrac{1.4826 \cdot \mathrm{median}\!\bigl(|\Delta f|\bigr)}{\sqrt{2}}$$
 
 using the point-to-point MAD on the *flux differences*,
 
@@ -208,7 +210,7 @@ of these knobs — only the rendered LC PNG differs.
 
 The studio combines two thresholds and picks whichever is more sensitive:
 
-![adaptive threshold](images/equations/adaptive_threshold.png)
+$$T_{\mathrm{eff}} \;=\; \min\!\bigl(T_{\mathrm{abs}},\; 1 - k\,\sigma_{\mathrm{out}}\bigr)$$
 
 with `T_abs` the user-set absolute floor (default 0.997 — flag dips deeper
 than 0.3%) and `k` the user-set SNR floor (default 4σ). For a quiet star
@@ -218,7 +220,7 @@ star it simply falls back to `T_abs`.
 
 Each candidate event must additionally clear an **integrated SNR** test:
 
-![integrated SNR](images/equations/integrated_snr.png)
+$$\mathrm{SNR}_{\mathrm{int}} \;=\; \dfrac{\bar{\delta}\,\sqrt{N_{\mathrm{in}}}}{\sigma_{\mathrm{out}}}$$
 
 where  `δ̄`  is the mean fractional depth of the event,  `N_in`  is the
 number of in-transit samples, and  `σ_out`  is the out-of-dip MAD-σ. The
@@ -246,7 +248,7 @@ The frequency-domain output is the **signal residue** SR; Vetstar's quoted
 **Signal Detection Efficiency (SDE)** standardises the peak against the
 periodogram's own baseline:
 
-![BLS SDE](images/equations/bls_sde.png)
+$$\mathrm{SDE} \;=\; \dfrac{\mathrm{SR}_{\mathrm{peak}} - \langle\mathrm{SR}\rangle}{\mathrm{std}(\mathrm{SR})}$$
 
 We flag SDE > 6 as a confident period detection. Per-event significance is
 recomputed using the integrated-SNR formula of §2 — BLS provides the
@@ -258,7 +260,7 @@ which individual events are real.
 The classical (Press & Rybicki 1989) Lomb-Scargle power at angular
 frequency ω is
 
-![Lomb-Scargle power](images/equations/ls_power.png)
+$$P_{\mathrm{LS}}(\omega) \;=\; \dfrac{1}{2\sigma^{2}}\!\left[\dfrac{\left(\sum_{i}(x_i-\bar x)\cos\omega(t_i-\tau)\right)^{2}}{\sum_{i}\cos^{2}\omega(t_i-\tau)} + \dfrac{\left(\sum_{i}(x_i-\bar x)\sin\omega(t_i-\tau)\right)^{2}}{\sum_{i}\sin^{2}\omega(t_i-\tau)}\right]$$
 
 with `τ` the standard time-offset that orthogonalises the sine and cosine
 sums. Lomb-Scargle is sensitive to **sinusoidal variability** (rotation,
@@ -272,7 +274,7 @@ period — is a strong eclipsing-binary indicator.
 
 Phase folding maps time to a phase in [−½, ½):
 
-![phase folding](images/equations/phase_fold.png)
+$$\varphi(t) \;=\; \mathrm{mod}\!\left(\dfrac{t - t_{0}}{P},\;1\right) - \tfrac{1}{2}$$
 
 Phase 0 is transit centre. The folded curve is binned to two grids:
 **global** (2001 bins across the full phase) and **local** (201 bins
@@ -295,7 +297,7 @@ For SPOC 2-min products the FITS table carries the per-cadence centroid
 columns `MOM_CENTR1`, `MOM_CENTR2`. Vetstar computes the in-transit centroid
 mean and compares against the out-of-transit baseline:
 
-![centroid offset significance](images/equations/centroid_sigma.png)
+$$n_\sigma^{(c)} \;=\; \dfrac{\sqrt{\Delta x^{2} + \Delta y^{2}}}{\sigma_{\mathrm{centroid}}}$$
 
 A significant offset (default > 3σ) means the photometric centre of light
 moved *off* the target during the dip — the canonical signature of a
@@ -310,7 +312,7 @@ eclipses can be **similar in depth**, but a true planet's odd- and
 even-numbered transits must agree. Vetstar measures the depth of every
 detected event, partitions them by index parity, and computes:
 
-![odd/even depth significance](images/equations/odd_even_sigma.png)
+$$n_\sigma \;=\; \dfrac{\bigl|\delta_{\mathrm{odd}} - \delta_{\mathrm{even}}\bigr|}{\sqrt{\sigma_{\mathrm{odd}}^{2} + \sigma_{\mathrm{even}}^{2}}}$$
 
 A difference > 3σ flags the candidate as a probable EB. Each side of the
 ratio carries the in-event MAD-σ propagated through the depth average.
@@ -341,7 +343,7 @@ aperture that actually belongs to the target (the rest comes from blended
 neighbours). Observed transit depths must be inflated to true source-frame
 depths before any radius inference:
 
-![CROWDSAP dilution](images/equations/crowdsap.png)
+$$\delta_{\mathrm{true}} \;=\; \dfrac{\delta_{\mathrm{obs}}}{\mathrm{CROWDSAP}}$$
 
 CROWDSAP < 1 always *underestimates* the true depth; a 0.5%-observed
 transit on a CROWDSAP = 0.5 target is really a 1.0% transit on the source.
@@ -360,11 +362,11 @@ transit alone, without needing a catalogue stellar mass.
 
 From the dilution-corrected depth:
 
-![transit depth -> radius ratio](images/equations/transit_depth.png)
+$$\delta \;=\; \left(\dfrac{R_{p}}{R_{\star}}\right)^{2}$$
 
 so `k = Rp / R★ = √δ`. The corresponding companion radius is
 
-![companion radius](images/equations/companion_radius.png)
+$$R_{p} \;=\; k \cdot R_{\star} \;=\; \sqrt{\delta_{\mathrm{true}}}\,\cdot R_{\star}$$
 
 For a grazing transit, the observed depth is a lower bound on `k²`; Vetstar
 flags this and propagates the caveat to the verdict (§5 in the README).
@@ -375,7 +377,7 @@ Combining Kepler's third law with the chord-length geometry of a transit
 (Csizmadia 2020 eq. 70) gives, for a known total duration `T₁₄`, impact
 parameter `b`, and radius ratio `k`:
 
-![a/R* from duration](images/equations/tlcm_aRs.png)
+$$\dfrac{a}{R_{\star}} \;\approx\; \dfrac{P}{\pi\,T_{14}}\sqrt{(1+k)^{2} - b^{2}\bigl(1-\sin^{2}\!\left(\tfrac{\pi T_{14}}{P}\right)\bigr)}$$
 
 When a DVT file is available, the SPOC-fitted `ARAT` and `IMPACT` replace
 this duration-derived estimate; otherwise Vetstar assumes a central transit
@@ -385,7 +387,7 @@ this duration-derived estimate; otherwise Vetstar assumes a central transit
 
 The Seager & Mallén-Ornelas (2003) relation drops out:
 
-![Seager-Mallén-Ornelas stellar density](images/equations/seager_density.png)
+$$\rho_{\star} \;=\; \dfrac{3\pi}{G\,P^{2}}\,\left(\dfrac{a}{R_{\star}}\right)^{3}$$
 
 `ρ★` requires only `P` and `a/R★`. With `R★` from any source (ExoFOP, TIC
 v8, Gaia DR3, or — in the fully-fallback case — the Pecaut & Mamajek (2013)
@@ -398,7 +400,7 @@ Multiplying `a/R★` by the stellar radius gives a *photometric* `a`
 independent of any catalogue mass. The alternative — Kepler's third law
 from a catalogue stellar mass —
 
-![Kepler's third law](images/equations/kepler_third.png)
+$$a^{3} \;=\; \dfrac{G\,M_{\star}\,P^{2}}{4\pi^{2}}$$
 
 is also computed; agreement to within a few percent validates the solution.
 A large discrepancy flags eccentricity, a grazing transit, dilution, or
@@ -412,7 +414,7 @@ Vetstar implements the NASA Exoplanet Archive POE equations end-to-end.
 
 ### 7.1 Bolometric luminosity
 
-![stellar luminosity](images/equations/luminosity.png)
+$$L_{\star} \;=\; 4\pi R_{\star}^{2}\,\sigma_{\mathrm{SB}}\,T_{\mathrm{eff}}^{4}$$
 
 with σ_SB the Stefan-Boltzmann constant. Vetstar reports `L★ / L☉`, which
 also drives the habitable-zone calculation below.
@@ -422,25 +424,25 @@ also drives the habitable-zone calculation below.
 The Kopparapu et al. (2013, 2014) HZ boundaries are quartic in
 `T★ = T_eff − 5780 K`:
 
-![Kopparapu S_eff](images/equations/kopparapu_seff.png)
+$$S_{\mathrm{eff}}(T_{\mathrm{eff}}) \;=\; S_{\mathrm{eff},\odot} + a\,T_{\star} + b\,T_{\star}^{2} + c\,T_{\star}^{3} + d\,T_{\star}^{4},\quad T_{\star} \equiv T_{\mathrm{eff}} - 5780\,\mathrm{K}$$
 
 with coefficients `(S_eff,☉, a, b, c, d)` tabulated for each boundary
 (recent Venus, runaway greenhouse, maximum greenhouse, early Mars).
 The HZ distance in AU is then:
 
-![HZ distance in AU](images/equations/hz_au.png)
+$$d_{\mathrm{HZ}}\,[\mathrm{AU}] \;=\; \sqrt{\dfrac{L_{\star}/L_{\odot}}{S_{\mathrm{eff}}}}$$
 
 ### 7.3 Instellation and equilibrium temperature
 
 When no luminosity or distance is available, Vetstar falls back to the
 **scaled-semi-major-axis** form of the instellation:
 
-![instellation from a/R*](images/equations/instellation.png)
+$$\dfrac{S}{S_{\oplus}} \;=\; \left(\dfrac{T_{\mathrm{eff}}}{T_{\odot}}\right)^{4}\!\left(\dfrac{215.03}{a/R_{\star}}\right)^{2}$$
 
 (215.03 = 1 AU / R☉, ensuring dimensional consistency.) The equilibrium
 temperature, assuming zero albedo and full redistribution, is:
 
-![equilibrium temperature](images/equations/teq.png)
+$$T_{\mathrm{eq}} \;=\; 278.3\;\left(\dfrac{S}{S_{\oplus}}\right)^{1/4}\;\mathrm{K}$$
 
 Both quantities feed the HCI habitable-zone sub-score (§9) when no
 catalogue luminosity is available.
@@ -449,7 +451,7 @@ catalogue luminosity is available.
 
 The Clubb (2008) closed form, used in POE:
 
-![RV semi-amplitude K](images/equations/rv_k.png)
+$$K \;=\; \dfrac{203.255\;\mathrm{m\,s^{-1}}}{\sqrt{1-e^{2}}}\;\left(\dfrac{1\;\mathrm{day}}{P}\right)^{\!1/3}\!\left(\dfrac{M_{p}\sin i}{M_{\mathrm{Jup}}}\right)\!\left(\dfrac{M_{\odot}}{M_{\star}}\right)^{\!2/3}$$
 
 For unknown planet mass `M_p`, Vetstar plugs in the Chen & Kipping (2017)
 mass-radius relation (§8.2). The forward `K` feeds both the POE display
@@ -463,7 +465,7 @@ and the HCI density-aware planet-size sub-score.
 
 A single-line spectroscopic binary obeys the mass function
 
-![mass function](images/equations/mass_function.png)
+$$f(m) \;=\; \dfrac{K^{3}\,P\,(1-e^{2})^{3/2}}{2\pi G} \;=\; \dfrac{(M_{p}\sin i)^{3}}{(M_{\star} + M_{p})^{2}}$$
 
 The left-hand side is *fully observable* from a phased RV time series:
 fit the radial-velocity semi-amplitude `K` (Vetstar uses the simple
@@ -477,7 +479,7 @@ companion mass `M_p` exactly (cubic root) once `M★` is known.
 Two complementary forms are reported so the dominant systematic — the
 mass-radius scatter — is visible:
 
-![Chen-Kipping mass-radius](images/equations/chen_kipping.png)
+$$M_{p}/M_{\oplus} \;=\; \begin{cases} (R_{p}/R_{\oplus})^{3.58}, & R_{p} < 1.23\,R_{\oplus} \\ 1.436\,(R_{p}/R_{\oplus})^{1.70}, & 1.23 \le R_{p}/R_{\oplus} < 14.3 \\ \cdots & \mathrm{(Neptunian,\,Jovian\,branches)} \end{cases}$$
 
 and a simpler piecewise power-law. The full HCI calculation runs both,
 takes the resulting *range* of size-scores, and presents a banded score
@@ -488,7 +490,7 @@ band to a single value.
 
 When `M_p` is available, the bulk density
 
-![bulk density](images/equations/bulk_density.png)
+$$\rho_{p} \;=\; \dfrac{3\,M_{p}}{4\pi R_{p}^{3}}$$
 
 informs the HCI planet-size sub-score: ρ ≳ 3.3 g cm⁻³ is rocky-consistent
 and confirms a solid surface; ρ ≲ 2.2 g cm⁻³ flags a volatile / H-He
@@ -500,7 +502,7 @@ envelope and downgrades the score regardless of radius.
 
 The HCI is a 0-100 weighted sum of six sub-scores, each in [0, 1]:
 
-![HCI weighted sum](images/equations/hci_weighted.png)
+$$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{6} w_{i}\,s_{i},\qquad \sum_{i=1}^{6} w_{i} = 1$$
 
 with weights `wᵢ = (0.30, 0.25, 0.15, 0.15, 0.10, 0.05)` for
 **size, habitable-zone, stellar type, TOI disposition, vetting flags,
@@ -578,7 +580,7 @@ to a local ExoMiner network).
 
 Phase-folded data are **median-binned** to fixed-length 1-D views:
 
-![ExoMiner phase binning](images/equations/exominer_binning.png)
+$$\bar{f}_{j} \;=\; \mathrm{median}\!\bigl\{\,f_{i} : \varphi_{i} \in [\varphi_{j}, \varphi_{j+1})\,\bigr\}$$
 
 Seven views are produced:
 
@@ -605,7 +607,7 @@ For every fetched target, Vetstar pulls a Full-Frame-Image cutout from
 **MAST TESScut** centred on the TIC RA/Dec. The pixel array is rendered
 with the same **asinh percentile stretch** that `astrocut` uses by default:
 
-![asinh stretch](images/equations/asinh_stretch.png)
+$$y \;=\; \dfrac{\sinh^{-1}\!\bigl((x-x_{\mathrm{lo}})/\beta\bigr)}{\sinh^{-1}\!\bigl((x_{\mathrm{hi}}-x_{\mathrm{lo}})/\beta\bigr)},\quad y \in [0,1]$$
 
 where `x_lo`, `x_hi` are the (default) 0.5th and 99.5th percentiles of the
 pixel-value distribution, and `β` is the asinh softening parameter. The
@@ -625,7 +627,7 @@ Multi-sector mode runs §§1-10 independently on up to 5 sectors, then
 performs a cross-sector consistency check on the **two deepest events per
 sector**:
 
-![duration consistency tolerance](images/equations/duration_match.png)
+$$\bigl|T_{14}^{(s)} - T_{14}^{(s')}\bigr| \;\le\; 0.05\;\mathrm{h}$$
 
 Events are grouped by duration (this ±0.05 h tolerance) and by period
 (±2 % fractional tolerance, `PERIOD_MATCH_TOL_FRAC` in `pipeline.py`).
@@ -645,7 +647,7 @@ view set from the sector showing that object's deepest event.
 TESS times in BJD-2457000 ("BTJD") are converted to BJD for catalogue
 cross-matching and ExoFOP submission:
 
-![BTJD to BJD conversion](images/equations/btjd_bjd.png)
+$$\mathrm{BJD} \;=\; \mathrm{BTJD} \;+\; 2{,}457{,}000$$
 
 This conversion is applied automatically to the fitted transit epoch when
 filling the ExoFOP TOI parameter table and the BJD epoch helper in the UI.
