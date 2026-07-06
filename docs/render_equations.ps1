@@ -3,7 +3,7 @@
 # CodeCogs online LaTeX renderer. Re-run if equations change.
 
 $ErrorActionPreference = "Stop"
-$outDir = Join-Path $PSScriptRoot "images\equations"
+$outDir = Join-Path $PSScriptRoot "legacy-pngs"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $equations = @{
@@ -33,7 +33,7 @@ $equations = @{
     "luminosity"           = 'L_{\star} \;=\; 4\pi R_{\star}^{2}\,\sigma_{\mathrm{SB}}\,T_{\mathrm{eff}}^{4}'
     "hci_weighted"         = '\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{6} w_{i}\,s_{i},\qquad \sum_{i=1}^{6} w_{i} = 1'
     "asinh_stretch"        = 'y \;=\; \dfrac{\sinh^{-1}\!\bigl((x-x_{\mathrm{lo}})/\beta\bigr)}{\sinh^{-1}\!\bigl((x_{\mathrm{hi}}-x_{\mathrm{lo}})/\beta\bigr)},\quad y \in [0,1]'
-    "exominer_binning"     = '\bar{f}_{j} \;=\; \mathrm{median}\!\bigl\{\,f_{i} : \varphi_{i} \in [\varphi_{j}, \varphi_{j+1})\,\bigr\}'
+    "exominer_binning"     = '\bar{f}_{j} \;=\; \mathrm{median}\!\bigl\lbrace\,f_{i} : \varphi_{i} \in [\varphi_{j}, \varphi_{j+1})\,\bigr\rbrace'
     "duration_match"       = '\bigl|T_{14}^{(s)} - T_{14}^{(s'')}\bigr| \;\le\; 0.05\;\mathrm{h}'
     "companion_radius"     = 'R_{p} \;=\; k \cdot R_{\star} \;=\; \sqrt{\delta_{\mathrm{true}}}\,\cdot R_{\star}'
 }

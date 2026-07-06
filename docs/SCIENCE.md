@@ -7,7 +7,7 @@ document tells you **how** and **why**.
 
 Each equation below is written inline as LaTeX and rendered natively by
 GitHub's MathJax support; PNG fallbacks are kept under
-`docs/images/equations/` for viewers without MathJax (see
+`docs/legacy-pngs/` for viewers without MathJax (see
 `docs/render_equations.ps1` to regenerate them). Symbols follow standard
 astrophysics convention: `★` = host star, `p` = planet/companion,
 `⊕` = Earth, `☉` = Sun.
@@ -580,7 +580,7 @@ to a local ExoMiner network).
 
 Phase-folded data are **median-binned** to fixed-length 1-D views:
 
-$$\bar{f}_{j} \;=\; \mathrm{median}\!\bigl\{\,f_{i} : \varphi_{i} \in [\varphi_{j}, \varphi_{j+1})\,\bigr\}$$
+$$\bar{f}_{j} \;=\; \mathrm{median}\!\bigl\lbrace\,f_{i} : \varphi_{i} \in [\varphi_{j}, \varphi_{j+1})\,\bigr\rbrace$$
 
 Seven views are produced:
 
