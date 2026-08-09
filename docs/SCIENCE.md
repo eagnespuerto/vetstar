@@ -37,6 +37,17 @@ astrophysics convention: `★` = host star, `p` = planet/companion,
 12. [Multi-sector aggregation](#12-multi-sector-aggregation)
 13. [Time-system conventions](#13-time-system-conventions)
 14. [References](#14-references)
+15. [Microlensing pipeline — Module A: model-comparison classifier](#15-microlensing-pipeline--module-a-model-comparison-classifier)
+    - 15.1 [Paczyński single-lens (PSPL) magnification](#151-paczyński-single-lens-pspl-magnification)
+    - 15.2 [Davenport-2014 empirical flare template](#152-davenport-2014-empirical-flare-template)
+    - 15.3 [Null model and window baseline normalisation](#153-null-model-and-window-baseline-normalisation)
+    - 15.4 [BIC-based model selection and verdict rules](#154-bic-based-model-selection-and-verdict-rules)
+    - 15.5 [Residual symmetry statistic](#155-residual-symmetry-statistic)
+16. [Microlensing pipeline — Module B: TESS sector-overlap targeting](#16-microlensing-pipeline--module-b-tess-sector-overlap-targeting)
+    - 16.1 [tess-point coordinate resolution](#161-tess-point-coordinate-resolution)
+    - 16.2 [Static TESS sector-date table](#162-static-tess-sector-date-table)
+    - 16.3 [Observability logic (wings margin)](#163-observability-logic-wings-margin)
+    - 16.4 [Bulge / ecliptic blind-zone flag](#164-bulge--ecliptic-blind-zone-flag)
 
 ---
 
@@ -679,6 +690,285 @@ to BJD before any downstream calculation.
 - **Tian et al. (2009)** — GRL 36 L02205 (CO₂ escape, referenced by STEHM).
 - **Kite & Barnett (2020)** — PNAS 117 18264 (exoplanet secondary
   atmospheres, referenced by STEHM).
+- **Paczyński (1986)** — ApJ 304 1 (single-lens gravitational microlensing
+  magnification, the closed form used by Module A).
+- **Davenport et al. (2014)** — ApJ 797 122 (empirical stellar flare
+  light-curve template — polynomial rise + double-exponential decay).
+- **Schwarz (1978)** — Annals of Statistics 6 461 (Bayesian Information
+  Criterion, the model-selection score used to compare PSPL / flare / null).
+- **Ricker et al. (2015)** — JATIS 1 014003 (TESS mission — orbit, sector
+  cadence, camera layout).
+- **Burke et al. (2020)** — RNAAS 4 176 (`tess-point` package — the
+  coordinate → sector/camera/CCD resolver used by Module B).
+
+---
+
+## 15. Microlensing pipeline — Module A: model-comparison classifier
+
+Given a user-flagged positive excursion in a light curve (window
+`[t_start, t_end]` with a peak guess `t0_guess`), the classifier fits three
+competing forward models on the windowed flux and returns a verdict via
+Bayesian Information Criterion. Backend: `backend/app/microlensing.py`.
+
+### 15.1 Paczyński single-lens (PSPL) magnification
+
+For a point-source point-lens (PSPL) geometry with impact parameter `u₀`
+and Einstein-crossing timescale `tE`, the projected lens-source separation
+in units of the Einstein radius as a function of time is
+
+$$u(t) = \sqrt{u_0^2 + \left(\frac{t - t_0}{t_E}\right)^2}$$
+
+and the resulting **magnification** is Paczyński's (1986) closed form
+
+$$A(u) = \frac{u^2 + 2}{u \, \sqrt{u^2 + 4}}$$
+
+Note that $A(u) \to 1$ as $u \to \infty$ (no lensing far from the peak)
+and $A \to \infty$ as $u \to 0$ (caustic-approach divergence — real
+events are moderated by finite-source effects the classifier ignores by
+construction, keeping only the point-source point-lens fit).
+
+With blending — a common necessity because the source and any
+unresolved neighbours share the TESS aperture — the observed
+normalised flux is
+
+$$F_{\mathrm{obs}}(t) = f_s \cdot A(t) + f_b$$
+
+with $f_s + f_b \approx 1$ under the pre-fit baseline normalisation
+(§15.3). Both are left as free parameters so the fit can absorb residual
+baseline offset; expect $f_s + f_b \approx 1$ when the fit is good.
+
+**Five free parameters**: $t_0, t_E, u_0, f_s, f_b$. Initial guesses are
+$t_0 = t_{0,\mathrm{guess}}$, $t_E = \frac{1}{4}(t_\mathrm{end} -
+t_\mathrm{start})$, $u_0 = 0.3$, $f_s = 0.8$, $f_b = 0.2$; bounds keep
+$t_E, u_0 > 0$ and $f_s, f_b \ge 0$. The fit uses
+`scipy.optimize.least_squares` with residuals
+$r_i = (f_i - F_\mathrm{obs}(t_i)) / \sigma_i$; parameter errors are
+extracted from the Jacobian as `pcov = (JᵀJ)⁻¹ · σ²_resid` (the
+`curve_fit` recipe) — linearised 1σ, expect them to be optimistic near
+degenerate corners of the (`u_0`, `tE`, `f_s`) subspace.
+
+> **On MulensModel.** The implementation uses the closed form above rather
+> than `MulensModel.Model` because both return identical output for the
+> point-source point-lens case — verified in
+> `backend/tests/test_microlensing.py::test_pspl_matches_mulensmodel_reference`,
+> which pins the closed form against `mm.Model.get_magnification` to
+> $< 10^{-12}$ absolute agreement across three parameter regimes. The
+> parity test uses `pytest.importorskip` so environments without
+> MulensModel installed still get a clean test run. `MulensModel` remains
+> in `requirements.txt` so future work (parallax, finite-source, binary
+> lens) can drop in without a re-install; the runtime path stays
+> single-file, dep-light, and CI-portable.
+
+### 15.2 Davenport-2014 empirical flare template
+
+Stellar flares are the dominant astrophysical impostor for a
+short-duration PSPL peak on TESS cadence data. The classifier fits the
+Davenport et al. (2014, ApJ 797 122) empirical template — derived from
+Kepler short-cadence flare stacks — parameterised by peak time
+$t_\mathrm{peak}$, amplitude $A_f$, and full-width-at-half-maximum
+$\Delta t_{1/2}$ (FWHM).
+
+Normalised time: $\tilde{t} = (t - t_\mathrm{peak}) / \Delta t_{1/2}$.
+
+**Rise** ($-1 \le \tilde{t} \le 0$) — quartic polynomial:
+
+$$T_\mathrm{rise}(\tilde{t}) = 1 + 1.941\,\tilde{t}
+                                - 0.175\,\tilde{t}^2
+                                - 2.246\,\tilde{t}^3
+                                - 1.125\,\tilde{t}^4$$
+
+**Decay** ($\tilde{t} > 0$) — double exponential:
+
+$$T_\mathrm{decay}(\tilde{t}) = 0.6890 \, e^{-1.600\,\tilde{t}}
+                                + 0.3030 \, e^{-0.2783\,\tilde{t}}$$
+
+**Full flux**: $F(t) = 1 + A_f \cdot T(\tilde{t})$, with $T$ set to zero
+outside $\tilde{t} \in [-1, \infty)$.
+
+**Three free parameters**: $t_\mathrm{peak}, A_f, \Delta t_{1/2}$.
+Amplitude guess is clipped to the fit bounds so the initial point stays
+strictly interior — otherwise `least_squares` raises before iterating.
+
+The template is **asymmetric by construction** — the sharp rise plus
+slow double-exponential decay is the key structural signal separating
+flares from the symmetric PSPL magnification profile (see §15.5).
+
+### 15.3 Null model and window baseline normalisation
+
+The null (no-signal) model is a constant baseline with a single free
+parameter — the weighted mean of the windowed flux,
+
+$$F_\mathrm{null} = \frac{\sum_i f_i / \sigma_i^2}{\sum_i 1 / \sigma_i^2}$$
+
+with $\sigma_{F} = 1/\sqrt{\sum_i 1/\sigma_i^2}$. Closed form; no
+optimiser required.
+
+Before fitting, the windowed flux is normalised to a baseline of unity by
+dividing by the **weighted mean of the lower quartile** of window fluxes
+(so the peak dominates but does not bias the reference level). Errors
+are scaled identically. Under this normalisation the null baseline
+should sit near $1.0$; the pre-normalisation baseline is returned in the
+response as `window.baseline_flux` so overlays can be de-normalised back
+to physical units.
+
+**Note on narrow windows.** If the user selects a window that is
+mostly peak (e.g. only a few tE wide), the 25th-percentile baseline is
+biased high and the PSPL fit will absorb the offset via $f_s < 1$. The
+recovered $t_0, t_E, u_0$ remain accurate in practice because blending
+is a degeneracy the fit is designed to handle.
+
+### 15.4 BIC-based model selection and verdict rules
+
+For each fit, given $\chi^2$ (sum of squared normalised residuals),
+number of parameters $k$, and number of in-window data points $N$:
+
+$$\chi^2_\nu = \chi^2 / (N - k)$$
+$$\mathrm{BIC} = \chi^2 + k \ln N$$
+
+BIC penalises added complexity (Schwarz 1978) — a lower BIC is a better
+posterior-odds bet for the model given the data. Define
+
+$$\Delta_{\mathrm{null-PSPL}} = \mathrm{BIC}_\mathrm{null} - \mathrm{BIC}_\mathrm{PSPL}$$
+$$\Delta_{\mathrm{flare-PSPL}} = \mathrm{BIC}_\mathrm{flare} - \mathrm{BIC}_\mathrm{PSPL}$$
+
+**Verdict rules** (per the spec):
+
+- If $\mathrm{BIC}_\mathrm{PSPL}$ is lowest AND $\Delta_{\mathrm{null-PSPL}}
+  > 10$ AND $|\Delta_{\mathrm{flare-PSPL}}| \ge 6$ → **microlensing**
+  (PSPL strongly preferred over both the flat baseline and the flare
+  template).
+- If $|\Delta_{\mathrm{flare-PSPL}}| < 6$ → **ambiguous** (PSPL and flare
+  BICs are close enough that the classifier declines to pick a winner).
+- If $\mathrm{BIC}_\mathrm{flare}$ is lowest AND
+  $\Delta_{\mathrm{flare-PSPL}}$ is negative (flare better) → **flare**.
+- Otherwise (null lowest) → **null**.
+
+**Confidence** is a smooth map of the winning model's margin over the
+runner-up:
+
+$$C = 1 - \exp\!\left( -\frac{\max(0,\, \Delta_\mathrm{margin})}{10} \right)$$
+
+so $C \to 1$ for margins $\gg 10$ and stays low for close calls.
+
+The response returns both raw BICs and $\Delta\mathrm{BIC}$ pairs so the
+frontend can render the ranking without recomputing.
+
+### 15.5 Residual symmetry statistic
+
+A supplementary diagnostic: after the PSPL fit, fold the residuals
+$r_i = f_i - F_\mathrm{PSPL}(t_i)$ about the fitted $t_0$. For each
+distance $\Delta t > 0$, interpolate the residual at $t = t_0 - \Delta t$
+(left wing) and $t = t_0 + \Delta t$ (mirrored right wing) on a common
+30-point grid spanning the shared range. Report Pearson's correlation
+coefficient between the two:
+
+- $+1$ = perfectly symmetric wings (PSPL-like).
+- $\sim 0$ = uncorrelated (typically a good fit — residuals are
+  noise-dominated).
+- $< 0$ = anti-symmetric (unusual — often indicates fit degeneracy
+  rather than physics).
+
+The score is a *diagnostic*, not a verdict driver; it complements the
+BIC ranking rather than replacing it. A poor PSPL fit through a
+strongly asymmetric flare event should leave residuals whose left/right
+correlation is markedly different from a well-fit PSPL through PSPL
+data — but the discriminating power is not high enough to invert an
+already-close BIC decision. Returned as `symmetry_score` in the
+response.
+
+**Achromaticity** — the classical *bona fide* microlensing test (event
+looks the same in every band because gravitational lensing is
+wavelength-independent) — is *not testable from single-band TESS
+photometry*. This limitation is surfaced in the response `notes`
+array; the request schema leaves a hook for an optional second-band
+array to be added later.
+
+---
+
+## 16. Microlensing pipeline — Module B: TESS sector-overlap targeting
+
+Given a catalog of known / candidate microlensing events (from Gaia
+alerts, OGLE, MOA, KMTNet — all publish RA/Dec/`t0`), Module B
+determines which events are actually observable in TESS data, so Module A
+can be run against a real target list rather than blind. Backend:
+`backend/app/microlensing_coverage.py`.
+
+### 16.1 tess-point coordinate resolution
+
+For each event, coordinates are resolved to a list of
+$(\mathrm{sector}, \mathrm{camera}, \mathrm{CCD})$ triples via the
+`tess-point` package (Burke et al. 2020, RNAAS 4 176). `tess-point`
+implements the TESS field-of-view model — camera boresight pointings +
+CCD tessellation per sector — and returns every historical (and
+scheduled) sector that saw the coordinate. If `tess-point` is
+unavailable the event is flagged `no_tess_point: true` in the response
+and coverage is treated as null; the endpoint still returns a
+well-formed payload.
+
+### 16.2 Static TESS sector-date table
+
+Sector observation windows are sourced from **tess-point's bundled
+`TESS_Spacecraft_Pointing_Data.midtimes` table** in
+`backend/app/tess_sector_dates.py`. tess-point ships the per-sector
+BJD midtimes for the full mission (currently sectors 1–121) — those
+midtimes are the authoritative TESS calendar the tess-point
+maintainers keep updated. From each midtime we form a window
+$[T_\mathrm{mid} - 13.7\,\mathrm{d},\; T_\mathrm{mid} + 13.7\,\mathrm{d}]$,
+matching the two-orbit sector length (two $\sim 13.7$-day orbits
+with a $\sim 1$-day perigee downlink gap). These windows are
+flagged `nominal: false` in the response.
+
+If tess-point is unavailable the module falls back to an anchor-based
+approximation (Sector 1 = BTJD $1325.29$ + $N \cdot 27.4$-day
+cadence). Fallback windows are flagged `nominal: true`. The response
+`notes` array reports which source powered the loaded calendar via
+`tess_sector_dates.calendar_source()`.
+
+Per-orbit precision (per-sector `t_min`/`t_max` from the actual SPOC
+or QLP FITS products) is not encoded here; the $\pm 13.7$-day window
+is the intended granularity for observability decisions and is
+accurate to well under a day at each sector edge.
+
+### 16.3 Observability logic (wings margin)
+
+For each returned sector window $[T_\mathrm{start}, T_\mathrm{end}]$ and
+each event with peak time $t_0$ and Einstein-crossing timescale $t_E$:
+
+$$\text{t0\_in\_window} = (T_\mathrm{start} \le t_0 \le T_\mathrm{end})$$
+
+For the stronger "wings in-window" test with margin $m$ (default $m = 1$,
+tunable via the endpoint's `margin_te` query parameter):
+
+$$\text{wings\_in\_window} = \bigl( (t_0 - m \cdot t_E) \ge T_\mathrm{start}\bigr)
+                             \; \land \;
+                             \bigl( (t_0 + m \cdot t_E) \le T_\mathrm{end}\bigr)$$
+
+An event is marked **observable** if *any* returned sector satisfies
+`t0_in_window` (the peak alone is inside a covered window); the
+stronger `observable_with_wings` flag additionally requires the fit
+window's wings to fit for shape characterisation.
+
+### 16.4 Bulge / ecliptic blind-zone flag
+
+The Galactic bulge — where microlensing event rates peak — lies near
+ecliptic latitude $\beta \approx -5.5°$, right in TESS's *thinnest*
+coverage zone (the four TESS cameras tile out to $\sim 96°$ from the
+ecliptic pole but leave a thin equatorial strip near $|\beta| \lesssim 6°$
+under-covered). To flag this per-event, Module B computes ecliptic
+latitude from J2000 $(\alpha, \delta)$ via
+
+$$\sin \beta = \sin \delta \cos \varepsilon
+                - \cos \delta \sin \varepsilon \sin \alpha$$
+
+with mean obliquity $\varepsilon = 23.4392911°$ (no precession
+correction — accuracy is well inside the $\pm 6°$ threshold this drives).
+Any event with $|\beta| < 6°$ is flagged `in_bulge_blind_zone: true` and
+surfaced in the UI (amber-highlighted ecliptic latitude column, a
+summary counter, and a mandatory banner explaining that classic bulge
+events are expected to come back not observable — this is not a bug).
+
+Realistic yield: events happening at mid/high ecliptic latitudes, or
+bulge-adjacent fields in the specific sectors that dipped lowest.
 
 ---
 

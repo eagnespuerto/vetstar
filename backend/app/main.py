@@ -25,6 +25,12 @@ from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
 from pydantic import BaseModel, Field, field_validator
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
+from .microlensing import analyze_event as microlensing_analyze_event
+from .microlensing_coverage import (
+    evaluate_catalog as microlensing_evaluate_catalog,
+    parse_events_csv,
+    resolve_ra_dec_to_tic,
+)
 from .parsers import parse_upload
 from .pipeline import (
     run_full_vetting,
@@ -1914,6 +1920,189 @@ def api_manual_dip(req: ManualDipRequest):
         out["centroid"] = {"available": False}
 
     return out
+
+
+# -------------------------------------------------
+# Microlensing (Module A) — model-comparison classifier
+# -------------------------------------------------
+
+class MicrolensingWindow(BaseModel):
+    t_start: float
+    t_end: float
+
+
+class MicrolensingFitRequest(BaseModel):
+    time: list[float]
+    flux: list[float]
+    flux_err: list[float]
+    window: MicrolensingWindow
+    t0_guess: float
+
+
+class MicrolensingLightcurveByCoordsRequest(BaseModel):
+    ra: float
+    dec: float
+    sector: Optional[int] = None
+    radius_arcsec: float = 30.0
+
+
+@app.post("/api/microlensing/lightcurve_by_coords")
+def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsRequest):
+    """Resolve (RA, Dec) → nearest TIC via MAST, then fetch and return the
+    raw TESS light curve arrays. Powers the Module B → Module A autoload
+    handoff so the classifier doesn't need a manual FITS upload.
+    """
+    try:
+        resolved = resolve_ra_dec_to_tic(req.ra, req.dec, radius_arcsec=req.radius_arcsec)
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:  # pragma: no cover — network / import failures
+        raise _handle_exception("TIC coord resolution", e)
+
+    tic_id = resolved["tic_id"]
+
+    # Sector selection: use the requested sector if provided; otherwise walk
+    # available sectors newest-first (preferring ones with a real LC provider
+    # — SPOC, TESS-SPOC, or QLP — since DVT-only sectors have no flux column
+    # and will fail parse_lightcurve_fits).
+    _LC_PROVIDERS = {"SPOC", "TESS-SPOC", "QLP"}
+    if req.sector is not None:
+        sectors_to_try = [int(req.sector)]
+    else:
+        try:
+            available = list_available_sectors(tic_id)
+        except Exception as e:  # pragma: no cover
+            raise _handle_exception("sector list", e)
+        if not available:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TIC {tic_id} has no TESS observations archived at MAST.",
+            )
+        with_lc = [int(s["sector"]) for s in available
+                   if any(p in _LC_PROVIDERS for p in s.get("providers", []))]
+        if not with_lc:
+            raise HTTPException(
+                status_code=404,
+                detail=(f"TIC {tic_id} has TESS observations but no SPOC / "
+                        f"TESS-SPOC / QLP light-curve product — only DV or "
+                        f"other non-LC files. Try uploading manually."),
+            )
+        sectors_to_try = sorted(with_lc, reverse=True)[:4]  # newest first, cap at 4
+
+    fetched = None
+    parsed = None
+    last_err = None
+    sector = None
+    for candidate in sectors_to_try:
+        try:
+            f_try = fetch_spoc_lightcurve(tic_id, candidate)
+            parsed = parse_upload(f_try["path"], f_try["filename"])
+            fetched = f_try
+            sector = candidate
+            break
+        except Exception as e:
+            last_err = e
+            continue
+    if fetched is None or parsed is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not fetch a usable LC for TIC {tic_id} (tried sectors {sectors_to_try}): {last_err}",
+        )
+
+    # Cache the LC so downstream endpoints (manual_dip etc.) can reuse without
+    # re-downloading — mirrors what _cache_lc does for the transit pipeline.
+    try:
+        _cache_lc(parsed)
+    except Exception:
+        pass  # cache failure is non-fatal here
+
+    t = np.asarray(parsed["t"], dtype=float)
+    f = np.asarray(parsed["flux"], dtype=float)
+    fe = np.asarray(parsed.get("flux_err"), dtype=float) if parsed.get("flux_err") is not None else None
+
+    # Filter to finite, positive-flux samples so the microlensing fitter has
+    # clean input — same finite/quality mask other endpoints apply.
+    mask = np.isfinite(t) & np.isfinite(f) & (f > 0)
+    if fe is not None:
+        mask = mask & np.isfinite(fe) & (fe > 0)
+    quality = parsed.get("quality")
+    if quality is not None:
+        try:
+            mask = mask & (np.asarray(quality) == 0)
+        except Exception:
+            pass
+
+    t_clean = t[mask].tolist()
+    f_clean = f[mask].tolist()
+    fe_clean = (fe[mask].tolist()
+                if fe is not None
+                else [float(np.median(f[mask]) * 1e-4)] * int(mask.sum()))
+
+    if len(t_clean) < 32:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Only {len(t_clean)} usable cadences left after quality filter for TIC {tic_id} S{sector}.",
+        )
+
+    return {
+        "time": t_clean,
+        "flux": f_clean,
+        "flux_err": fe_clean,
+        "tic_id": tic_id,
+        "sector": sector,
+        "resolved_ra": resolved["resolved_ra"],
+        "resolved_dec": resolved["resolved_dec"],
+        "separation_arcsec": resolved["separation_arcsec"],
+        "tmag": resolved["tmag"],
+        "provider": fetched.get("author"),
+        "filename": fetched.get("filename"),
+        "n_cadences": len(t_clean),
+    }
+
+
+@app.post("/api/microlensing/coverage")
+async def api_microlensing_coverage(
+    file: UploadFile = File(...),
+    margin_te: float = 1.0,
+):
+    """Take a CSV of microlensing events and return TESS sector coverage per row.
+
+    CSV columns: event_id, ra, dec, t0 (BTJD), tE (days, optional — defaults to 20).
+    """
+    try:
+        contents = await file.read()
+        text = contents.decode("utf-8", errors="replace")
+        events = parse_events_csv(text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("microlensing coverage upload", e)
+    return microlensing_evaluate_catalog(events, margin_te=margin_te)
+
+
+@app.post("/api/microlensing/fit")
+def api_microlensing_fit(req: MicrolensingFitRequest):
+    """Fit PSPL + Davenport-2014 flare + null on a user-flagged window and
+    return the verdict, ΔBIC diagnostics, and per-model fits.
+    """
+    if req.window.t_end <= req.window.t_start:
+        raise HTTPException(status_code=400, detail="window.t_end must be greater than window.t_start.")
+    if not (len(req.time) == len(req.flux) == len(req.flux_err)):
+        raise HTTPException(status_code=400, detail="time, flux, flux_err must all have the same length.")
+    try:
+        result = microlensing_analyze_event(
+            time=np.asarray(req.time, dtype=float),
+            flux=np.asarray(req.flux, dtype=float),
+            flux_err=np.asarray(req.flux_err, dtype=float),
+            t_start=req.window.t_start,
+            t_end=req.window.t_end,
+            t0_guess=req.t0_guess,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # pragma: no cover — surfaced as 500 with trace
+        raise _handle_exception("microlensing fit", e)
+    return result
 
 
 # -------------------------------------------------

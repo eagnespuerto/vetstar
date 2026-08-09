@@ -231,7 +231,7 @@ export default function App() {
       <header className="bg-slate-900 text-white py-4 px-6 shadow">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold">Vetstar Alpha v0.2.0</h1>
+            <h1 className="text-xl font-bold">Vetstar v1.0.0</h1>
             <p className="text-sm text-slate-300">
               Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector
             </p>

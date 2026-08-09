@@ -472,3 +472,152 @@ export async function fetchRadialVelocity(query: RVQuery) {
   if (!r.ok) throw new Error(`RV fetch failed (${r.status}): ${await r.text()}`);
   return r.json();
 }
+
+// ----------------------------------------------------------------------------
+// Microlensing (Module A)
+// ----------------------------------------------------------------------------
+
+export interface MicrolensingFitRequest {
+  time: number[];
+  flux: number[];
+  flux_err: number[];
+  window: { t_start: number; t_end: number };
+  t0_guess: number;
+}
+
+export interface MicrolensingModelFit {
+  params: Record<string, number>;
+  param_err: Record<string, number | null>;
+  chi2: number | null;
+  chi2_red: number | null;
+  bic: number | null;
+  n_params: number;
+  n_points: number;
+  success: boolean;
+  model_flux: number[] | null;
+}
+
+export interface MicrolensingFitResponse {
+  verdict: "microlensing" | "flare" | "null" | "ambiguous";
+  confidence: number;
+  window: { t_start: number; t_end: number; baseline_flux: number; n_points: number };
+  time_windowed: number[];
+  flux_normalized: number[];
+  flux_err_normalized: number[];
+  models: {
+    pspl: MicrolensingModelFit;
+    flare: MicrolensingModelFit;
+    null: MicrolensingModelFit;
+  };
+  delta_bic: {
+    null_minus_pspl: number | null;
+    flare_minus_pspl: number | null;
+    null_minus_flare: number | null;
+  };
+  symmetry_score: number | null;
+  notes: string[];
+}
+
+export async function fitMicrolensing(
+  req: MicrolensingFitRequest
+): Promise<MicrolensingFitResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/fit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(`Microlensing fit failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+// ----------------------------------------------------------------------------
+// Microlensing (Module B) — TESS sector coverage of a catalog
+// ----------------------------------------------------------------------------
+
+export interface CoverageSector {
+  sector: number;
+  camera: number;
+  ccd: number;
+  window: { start_btjd: number; end_btjd: number; nominal: boolean } | null;
+  t0_in_window: boolean;
+  wings_in_window: boolean;
+}
+
+export interface CoverageEvent {
+  event_id: string;
+  ra: number;
+  dec: number;
+  t0: number;
+  tE: number;
+  ecliptic_latitude_deg: number;
+  in_bulge_blind_zone: boolean;
+  sectors: CoverageSector[];
+  observable: boolean;
+  observable_with_wings: boolean;
+  no_tess_point: boolean;
+}
+
+export interface CoverageResponse {
+  events: CoverageEvent[];
+  summary: {
+    n_total: number;
+    n_observable: number;
+    n_observable_with_wings: number;
+    n_in_bulge_blind_zone: number;
+    n_no_tess_point: number;
+    margin_te_used: number;
+  };
+  notes: string[];
+}
+
+export async function uploadCoverageCsv(
+  file: File,
+  marginTe = 1.0
+): Promise<CoverageResponse> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch(`${API_BASE}/api/microlensing/coverage?margin_te=${marginTe}`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!r.ok) throw new Error(`Coverage upload failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+// ----------------------------------------------------------------------------
+// RA/Dec → TIC → TESS light-curve autoload (Module B → Module A handoff)
+// ----------------------------------------------------------------------------
+
+export interface LcByCoordsRequest {
+  ra: number;
+  dec: number;
+  sector?: number | null;
+  radius_arcsec?: number;
+}
+
+export interface LcByCoordsResponse {
+  time: number[];
+  flux: number[];
+  flux_err: number[];
+  tic_id: number;
+  sector: number;
+  resolved_ra: number;
+  resolved_dec: number;
+  separation_arcsec: number;
+  tmag: number | null;
+  provider: string | null;
+  filename: string | null;
+  n_cadences: number;
+}
+
+export async function fetchLightcurveByCoords(
+  req: LcByCoordsRequest
+): Promise<LcByCoordsResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/lightcurve_by_coords`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(`Coord LC fetch failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
