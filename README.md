@@ -1,12 +1,21 @@
-# Vetstar Alpha v0.2.0
+# Vetstar v1.0.0
 
 *(TESS Vetting Studio)*
 
-A web app for full transit / eclipse vetting of TESS light curves (legacy
-Kepler files are also accepted), with a STEHM-based habitability scoring
-engine and multi-sector analysis. Upload a SPOC FITS file (or pull one from
-MAST by TIC + sector) and receive a complete vetting report with PDF export
-— no install required.
+A web app for TESS light-curve vetting, now split into two independent
+pipelines behind a top-level header tab switch:
+
+- **Transit** — the original full transit / eclipse vetting pipeline (legacy
+  Kepler files also accepted), with a STEHM-based habitability scoring
+  engine and multi-sector analysis. Upload a SPOC FITS file (or pull one
+  from MAST by TIC + sector) and receive a complete vetting report with
+  PDF export.
+- **Microlensing** *(new in v1.0.0)* — a PSPL / flare / null model-comparison
+  classifier for user-flagged positive excursions, plus a TESS
+  sector-coverage finder that tells you which catalogued microlensing
+  events actually fall inside TESS sectors.
+
+No install required.
 
 **Live at <https://vetstar.onrender.com>**
 
@@ -24,6 +33,11 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 
 
 ## What it does
+
+The app is divided into two top-level pipelines, chosen via the **Transit /
+Microlensing** tabs in the header. Each has its own analysis workflow; the
+Transit pipeline is the original Vetstar tooling, and the Microlensing
+pipeline is new in v1.0.0.
 
 ### Transit / eclipse vetting pipeline
 
@@ -105,6 +119,91 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
   representative sector's single-sector report (the sector with the highest
   BLS SDE), with the HCI section rebuilt against the real multi-sector
   detection counts.
+
+### Microlensing pipeline *(new in v1.0.0)*
+
+A second top-level pipeline sitting alongside Transit, for
+detecting/characterising **single-lens microlensing events** in TESS
+photometry. Positioned as a recovery / characterisation tool — best
+demonstrated by feeding it known events from ground surveys or Gaia
+alerts that happen to fall in TESS sectors — not blind discovery.
+
+Two independent sub-tools, both under the **Microlensing** header tab:
+
+**Module A — Model-comparison classifier.** Drag a window across a positive
+excursion in an uploaded light curve (JSON or CSV, or a built-in PSPL/flare
+synthetic demo). The backend fits three competing models on the windowed,
+baseline-normalised flux:
+
+- **PSPL (Paczyński single-lens)** — closed-form point-source point-lens
+  magnification `A(u) = (u²+2) / (u·√(u²+4))` with blending
+  `F = f_s·A(t) + f_b`. 5 free params: `t0, tE, u0, f_s, f_b`.
+- **Flare (Davenport 2014 empirical template)** — the key astrophysical
+  impostor. Polynomial rise, double-exponential decay. 3 free params:
+  `t_peak, amplitude, fwhm`.
+- **Null** — flat baseline (1 free param, closed-form weighted mean).
+
+Model selection uses **BIC** (Bayesian Information Criterion). The verdict
+follows the spec's decision rules — PSPL wins strongly if
+`ΔBIC(null − PSPL) > 10` and `|ΔBIC(flare − PSPL)| > 6`; anything closer
+returns `ambiguous`. Frontend renders a verdict badge with confidence, a
+BIC bar chart (with per-model overlay toggles on the light curve), the
+fitted PSPL parameters with linearised 1σ errors, a **symmetry score**
+(correlation of the PSPL residual's left wing with the mirrored right
+wing — PSPL residuals should look uncorrelated, flare residuals
+asymmetric), and a **residuals sub-plot** with per-model switcher.
+Achromaticity is flagged as *untestable from single-band TESS data* in
+the notes; the response leaves a hook for an optional second-band array
+to be added later.
+
+**Module B — TESS sector-overlap targeting.** Upload a CSV of known /
+candidate events with columns `event_id, ra, dec, t0, tE` (Gaia alerts,
+OGLE / MOA / KMTNet event lists — all publish these). For each event the
+backend queries `tess-point` for `(sector, camera, ccd)` triples covering
+the coordinates, then checks whether `t0` (and optionally `t0 ± margin·tE`
+for wings) falls inside each returned sector's observation window. A
+hardcoded sector-date table lives in
+`backend/app/tess_sector_dates.py`; rows for sectors 1–26 use
+calendar-anchored values, later sectors use a nominal ~27.4-day cadence
+approximation flagged as `nominal: true` in the payload (drop in the
+official mission calendar for research-grade decisions).
+
+The classifier's results panel also exposes two share/export controls:
+a **Share plot** button that rasterises the SVG light-curve + fit overlay
+to a PNG in-browser and uploads it to ImgBB (reusing the transit
+pipeline's `ShareToImgbbButton`), returning URL / BBCode / Markdown copy
+chips; and a **Download ExoFOP package** button that assembles a
+store-only ZIP with a headline `summary.csv` (one row per fit — verdict,
+confidence, PSPL params + errors, all three BICs, ΔBIC, symmetry score),
+`lightcurve_windowed.csv` (the data fed to the fit plus each model's
+curve on the same grid), a human-readable `notes.md` suitable for
+pasting into ExoFOP follow-up notes, a `fit_full.json` snapshot of the
+raw response for reproducibility, and the plot PNG. The package is
+named from the handoff metadata (event id, TIC, sector) when available.
+
+The results table is sortable, filterable ("observable only"), and each
+observable row has an **Analyze →** button that hands the event off to
+Module A. In the classifier the prefill banner offers a **Fetch TESS
+light curve** button that resolves the event's RA/Dec to the nearest TIC
+via MAST, walks available sectors newest-first (preferring SPOC / TESS-SPOC
+/ QLP over DVT-only sectors), and loads the raw arrays directly into the
+classifier — no manual FITS upload needed. Selection window auto-sets
+around `t0 ± 2·tE` on arrival; a MAST portal link is offered as fallback.
+
+**A critical caveat is surfaced in the UI**: the Galactic bulge — where
+microlensing rates peak — sits at ecliptic latitude ≈ −5.5°, right in
+TESS's *thinnest* coverage zone (cameras start ~6° off the ecliptic).
+Most classic bulge events will come back **not observable**. This is
+expected, not a bug — realistic yield is events at mid/high ecliptic
+latitudes or bulge-adjacent fields.
+
+Endpoints: `POST /api/microlensing/fit` (JSON body) and
+`POST /api/microlensing/coverage` (multipart CSV upload,
+`?margin_te=<float>` query knob for the wing margin).
+Tests: `backend/tests/test_microlensing.py` and
+`test_microlensing_coverage.py` — 22 tests exercising synthetic PSPL /
+flare / null recovery, symmetry, CSV parsing, sector lookup, and the
+bulge-zone flag.
 
 ### Habitability Chance Index (HCI)
 
@@ -744,6 +843,9 @@ POST /api/mast/multisector/report  {tic_id, ?sectors (≤3), detect_threshold, d
 POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
 POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
 POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
+POST /api/microlensing/fit                    {time[], flux[], flux_err[], window:{t_start,t_end}, t0_guess} → PSPL + flare + null fits, ΔBIC verdict, symmetry, notes
+POST /api/microlensing/coverage               multipart CSV (event_id,ra,dec,t0,tE) + ?margin_te=<float>  → per-event TESS sector coverage table + bulge-blind-zone flag
+POST /api/microlensing/lightcurve_by_coords   {ra, dec, sector?, radius_arcsec?}  → resolves RA/Dec → nearest TIC via MAST, walks available sectors newest-first, returns {time, flux, flux_err, tic_id, sector, resolved_ra, resolved_dec, separation_arcsec, provider, n_cadences} — powers the Module B → Module A autoload handoff
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
 ```
@@ -772,15 +874,22 @@ vetstar/
 │   │   ├── tic_catalog.py      TIC v8 catalog helper
 │   │   ├── gaia_catalog.py     Gaia DR3 stellar-parameter backfill (Vizier cone search)
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
+│   │   ├── microlensing.py             (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
+│   │   ├── microlensing_coverage.py    (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
+│   │   ├── tess_sector_dates.py        Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
 │   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx             Tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
+│   │   ├── App.tsx             Top-level Transit/Microlensing tab split, tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
+│   │   ├── MicrolensingPanel.tsx        Microlensing pipeline container (Classifier / Coverage sub-tabs + handoff)
+│   │   ├── MicrolensingClassifier.tsx   Module A UI — data loader, drag-select, 3-model overlay, verdict/BIC/residuals panels
+│   │   ├── MicrolensingCoverage.tsx     Module B UI — CSV upload, sortable/observable-only table, sector pills, Analyze handoff
+│   │   ├── microlensingExport.ts        SVG→PNG rasteriser + ExoFOP-package ZIP builder (summary CSV, LC CSV, JSON, notes.md, plot.png)
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
 │   │   ├── ExofopBulkPanel.tsx Reusable ExoFOP-TESS bulk-upload ZIP builder (single + multi-sector)
 │   │   ├── FfiCutoutPanel.tsx   TESScut FFI cutout panel (auto-loads under results)
-│   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool
+│   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool (Transit tab)
 │   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
 │   │   ├── imgbb.ts            ImgBB upload client
 │   │   ├── glossary.ts         Term tooltips

@@ -22,9 +22,11 @@ import FfiCutoutPanel from "./FfiCutoutPanel";
 import ManualDipSelector from "./ManualDipSelector";
 import { ShareToImgbbButton, ShareIcon } from "./ShareButton";
 import ExofopBulkPanel, { type ExofopImage } from "./ExofopBulkPanel";
+import MicrolensingPanel from "./MicrolensingPanel";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
 type Mode = "upload" | "mast";
+type Section = "transit" | "microlensing";
 
 // Funny-but-relevant loading messages cycled while the user waits.
 const VETTING_LOADING_MSGS = [
@@ -114,6 +116,7 @@ const REPO_URL = "https://github.com/eagnespuerto/vetstar";
 const KOFI_URL = "https://ko-fi.com/eagnespuerto";
 
 export default function App() {
+  const [section, setSection] = useState<Section>("transit");
   const [mode, setMode] = useState<Mode>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<Status>("idle");
@@ -288,12 +291,27 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white py-4 px-6 shadow">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold">Vetstar Alpha v0.2.0</h1>
-            <p className="text-sm text-slate-300">
-              Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector
-            </p>
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-6 flex-wrap">
+            <div>
+              <h1 className="text-xl font-bold">Vetstar v1.0.0</h1>
+              <p className="text-sm text-slate-300">
+                {section === "transit"
+                  ? "Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector"
+                  : "Fit PSPL / flare / null to a positive excursion, or check TESS coverage of known events"}
+              </p>
+            </div>
+            <nav
+              className="flex items-center gap-1 bg-slate-800 rounded-lg p-1 border border-slate-700"
+              aria-label="Vetstar section"
+            >
+              <SectionTabButton active={section === "transit"} onClick={() => setSection("transit")}>
+                Transit
+              </SectionTabButton>
+              <SectionTabButton active={section === "microlensing"} onClick={() => setSection("microlensing")}>
+                Microlensing
+              </SectionTabButton>
+            </nav>
           </div>
           <div className="shrink-0 flex items-center gap-2">
             <a
@@ -336,6 +354,8 @@ export default function App() {
         </div>
       </header>
 
+      {section === "transit" && (
+        <>
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         {/* Mode tabs */}
         <div className="flex gap-2 border-b">
@@ -712,11 +732,15 @@ export default function App() {
 
       {result && <FfiCutoutPanel result={result} />}
       {result && <ExoMinerPanel result={result} />}
+        </>
+      )}
+
+      {section === "microlensing" && <MicrolensingPanel />}
 
       <footer className="text-center text-xs text-slate-400 py-6">
-        Pipeline: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy
-        median filtering, centroid + odd/even + secondary tests, physics-based
-        companion sizing.
+        {section === "transit"
+          ? <>Pipeline: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy median filtering, centroid + odd/even + secondary tests, physics-based companion sizing.</>
+          : <>Microlensing pipeline: PSPL vs flare vs null model comparison via MulensModel + scipy; TESS sector coverage via tess-point.</>}
       </footer>
     </div>
   );
@@ -1016,6 +1040,30 @@ function TabButton({
         active
           ? "border-blue-600 text-blue-700"
           : "border-transparent text-slate-500 hover:text-slate-800"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SectionTabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
+        active
+          ? "bg-blue-600 text-white shadow"
+          : "text-slate-300 hover:text-white hover:bg-slate-700"
       }`}
     >
       {children}
