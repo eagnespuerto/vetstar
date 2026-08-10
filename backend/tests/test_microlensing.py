@@ -147,6 +147,60 @@ def test_analyze_rejects_tiny_window():
 # closed-form and doesn't need it).
 # ---------------------------------------------------------------------------
 
+def test_compute_observables_matches_paczynski_at_u0_small():
+    """For u0 = 0.1, Paczynski's peak magnification is ~10.03; check ours
+    matches, and check derived scalars are internally consistent."""
+    from app.microlensing import compute_observables
+    obs = compute_observables(
+        {"t0": 1220.0, "tE": 5.0, "u0": 0.1, "f_s": 1.0, "f_b": 0.0},
+        {"t0": 0.001, "tE": 0.02, "u0": 0.001, "f_s": 0.01, "f_b": 0.01},
+    )
+    # A_peak at u0=0.1: (0.01+2) / (0.1 * sqrt(0.01+4)) = 2.01 / (0.1 * 2.00249) ≈ 10.037
+    assert obs["peak_magnification"] == pytest.approx(10.037, abs=0.01)
+    # No blend → observed peak = intrinsic peak
+    assert obs["peak_magnification_observed"] == pytest.approx(obs["peak_magnification"], rel=1e-6)
+    # Δm = -2.5·log10(A) ≈ -2.5·log10(10.037) ≈ -2.504
+    assert obs["peak_brightening_mag"] == pytest.approx(-2.504, abs=0.01)
+    # Source fraction = 1 (no blend)
+    assert obs["source_flux_fraction"] == pytest.approx(1.0, abs=1e-9)
+    # Einstein-crossing duration = 2*tE*sqrt(1 - u0²) = 2*5*sqrt(0.99) ≈ 9.9499
+    assert obs["einstein_crossing_duration_d"] == pytest.approx(9.9499, abs=0.01)
+    # BJD offset applied
+    assert obs["t0_bjd"] == pytest.approx(1220.0 + 2457000.0, abs=1e-6)
+    # FWHM should be finite and positive
+    assert obs["magnification_fwhm_d"] > 0.0
+
+
+def test_compute_observables_handles_wide_impact_parameter():
+    """u0 > 1 means the source never enters the Einstein ring — crossing
+    duration should be zero, but A_peak is still finite (just small)."""
+    from app.microlensing import compute_observables
+    obs = compute_observables(
+        {"t0": 1500.0, "tE": 20.0, "u0": 1.5, "f_s": 0.7, "f_b": 0.3},
+        {"t0": 0.1, "tE": 0.5, "u0": 0.01, "f_s": 0.05, "f_b": 0.05},
+    )
+    assert obs["einstein_crossing_duration_d"] == 0.0
+    assert obs["peak_magnification"] > 1.0
+    # Blend fraction should be 0.3 / 1.0 = 0.3 (source frac = 0.7)
+    assert obs["source_flux_fraction"] == pytest.approx(0.7, abs=1e-6)
+    assert obs["blend_flux_fraction"] == pytest.approx(0.3, abs=1e-6)
+
+
+def test_analyze_response_includes_observables():
+    """Full pipeline should emit the observables block."""
+    t = np.linspace(1200.0, 1240.0, 400)
+    from app.microlensing import pspl_flux
+    m = pspl_flux(t, 1220.0, 5.0, 0.15, 1.0, 0.0)
+    flux, ferr = _make_synthetic(t, m, noise_ppm=200.0, seed=10)
+    out = analyze_event(t, flux, ferr, 1200.0, 1240.0, 1220.0)
+    obs = out["observables"]
+    assert obs is not None
+    assert obs["einstein_timescale_d"] == pytest.approx(5.0, rel=0.05)
+    assert obs["impact_parameter_u0"] == pytest.approx(0.15, abs=0.02)
+    # Peak magnification for u0 ≈ 0.15 is ~6.7
+    assert obs["peak_magnification"] == pytest.approx(6.7, abs=0.5)
+
+
 def test_pspl_matches_mulensmodel_reference():
     mm = pytest.importorskip("MulensModel")
     from app.microlensing import pspl_magnification

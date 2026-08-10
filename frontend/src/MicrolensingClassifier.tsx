@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchLightcurveByCoords,
+  fetchLightcurveByTic,
   fitMicrolensing,
+  mastSectors,
   type LcByCoordsResponse,
   type MicrolensingFitResponse,
   type MicrolensingModelFit,
+  type SectorInfo,
 } from "./api";
 import { ShareToImgbbButton } from "./ShareButton";
 import { buildExofopPackage, svgToPng } from "./microlensingExport";
+import { fetchMicrolensingReport } from "./api";
 
 // Prefill payload from the Coverage table's "Analyze in Module A" action.
 // The LC itself isn't auto-fetched — that would need a full MAST coord→TIC
@@ -264,6 +268,37 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
     setLc(which === "pspl" ? makeDemoPspl() : makeDemoFlare());
   };
 
+  // TIC+sector fetch (parallels the transit tab's MAST mode).
+  const fetchFromTic = async (ticId: number, sector: number | null) => {
+    setLoadErr(null); setResult(null); setSel(null);
+    try {
+      const r = await fetchLightcurveByTic(ticId, sector);
+      const bits = [
+        `TIC ${r.tic_id}`,
+        `S${String(r.sector).padStart(3, "0")}`,
+        r.provider,
+        `${r.n_cadences} pts`,
+      ].filter(Boolean).join(" · ");
+      setLc({
+        time: r.time,
+        flux: r.flux,
+        flux_err: r.flux_err,
+        label: `MAST fetch — ${bits}`,
+      });
+      // Piggyback on lastAutoload so the ExoFOP exporter picks up TIC/sector/provider.
+      setLastAutoload({
+        time: r.time, flux: r.flux, flux_err: r.flux_err,
+        tic_id: r.tic_id, sector: r.sector,
+        provider: r.provider, filename: r.filename, n_cadences: r.n_cadences,
+        // These four have no meaning for a TIC-keyed fetch; supply neutral values
+        // that satisfy the LcByCoordsResponse shape without misrepresenting the source.
+        resolved_ra: 0, resolved_dec: 0, separation_arcsec: 0, tmag: null,
+      });
+    } catch (e: any) {
+      setLoadErr(e.message || String(e));
+    }
+  };
+
   const [autoloadBusy, setAutoloadBusy] = useState(false);
   // Kept around after the LC loads so the ExoFOP exporter can name the
   // package (TIC + sector + provider) even if the prefill was dismissed.
@@ -358,6 +393,7 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
       <DataLoader
         onFile={onFile}
         onDemo={loadDemo}
+        onFetchTic={fetchFromTic}
         loadErr={loadErr}
         lcLabel={lc?.label}
         lcPoints={lc?.time.length ?? 0}
@@ -588,43 +624,164 @@ function PrefillBanner({
 // ============================================================================
 
 function DataLoader({
-  onFile, onDemo, loadErr, lcLabel, lcPoints,
+  onFile, onDemo, onFetchTic, loadErr, lcLabel, lcPoints,
 }: {
   onFile: (f: File) => void;
   onDemo: (which: "pspl" | "flare") => void;
+  onFetchTic: (ticId: number, sector: number | null) => Promise<void>;
   loadErr: string | null;
   lcLabel?: string;
   lcPoints: number;
 }) {
+  const [ticInput, setTicInput] = useState("");
+  const [sectorInput, setSectorInput] = useState("");
+  const [sectors, setSectors] = useState<SectorInfo[] | null>(null);
+  const [sectorsBusy, setSectorsBusy] = useState(false);
+  const [sectorErr, setSectorErr] = useState<string | null>(null);
+  const [fetchBusy, setFetchBusy] = useState(false);
+
+  const lookupSectors = async () => {
+    const tic = parseInt(ticInput);
+    if (!tic) return;
+    setSectorsBusy(true); setSectorErr(null);
+    try {
+      const s = await mastSectors(tic);
+      setSectors(s);
+      if (s.length && !sectorInput) setSectorInput(String(s[s.length - 1].sector));
+    } catch (e: any) {
+      setSectorErr(e.message || String(e));
+      setSectors(null);
+    } finally {
+      setSectorsBusy(false);
+    }
+  };
+
+  const runFetch = async () => {
+    const tic = parseInt(ticInput);
+    if (!tic) return;
+    const sec = sectorInput.trim() ? parseInt(sectorInput) : null;
+    setFetchBusy(true);
+    try {
+      await onFetchTic(tic, sec);
+    } finally {
+      setFetchBusy(false);
+    }
+  };
+
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
-      <h3 className="font-semibold text-slate-800 mb-2">1. Load a light curve</h3>
-      <p className="text-xs text-slate-600 mb-3">
-        Upload a JSON <code>{"{time, flux, flux_err}"}</code> file or a CSV with{" "}
-        <code>time,flux,flux_err</code> columns. Or start with a synthetic demo
-        to see the pipeline end-to-end.
-      </p>
-      <div className="flex flex-wrap items-center gap-3">
-        <input
-          type="file"
-          accept=".json,.csv,.txt"
-          onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
-          className="text-sm"
-        />
-        <span className="text-slate-300">|</span>
-        <button
-          onClick={() => onDemo("pspl")}
-          className="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded border border-slate-200"
-        >
-          Load PSPL demo
-        </button>
-        <button
-          onClick={() => onDemo("flare")}
-          className="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded border border-slate-200"
-        >
-          Load flare demo
-        </button>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
+      <div>
+        <h3 className="font-semibold text-slate-800 mb-2">1. Load a light curve</h3>
+        <p className="text-xs text-slate-600 mb-3">
+          Three ways to get data into the classifier: <strong>upload</strong> a
+          FITS-equivalent JSON/CSV file, <strong>fetch from MAST</strong> by
+          TIC + sector (same UX as the Transit tab's MAST mode), or start with
+          a <strong>synthetic demo</strong>.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="file"
+            accept=".json,.csv,.txt"
+            onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+            className="text-sm"
+          />
+          <span className="text-slate-300">|</span>
+          <button
+            onClick={() => onDemo("pspl")}
+            className="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded border border-slate-200"
+          >
+            Load PSPL demo
+          </button>
+          <button
+            onClick={() => onDemo("flare")}
+            className="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded border border-slate-200"
+          >
+            Load flare demo
+          </button>
+        </div>
       </div>
+
+      {/* MAST fetch — TIC + sector */}
+      <div className="border-t border-slate-100 pt-3">
+        <p className="text-xs font-semibold text-slate-700 mb-2">
+          or fetch from MAST by TIC + sector
+        </p>
+        <div className="grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 items-end">
+          <div>
+            <label className="block text-[10px] text-slate-600 mb-0.5">TIC ID</label>
+            <input
+              type="number"
+              placeholder="e.g. 261136679"
+              value={ticInput}
+              onChange={(e) => setTicInput(e.target.value)}
+              className="w-full border rounded px-2 py-1 font-mono text-xs"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] text-slate-600 mb-0.5">
+              Sector <span className="text-slate-400">(blank = newest available)</span>
+            </label>
+            <input
+              type="number"
+              placeholder="auto"
+              value={sectorInput}
+              onChange={(e) => setSectorInput(e.target.value)}
+              className="w-full border rounded px-2 py-1 font-mono text-xs"
+            />
+          </div>
+          <button
+            onClick={lookupSectors}
+            disabled={!ticInput || sectorsBusy}
+            className="px-3 py-1 text-xs font-medium bg-slate-700 text-white rounded hover:bg-slate-800 disabled:bg-slate-300"
+          >
+            {sectorsBusy ? "…" : "List sectors"}
+          </button>
+          <button
+            onClick={runFetch}
+            disabled={!ticInput || fetchBusy}
+            className="px-3 py-1 text-xs font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300"
+          >
+            {fetchBusy ? "Fetching…" : "Fetch light curve"}
+          </button>
+        </div>
+        {sectorErr && (
+          <p className="text-xs text-red-700 mt-2">{sectorErr}</p>
+        )}
+        {sectors && sectors.length === 0 && (
+          <p className="text-xs text-slate-500 mt-2">No TESS sectors found for this TIC.</p>
+        )}
+        {sectors && sectors.length > 0 && (
+          <div className="mt-2">
+            <p className="text-[10px] text-slate-500 mb-1">
+              Click a sector to pick it. SPOC (2-min) = grey; FFI-only (TESS-SPOC/QLP) = amber.
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {sectors.map((si) => {
+                const selected = String(si.sector) === sectorInput;
+                const hasSpoc = si.providers.includes("SPOC");
+                return (
+                  <button
+                    key={si.sector}
+                    onClick={() => setSectorInput(String(si.sector))}
+                    title={si.providers.length ? `Providers: ${si.providers.join(", ")}` : ""}
+                    className={
+                      "px-2 py-0.5 rounded font-mono text-[10px] " +
+                      (selected
+                        ? "bg-blue-600 text-white"
+                        : hasSpoc
+                        ? "bg-slate-100 hover:bg-slate-200"
+                        : "bg-amber-50 hover:bg-amber-100 text-amber-900")
+                    }
+                  >
+                    S{String(si.sector).padStart(3, "0")}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       {loadErr && (
         <p className="text-sm text-red-700 mt-2">{loadErr}</p>
       )}
@@ -863,6 +1020,14 @@ function ResultsPanel({
         </p>
       </section>
 
+      {/* Observable parameters — physical quantities derived from PSPL alone */}
+      {result.observables && <ObservablesPanel obs={result.observables} />}
+
+      {/* Predicted planet parameters — fiducial-lens scales + sensitivity floor */}
+      {result.planet_predictions && (
+        <PlanetPredictionsPanel pp={result.planet_predictions} />
+      )}
+
       {/* Symmetry + notes */}
       <section className="grid md:grid-cols-2 gap-3 text-xs">
         <div className="rounded border border-slate-200 bg-slate-50 p-2">
@@ -933,6 +1098,8 @@ function ExportToolbar({
   const [rendering, setRendering] = useState(false);
   const [zipBusy, setZipBusy] = useState(false);
   const [zipErr, setZipErr] = useState<string | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfErr, setPdfErr] = useState<string | null>(null);
 
   // Rasterise the current SVG on demand (lazily — first click of Share).
   const renderPng = async (): Promise<string | null> => {
@@ -951,6 +1118,33 @@ function ExportToolbar({
       return null;
     } finally {
       setRendering(false);
+    }
+  };
+
+  const downloadPdf = async () => {
+    setPdfBusy(true); setPdfErr(null);
+    try {
+      let png: string | null = pngB64;
+      if (!png && svgRef.current) {
+        try { png = await svgToPng(svgRef.current, 2); setPngB64(png); }
+        catch { png = null; }
+      }
+      const blob = await fetchMicrolensingReport(result, exportMetadata, png);
+      const url = URL.createObjectURL(blob);
+      const stem = ([
+        exportMetadata.event_id,
+        exportMetadata.tic_id != null ? `TIC${exportMetadata.tic_id}` : null,
+        exportMetadata.sector != null ? `S${String(exportMetadata.sector).padStart(3, "0")}` : null,
+      ].filter(Boolean).join("_") || "microlensing_event")
+        .replace(/[^a-zA-Z0-9_-]/g, "_");
+      const a = document.createElement("a");
+      a.href = url; a.download = `${stem}_report.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setPdfErr(e.message || String(e));
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -1006,6 +1200,16 @@ function ExportToolbar({
         <ShareToImgbbButton base64={pngB64} title={shareTitle} label={shareLabel} />
       )}
 
+      {/* Vetting-report PDF */}
+      <button
+        onClick={downloadPdf}
+        disabled={pdfBusy}
+        className="px-2 py-1 rounded bg-sky-700 hover:bg-sky-800 text-white font-medium disabled:bg-slate-300"
+        title="Generate a PDF vetting report — verdict, observables, planet predictions, model comparison, and the plot"
+      >
+        {pdfBusy ? "rendering PDF…" : "📄 Download PDF report"}
+      </button>
+
       {/* ExoFOP-style ZIP */}
       <button
         onClick={downloadZip}
@@ -1018,8 +1222,97 @@ function ExportToolbar({
 
       {renderErr && <span className="text-red-700">plot render: {renderErr}</span>}
       {zipErr && <span className="text-red-700">export: {zipErr}</span>}
+      {pdfErr && <span className="text-red-700">PDF: {pdfErr}</span>}
     </section>
   );
+}
+
+// ============================================================================
+// Observables + planet-prediction panels
+// ============================================================================
+
+function ObservablesPanel({ obs }: { obs: NonNullable<MicrolensingFitResponse["observables"]> }) {
+  const rows: Array<[string, string, string?]> = [
+    ["t₀ (BTJD)",       fmtErr(obs.t0_btjd, obs.t0_btjd_err, 5)],
+    ["t₀ (BJD)",        fmt(obs.t0_bjd, 5)],
+    ["Einstein tE (d)", fmtErr(obs.einstein_timescale_d, obs.einstein_timescale_err_d, 3)],
+    ["Impact u₀",       fmtErr(obs.impact_parameter_u0, obs.impact_parameter_err, 4)],
+    ["Peak magnification A_max",           fmt(obs.peak_magnification, 3)],
+    ["Blended peak magnification (obs)",   fmt(obs.peak_magnification_observed, 3)],
+    ["Peak brightening (mag)",             fmt(obs.peak_brightening_mag, 3)],
+    ["Einstein-crossing duration (d)",     fmt(obs.einstein_crossing_duration_d, 3)],
+    ["Magnification FWHM (d)",             fmt(obs.magnification_fwhm_d, 3)],
+    ["Source flux fraction f_s/(f_s+f_b)", fmt(obs.source_flux_fraction, 3)],
+    ["Blend flux fraction",                fmt(obs.blend_flux_fraction, 3)],
+    ["μ_rel (mas/yr, fiducial θ_E=0.5 mas)", fmt(obs.mu_rel_mas_per_yr_fiducial, 3),
+      obs.mu_rel_note],
+  ];
+  return (
+    <section>
+      <h5 className="text-sm font-semibold text-slate-700 mb-1">
+        Observable parameters
+      </h5>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs">
+        {rows.map(([label, val, tip], i) => (
+          <div key={i} className="flex flex-col" title={tip}>
+            <span className="text-slate-500">{label}</span>
+            <span className="font-mono">{val}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-slate-500 mt-1 italic">
+        {obs.mu_rel_note}
+      </p>
+    </section>
+  );
+}
+
+function PlanetPredictionsPanel({ pp }: { pp: NonNullable<MicrolensingFitResponse["planet_predictions"]> }) {
+  const rows: Array<[string, string]> = [
+    ["Fiducial lens mass M_L (M☉)",           fmt(pp.fiducial_lens_mass_solar, 2)],
+    ["Fiducial lens distance D_L (kpc)",      fmt(pp.fiducial_lens_distance_kpc, 2)],
+    ["Fiducial source distance D_S (kpc)",    fmt(pp.fiducial_source_distance_kpc, 2)],
+    ["θ_E (mas)",                             fmt(pp.theta_E_mas_fiducial, 4)],
+    ["Physical Einstein radius r_E (AU)",     fmt(pp.einstein_radius_au_fiducial, 3)],
+    ["v_rel (km/s)",                          fmt(pp.v_rel_km_s_fiducial, 1)],
+    ["Closest approach u₀·r_E (AU)",          fmt(pp.closest_approach_au_fiducial, 3)],
+    ["Detection floor q_min = M_p/M_L",       fmt(pp.planet_q_min_detectable, 6)],
+    ["Planet mass floor (M⊕ @ fiducial M_L)", fmt(pp.planet_mass_floor_m_earth_fiducial, 3)],
+    ["Planet mass floor (M♃ @ fiducial M_L)", fmt(pp.planet_mass_floor_m_jupiter_fiducial, 4)],
+  ];
+  return (
+    <section className="rounded border border-indigo-200 bg-indigo-50/40 p-3">
+      <h5 className="text-sm font-semibold text-indigo-900 mb-1">
+        Predicted planet parameters <span className="text-xs font-normal text-indigo-700">(under fiducial bulge-lens priors)</span>
+      </h5>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs">
+        {rows.map(([label, val], i) => (
+          <div key={i} className="flex flex-col">
+            <span className="text-slate-600">{label}</span>
+            <span className="font-mono">{val}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-indigo-800/80 mt-2 italic">
+        {pp.assumption}
+      </p>
+      <p className="text-[10px] text-indigo-800/80 mt-1 italic">
+        {pp.planet_sensitivity_note}
+      </p>
+    </section>
+  );
+}
+
+function fmt(v: number | null | undefined, nd: number): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs !== 0 && (abs < 1e-3 || abs >= 1e6)) return v.toExponential(Math.max(2, nd - 1));
+  return v.toFixed(nd);
+}
+function fmtErr(v: number | null | undefined, err: number | null | undefined, nd: number): string {
+  const base = fmt(v, nd);
+  if (err == null || !Number.isFinite(err)) return base;
+  return `${base} ± ${fmt(err, Math.min(nd, 4))}`;
 }
 
 function ResidualPlot({

@@ -293,6 +293,209 @@ def symmetry_score(t: np.ndarray, residuals: np.ndarray, t0: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Observable parameters — derived from the PSPL fit alone (no external
+# priors on lens mass / distance / parallax). Report the quantities a
+# reviewer would need to write up the event.
+# ---------------------------------------------------------------------------
+
+# BTJD → BJD constant (TESS mission convention).
+_BTJD_OFFSET = 2_457_000.0
+
+# Magnification at u = 1 Einstein radius (Paczynski): 3/sqrt(5) ≈ 1.3416.
+# Used as the "significant lensing" threshold for the Einstein-crossing duration.
+_A_AT_U_EQ_1 = 3.0 / math.sqrt(5.0)
+
+
+def compute_observables(pspl_params: Dict[str, float],
+                        pspl_param_err: Dict[str, float]) -> dict:
+    """Physical / observable quantities derived from the fitted PSPL params.
+
+    Nothing here uses external priors — everything is derivable from
+    (t0, tE, u0, f_s, f_b) alone. Downstream tools (ExoFOP-style report,
+    on-screen panel) render these directly.
+    """
+    t0 = float(pspl_params["t0"])
+    tE = float(pspl_params["tE"])
+    u0 = float(pspl_params["u0"])
+    fs = float(pspl_params["f_s"])
+    fb = float(pspl_params["f_b"])
+
+    u0_safe = max(abs(u0), 1e-9)
+    # Intrinsic (unblended) peak magnification at closest approach u = u0.
+    A_peak = (u0_safe ** 2 + 2.0) / (u0_safe * math.sqrt(u0_safe ** 2 + 4.0))
+    # Peak brightening seen in the blended aperture (source + blend).
+    baseline = fs + fb
+    A_obs_peak = ((fs * A_peak + fb) / baseline) if baseline > 0 else A_peak
+    delta_mag = -2.5 * math.log10(A_obs_peak) if A_obs_peak > 0 else float("nan")
+
+    # Source flux fraction — what part of the aperture flux is the lensed source.
+    blend_g = (fs / baseline) if baseline > 0 else float("nan")
+
+    # Einstein-crossing duration: the total time the source spent inside the
+    # Einstein ring (u < 1, A > 1.34). For u0 < 1 it's real; otherwise the
+    # event is "far" and the source never enters the ring.
+    if u0 < 1.0:
+        einstein_crossing_d = 2.0 * tE * math.sqrt(1.0 - u0 ** 2)
+    else:
+        einstein_crossing_d = 0.0
+
+    # FWHM of the magnification profile. Solve A(u_half) = (A_peak + 1) / 2
+    # for u_half >= u0, then t at u = u_half is t_half = tE * sqrt(u_half² - u0²).
+    A_half = 0.5 * (A_peak + 1.0)
+    # Invert A(u) via a monotone bisection on u >= u0 (A is decreasing in u
+    # for u >= u0). Bounds: u_hi = a value comfortably past where A drops
+    # below A_half. For A_half >= 1, u_hi = max(u0, 5.0) is safe.
+    def _A_of_u(u: float) -> float:
+        return (u * u + 2.0) / (u * math.sqrt(u * u + 4.0))
+    lo, hi = u0_safe, max(u0_safe * 2.0, 5.0)
+    while _A_of_u(hi) > A_half and hi < 1e6:
+        hi *= 2.0
+    if _A_of_u(lo) >= A_half >= _A_of_u(hi):
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if _A_of_u(mid) > A_half:
+                lo = mid
+            else:
+                hi = mid
+        u_half = 0.5 * (lo + hi)
+        # From u_half to time: sqrt(u0² + (dt/tE)²) = u_half.
+        arg = u_half ** 2 - u0_safe ** 2
+        fwhm_d = 2.0 * tE * math.sqrt(max(arg, 0.0))
+    else:
+        fwhm_d = float("nan")
+
+    # Angular-quantity note: without an external lens-mass prior, θ_E and
+    # the lens mass M_L stay degenerate. We surface a formal proper-motion
+    # estimate under the fiducial assumption θ_E ≈ 0.5 mas (typical bulge
+    # value from Gould 2000) — flagged clearly in the notes.
+    theta_e_fiducial_mas = 0.5
+    mu_rel_mas_per_yr = (theta_e_fiducial_mas / tE) * 365.25 if tE > 0 else float("nan")
+
+    return {
+        "t0_btjd": t0,
+        "t0_btjd_err": float(pspl_param_err.get("t0", float("nan"))),
+        "t0_bjd": t0 + _BTJD_OFFSET,
+        "einstein_timescale_d": tE,
+        "einstein_timescale_err_d": float(pspl_param_err.get("tE", float("nan"))),
+        "impact_parameter_u0": u0,
+        "impact_parameter_err": float(pspl_param_err.get("u0", float("nan"))),
+        "peak_magnification": A_peak,
+        "peak_magnification_observed": A_obs_peak,
+        "peak_brightening_mag": delta_mag,
+        "einstein_crossing_duration_d": einstein_crossing_d,
+        "magnification_fwhm_d": fwhm_d,
+        "source_flux_fraction": blend_g,
+        "blend_flux_fraction": (1.0 - blend_g) if math.isfinite(blend_g) else float("nan"),
+        "f_s": fs,
+        "f_b": fb,
+        "mu_rel_mas_per_yr_fiducial": mu_rel_mas_per_yr,
+        "mu_rel_note": ("Proper motion assumes fiducial θ_E = 0.5 mas (typical "
+                        "bulge value); real θ_E is degenerate with lens mass "
+                        "without additional constraints. Gaia baseline "
+                        "photometry (Harris et al. 2026, ApJL 1005 L33) is "
+                        "the standard way to break this degeneracy for TESS."),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Planet-detection predictions — geometry-anchored physical scales and the
+# planetary anomaly sensitivity floor implied by the fit's tE. A single-lens
+# fit CAN'T actually detect a planet (that needs a binary-lens fit with a
+# caustic-crossing anomaly), so everything here is either a fiducial-lens
+# prediction or a detection-floor sensitivity — flagged accordingly.
+# ---------------------------------------------------------------------------
+
+# Standard bulge-lens fiducials for solar-system-scale mass/distance priors.
+_M_L_FID_SUN = 0.30            # M_L / M_sun — typical bulge lens (Sumi+ 2011)
+_D_L_FID_KPC = 6.0             # kpc — bulge midplane
+_D_S_FID_KPC = 8.0             # kpc — Galactic centre distance
+# Einstein-radius normalization constant κ ≈ 8.144 mas / M_sun.
+_KAPPA_MAS_PER_MSUN = 8.144
+_AU_KM = 1.495978707e8
+_DAY_S = 86400.0
+# Assume ~1-hour effective cadence at bulge magnifications (2-min SPOC binned
+# down + FFI 10-min cadence typical). Anomaly ≥ 2·cadence to be recognisable.
+_CADENCE_FLOOR_D = 1.0 / 24.0
+# Below this q the anomaly duration collapses under any TESS cadence — floor
+# it to avoid absurdly small numbers.
+_Q_MIN_ABSOLUTE = 1e-6
+
+
+def compute_planet_predictions(pspl_params: Dict[str, float]) -> dict:
+    """Fiducial-lens geometry + planet-detection sensitivity floor.
+
+    Physical scales assume the standard bulge-lens fiducial
+    (M_L = 0.3 M☉, D_L = 6 kpc, D_S = 8 kpc). These are order-of-magnitude
+    unless the event has an independent mass measurement (parallax + finite
+    source), which single-band TESS photometry cannot supply.
+
+    Sensitivity floor uses the rule-of-thumb planetary caustic anomaly
+    duration Δt ≈ 2·tE·√q. Requiring Δt ≥ 2·cadence gives
+    q_min ≈ (cadence / tE)², below which a planetary perturbation would be
+    unresolvable on the current light curve.
+    """
+    tE = float(pspl_params["tE"])
+    u0 = float(pspl_params["u0"])
+
+    # Fiducial angular Einstein radius:
+    #   π_rel = 1 AU · (1/D_L - 1/D_S)  in mas (with D in kpc)
+    #   θ_E   = sqrt(κ · M_L · π_rel)   in mas
+    pi_rel_mas = 1.0 / _D_L_FID_KPC - 1.0 / _D_S_FID_KPC
+    theta_e_mas_fid = math.sqrt(_KAPPA_MAS_PER_MSUN * _M_L_FID_SUN * pi_rel_mas)
+
+    # Physical Einstein radius at the lens: r_E = θ_E · D_L
+    # With θ_E in mas and D_L in kpc, r_E comes out in AU directly.
+    r_e_au_fid = theta_e_mas_fid * _D_L_FID_KPC
+
+    # Transverse relative velocity: v_rel = r_E / tE
+    v_rel_km_s_fid = (r_e_au_fid * _AU_KM) / (tE * _DAY_S) if tE > 0 else float("nan")
+
+    # Impact-parameter physical closest approach: b = u0 · r_E (AU)
+    closest_approach_au_fid = u0 * r_e_au_fid
+
+    # Planetary anomaly sensitivity floor.
+    # anomaly duration ≈ 2 · tE · sqrt(q)  →  q_min ≈ (cadence / (2·tE))²·? use ≈ (cadence/tE)² for order.
+    if tE > 0:
+        q_min = max((_CADENCE_FLOOR_D / (2.0 * tE)) ** 2, _Q_MIN_ABSOLUTE)
+    else:
+        q_min = float("nan")
+
+    m_planet_earth_floor = q_min * _M_L_FID_SUN * 332_946.0 if math.isfinite(q_min) else float("nan")
+    m_planet_jupiter_floor = m_planet_earth_floor / 317.83 if math.isfinite(m_planet_earth_floor) else float("nan")
+
+    return {
+        "assumption": (
+            f"Fiducial bulge lens: M_L = {_M_L_FID_SUN} M_sun, "
+            f"D_L = {_D_L_FID_KPC} kpc, D_S = {_D_S_FID_KPC} kpc. "
+            "All physical scales scale as √(M_L·π_rel), so a factor-of-2 "
+            "shift in either input shifts them by <30%."
+        ),
+        "fiducial_lens_mass_solar": _M_L_FID_SUN,
+        "fiducial_lens_distance_kpc": _D_L_FID_KPC,
+        "fiducial_source_distance_kpc": _D_S_FID_KPC,
+        "theta_E_mas_fiducial": theta_e_mas_fid,
+        "einstein_radius_au_fiducial": r_e_au_fid,
+        "v_rel_km_s_fiducial": v_rel_km_s_fid,
+        "closest_approach_au_fiducial": closest_approach_au_fid,
+        "planet_sensitivity_note": (
+            "Single-lens fit cannot detect a planet — that needs a "
+            "binary-lens fit with a resolved caustic-crossing anomaly. "
+            "The floor below is the minimum planet-to-lens mass ratio whose "
+            f"caustic anomaly would be resolvable on this light curve (anomaly "
+            f"≥ 2·{_CADENCE_FLOOR_D * 24:.1f} h). Harris et al. (2026, ApJL "
+            "1005, L33) show that robust TESS microlensing detections require "
+            "a joint TESS + Gaia fit (their pyLIMA modelling of Gaia23bra used "
+            "TESS difference-image photometry + Gaia G-band photometry to pin "
+            "the binary-lens geometry) — TESS-only fits are limited by the "
+            "short single-sector baseline and 21″ pixel scale."
+        ),
+        "planet_q_min_detectable": q_min,
+        "planet_mass_floor_m_earth_fiducial": m_planet_earth_floor,
+        "planet_mass_floor_m_jupiter_fiducial": m_planet_jupiter_floor,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Top-level analyzer
 # ---------------------------------------------------------------------------
 
@@ -415,6 +618,9 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
         }
         return d
 
+    observables = compute_observables(pspl.params, pspl.param_err) if pspl.success else None
+    planet_predictions = compute_planet_predictions(pspl.params) if pspl.success else None
+
     return _json_safe({
         "verdict": verdict,
         "confidence": confidence,
@@ -430,5 +636,7 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
             "null_minus_flare": null.bic - flare.bic,
         },
         "symmetry_score": sym,
+        "observables": observables,
+        "planet_predictions": planet_predictions,
         "notes": notes,
     })

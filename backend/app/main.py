@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
 from .microlensing import analyze_event as microlensing_analyze_event
+from .microlensing_report import build_microlensing_pdf
 from .microlensing_coverage import (
     evaluate_catalog as microlensing_evaluate_catalog,
     parse_events_csv,
@@ -1946,28 +1947,22 @@ class MicrolensingLightcurveByCoordsRequest(BaseModel):
     radius_arcsec: float = 30.0
 
 
-@app.post("/api/microlensing/lightcurve_by_coords")
-def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsRequest):
-    """Resolve (RA, Dec) → nearest TIC via MAST, then fetch and return the
-    raw TESS light curve arrays. Powers the Module B → Module A autoload
-    handoff so the classifier doesn't need a manual FITS upload.
-    """
-    try:
-        resolved = resolve_ra_dec_to_tic(req.ra, req.dec, radius_arcsec=req.radius_arcsec)
-    except RuntimeError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:  # pragma: no cover — network / import failures
-        raise _handle_exception("TIC coord resolution", e)
+class MicrolensingLightcurveByTicRequest(BaseModel):
+    tic_id: int
+    sector: Optional[int] = None
 
-    tic_id = resolved["tic_id"]
 
-    # Sector selection: use the requested sector if provided; otherwise walk
-    # available sectors newest-first (preferring ones with a real LC provider
-    # — SPOC, TESS-SPOC, or QLP — since DVT-only sectors have no flux column
-    # and will fail parse_lightcurve_fits).
+def _fetch_and_pack_lightcurve(tic_id: int, requested_sector: Optional[int],
+                                extra: Optional[dict] = None) -> dict:
+    """Shared LC-fetch + response-packing used by both coord- and TIC-keyed
+    autoload endpoints. Walks available sectors newest-first (preferring
+    SPOC / TESS-SPOC / QLP over DVT-only) unless a specific sector was
+    requested. `extra` gets merged into the response for endpoint-specific
+    metadata (resolved_ra, separation, etc.)."""
     _LC_PROVIDERS = {"SPOC", "TESS-SPOC", "QLP"}
-    if req.sector is not None:
-        sectors_to_try = [int(req.sector)]
+
+    if requested_sector is not None:
+        sectors_to_try = [int(requested_sector)]
     else:
         try:
             available = list_available_sectors(tic_id)
@@ -1987,7 +1982,7 @@ def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsReq
                         f"TESS-SPOC / QLP light-curve product — only DV or "
                         f"other non-LC files. Try uploading manually."),
             )
-        sectors_to_try = sorted(with_lc, reverse=True)[:4]  # newest first, cap at 4
+        sectors_to_try = sorted(with_lc, reverse=True)[:4]
 
     fetched = None
     parsed = None
@@ -2009,19 +2004,15 @@ def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsReq
             detail=f"Could not fetch a usable LC for TIC {tic_id} (tried sectors {sectors_to_try}): {last_err}",
         )
 
-    # Cache the LC so downstream endpoints (manual_dip etc.) can reuse without
-    # re-downloading — mirrors what _cache_lc does for the transit pipeline.
     try:
         _cache_lc(parsed)
     except Exception:
-        pass  # cache failure is non-fatal here
+        pass
 
     t = np.asarray(parsed["t"], dtype=float)
     f = np.asarray(parsed["flux"], dtype=float)
     fe = np.asarray(parsed.get("flux_err"), dtype=float) if parsed.get("flux_err") is not None else None
 
-    # Filter to finite, positive-flux samples so the microlensing fitter has
-    # clean input — same finite/quality mask other endpoints apply.
     mask = np.isfinite(t) & np.isfinite(f) & (f > 0)
     if fe is not None:
         mask = mask & np.isfinite(fe) & (fe > 0)
@@ -2044,20 +2035,53 @@ def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsReq
             detail=f"Only {len(t_clean)} usable cadences left after quality filter for TIC {tic_id} S{sector}.",
         )
 
-    return {
+    payload = {
         "time": t_clean,
         "flux": f_clean,
         "flux_err": fe_clean,
         "tic_id": tic_id,
         "sector": sector,
-        "resolved_ra": resolved["resolved_ra"],
-        "resolved_dec": resolved["resolved_dec"],
-        "separation_arcsec": resolved["separation_arcsec"],
-        "tmag": resolved["tmag"],
         "provider": fetched.get("author"),
         "filename": fetched.get("filename"),
         "n_cadences": len(t_clean),
     }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+@app.post("/api/microlensing/lightcurve_by_tic")
+def api_microlensing_lightcurve_by_tic(req: MicrolensingLightcurveByTicRequest):
+    """Fetch a TESS light curve directly by (TIC, sector) — same UX as the
+    transit tab's MAST mode, but returns raw arrays suitable for the
+    microlensing classifier instead of running the full vetting pipeline.
+    """
+    return _fetch_and_pack_lightcurve(req.tic_id, req.sector)
+
+
+@app.post("/api/microlensing/lightcurve_by_coords")
+def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsRequest):
+    """Resolve (RA, Dec) → nearest TIC via MAST, then fetch and return the
+    raw TESS light curve arrays. Powers the Module B → Module A autoload
+    handoff so the classifier doesn't need a manual FITS upload.
+    """
+    try:
+        resolved = resolve_ra_dec_to_tic(req.ra, req.dec, radius_arcsec=req.radius_arcsec)
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:  # pragma: no cover — network / import failures
+        raise _handle_exception("TIC coord resolution", e)
+
+    return _fetch_and_pack_lightcurve(
+        resolved["tic_id"],
+        req.sector,
+        extra={
+            "resolved_ra": resolved["resolved_ra"],
+            "resolved_dec": resolved["resolved_dec"],
+            "separation_arcsec": resolved["separation_arcsec"],
+            "tmag": resolved["tmag"],
+        },
+    )
 
 
 @app.post("/api/microlensing/coverage")
@@ -2078,6 +2102,51 @@ async def api_microlensing_coverage(
     except Exception as e:  # pragma: no cover
         raise _handle_exception("microlensing coverage upload", e)
     return microlensing_evaluate_catalog(events, margin_te=margin_te)
+
+
+class MicrolensingReportRequest(BaseModel):
+    """Payload for the microlensing PDF report endpoint.
+
+    Accepts a fit result dict verbatim (as returned by /api/microlensing/fit)
+    plus optional metadata (event_id, TIC, coords, sector) and an optional
+    plot PNG (base64, no data-URL prefix) to embed. The endpoint doesn't
+    re-fit — the client already has the numbers, we just render them.
+    """
+    result: dict
+    metadata: Optional[dict] = None
+    plot_png_base64: Optional[str] = None
+
+
+@app.post("/api/microlensing/report")
+def api_microlensing_report(req: MicrolensingReportRequest):
+    try:
+        pdf_bytes = build_microlensing_pdf(
+            result=req.result,
+            metadata=req.metadata or {},
+            plot_png_b64=req.plot_png_base64,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=400,
+                            detail=f"Malformed result payload: missing key {e}")
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("microlensing report", e)
+
+    meta = req.metadata or {}
+    id_bits = [
+        meta.get("event_id"),
+        f"TIC{meta['tic_id']}" if meta.get("tic_id") else None,
+        f"S{int(meta['sector']):03d}" if meta.get("sector") is not None else None,
+    ]
+    stem = "_".join(b for b in id_bits if b) or "microlensing_event"
+    # Sanitize for a Content-Disposition filename.
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe}_report.pdf"'
+        },
+    )
 
 
 @app.post("/api/microlensing/fit")

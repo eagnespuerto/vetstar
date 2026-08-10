@@ -66,6 +66,24 @@ export default function MicrolensingPanel() {
         />
       )}
       {tab === "coverage" && <MicrolensingCoverage onAnalyzeInModuleA={handoff} />}
+
+      <p className="text-[10px] text-slate-500 leading-relaxed">
+        TESS microlensing caveats + best-practice guidance in this pipeline
+        follow{" "}
+        <a
+          href="https://iopscience.iop.org/article/10.3847/2041-8213/ae7a50"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline text-slate-600 hover:text-slate-800"
+        >
+          Harris, Dragomir, Bachelet, Fausnaugh &amp; Johnson (2026), ApJL
+          1005, L33
+        </a>{" "}
+        — the first-ever bound-planet microlensing detection in TESS data.
+        Their pyLIMA joint TESS + Gaia fit of Gaia23bra sets the standard for
+        breaking the θ_E ↔ M_L degeneracy that TESS-only single-band
+        photometry cannot resolve.
+      </p>
     </main>
   );
 }
