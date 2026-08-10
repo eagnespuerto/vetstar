@@ -25,8 +25,15 @@ from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
 from pydantic import BaseModel, Field, field_validator
 
 from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
-from .microlensing import analyze_event as microlensing_analyze_event
+from .microlensing import (
+    analyze_event as microlensing_analyze_event,
+    analyze_event_joint as microlensing_analyze_event_joint,
+)
 from .microlensing_report import build_microlensing_pdf
+from .gaia_photometry import (
+    fetch_alert_lightcurve as gaia_fetch_alert_lightcurve,
+    search_alerts_near as gaia_search_alerts_near,
+)
 from .microlensing_coverage import (
     evaluate_catalog as microlensing_evaluate_catalog,
     parse_events_csv,
@@ -1952,6 +1959,62 @@ class MicrolensingLightcurveByTicRequest(BaseModel):
     sector: Optional[int] = None
 
 
+class GaiaAlertLightcurveRequest(BaseModel):
+    alert_id: str
+
+
+@app.post("/api/microlensing/gaia_alert_lightcurve")
+def api_microlensing_gaia_alert_lightcurve(req: GaiaAlertLightcurveRequest):
+    """Fetch a Gaia Alerts light curve by alert ID (e.g. 'Gaia23bra').
+
+    Returns raw G-band arrays plus the Kruszynska-2022-inflated errors
+    used by the joint fit. Read-only HTTP GET to the public feed.
+    """
+    try:
+        lc = gaia_fetch_alert_lightcurve(req.alert_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Gaia Alerts fetch failed: {e}")
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("gaia alert lightcurve", e)
+    return lc.to_dict()
+
+
+@app.get("/api/microlensing/gaia_alerts_near")
+def api_microlensing_gaia_alerts_near(
+    ra: float, dec: float,
+    radius_arcsec: float = 60.0,
+    microlensing_only: bool = True,
+    max_results: int = 20,
+):
+    """Return published Gaia alerts within `radius_arcsec` of (RA, Dec).
+
+    Filtered to microlensing candidates by default. This hits the Gaia
+    Alerts master index CSV (cached in-process, small).
+    """
+    try:
+        hits = gaia_search_alerts_near(
+            ra, dec,
+            radius_arcsec=radius_arcsec,
+            microlensing_only=microlensing_only,
+            max_results=max_results,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Gaia Alerts index fetch failed: {e}")
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("gaia alerts search", e)
+    return {
+        "query": {
+            "ra": ra, "dec": dec,
+            "radius_arcsec": radius_arcsec,
+            "microlensing_only": microlensing_only,
+        },
+        "n_hits": len(hits),
+        "alerts": [h.to_dict() for h in hits],
+    }
+
+
 def _fetch_and_pack_lightcurve(tic_id: int, requested_sector: Optional[int],
                                 extra: Optional[dict] = None) -> dict:
     """Shared LC-fetch + response-packing used by both coord- and TIC-keyed
@@ -2147,6 +2210,55 @@ def api_microlensing_report(req: MicrolensingReportRequest):
             "Content-Disposition": f'attachment; filename="{safe}_report.pdf"'
         },
     )
+
+
+class MicrolensingJointFitRequest(BaseModel):
+    """Body for the joint TESS + Gaia fit endpoint.
+
+    TESS side: raw flux + err arrays (same shape as /fit).
+    Gaia side: JD_TCB times + G-band magnitudes + errors (from either
+    the Gaia Alerts CSV via /gaia_alert_lightcurve, or a user upload).
+    """
+    tess_time: list[float]
+    tess_flux: list[float]
+    tess_flux_err: list[float]
+    gaia_time_jd: list[float]
+    gaia_mag: list[float]
+    gaia_mag_err: list[float]
+    window: MicrolensingWindow
+    t0_guess: float
+    gaia_baseline_window_d: float = 200.0
+
+
+@app.post("/api/microlensing/fit_joint")
+def api_microlensing_fit_joint(req: MicrolensingJointFitRequest):
+    """Joint TESS + Gaia PSPL fit. See analyze_event_joint for the recipe."""
+    if req.window.t_end <= req.window.t_start:
+        raise HTTPException(status_code=400,
+                            detail="window.t_end must be greater than window.t_start.")
+    if not (len(req.tess_time) == len(req.tess_flux) == len(req.tess_flux_err)):
+        raise HTTPException(status_code=400,
+                            detail="tess arrays must all have the same length.")
+    if not (len(req.gaia_time_jd) == len(req.gaia_mag) == len(req.gaia_mag_err)):
+        raise HTTPException(status_code=400,
+                            detail="gaia arrays must all have the same length.")
+    try:
+        return microlensing_analyze_event_joint(
+            tess_time=np.asarray(req.tess_time, dtype=float),
+            tess_flux=np.asarray(req.tess_flux, dtype=float),
+            tess_flux_err=np.asarray(req.tess_flux_err, dtype=float),
+            gaia_time_jd=np.asarray(req.gaia_time_jd, dtype=float),
+            gaia_mag=np.asarray(req.gaia_mag, dtype=float),
+            gaia_mag_err=np.asarray(req.gaia_mag_err, dtype=float),
+            t_start=req.window.t_start,
+            t_end=req.window.t_end,
+            t0_guess=req.t0_guess,
+            gaia_baseline_window_d=req.gaia_baseline_window_d,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("microlensing joint fit", e)
 
 
 @app.post("/api/microlensing/fit")

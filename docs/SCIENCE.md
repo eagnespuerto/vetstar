@@ -880,12 +880,47 @@ high confidence, follow-up should include:
   binary-lens (`USBL`) fit is required if you want to detect a
   planetary companion.
 
-A future Vetstar iteration will surface a "Fetch Gaia G-band baseline"
-button in the classifier that queries the Gaia Alerts feed for events
-at the target coordinates, so the pipeline can support joint fits
-directly. Until then, the classifier's fit is a TESS-only starting
-point; treat verdict-microlensing candidates as *targets for follow-up*,
-not confirmed detections.
+### 18.3 Joint TESS + Gaia fit (implemented)
+
+The Vetstar Microlensing pipeline now ships this workflow directly. A
+new `POST /api/microlensing/fit_joint` endpoint accepts TESS flux
+arrays and Gaia G-band magnitude arrays, and fits a shared PSPL
+geometry (single `t0`, `tE`, `u0`) with **per-band blending**
+$(f_s^\mathrm{T}, f_b^\mathrm{T})$ and $(f_s^\mathrm{G}, f_b^\mathrm{G})$.
+
+Gaia magnitudes are converted to relative flux via
+$F_G / F_{G,\mathrm{base}} = 10^{-0.4 (G - G_\mathrm{base})}$ with
+propagated errors $\sigma_F = F \cdot 0.4 \ln 10 \cdot \sigma_G$. The
+Gaia baseline magnitude is estimated as the median of out-of-event
+epochs (points more than $\pm 100$ d from `t0_guess`), with a
+faint-tail-quantile fallback for events without out-of-event coverage.
+
+Errors follow the Kruszyńska et al. (2022, A&A 662, A59) calibration
+approximation
+
+$$\sigma^2_\mathrm{calibrated} = (\alpha \cdot \sigma_\mathrm{reported})^2 + \sigma^2_\mathrm{sys}$$
+
+with $\alpha = 1.5$ and $\sigma_\mathrm{sys} = 3\,\mathrm{mmag}$ — a
+single-coefficient approximation to their per-magnitude table.
+Substitute the full table (their Table 2) for research-grade fits.
+
+Times share a single system: Gaia JD(TCB) is converted to BTJD by
+subtracting 2 457 000. The TCB↔TDB offset (seconds) is neglected —
+negligible against typical microlensing timescales of days to weeks.
+
+Residuals from both bands are concatenated with per-cadence
+weights $r_i = (f_i - F_\mathrm{PSPL}(t_i)) / \sigma_i$ and fitted with
+`scipy.optimize.least_squares` (7 free parameters). The response
+returns per-band $\chi^2$ split for goodness diagnostics plus a
+combined BIC and the observables/planet-prediction blocks recomputed
+from the joint fit's shared geometry.
+
+The frontend Classifier exposes this via a **Gaia baseline** panel
+(alert-ID input, cone search on the Gaia Alerts master index) and a
+**Fit joint (TESS + Gaia)** action button. See §5 of Harris et al. 2026
+for the reference implementation using `pyLIMA`; the Vetstar
+implementation is scipy-based and single-lens only. Binary-lens
+(planetary anomaly) joint fits remain future work.
 
 ---
 
