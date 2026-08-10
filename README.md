@@ -130,6 +130,16 @@ alerts that happen to fall in TESS sectors — not blind discovery.
 
 Two independent sub-tools, both under the **Microlensing** header tab:
 
+The response also includes an **observables** block (peak magnification
+A_max, blended peak, peak brightening in magnitudes, Einstein-crossing
+duration, magnification FWHM, source and blend flux fractions, t₀ in
+BTJD + BJD, μ_rel under a fiducial θ_E) and a **planet_predictions**
+block (fiducial-lens θ_E, physical Einstein radius r_E in AU, v_rel,
+closest-approach distance, planet-detection floor q_min and the
+corresponding planet mass in Earth/Jupiter units under standard bulge
+priors: M_L = 0.3 M☉, D_L = 6 kpc, D_S = 8 kpc). Both are surfaced in
+the classifier UI and included in the PDF report.
+
 **Module A — Model-comparison classifier.** Drag a window across a positive
 excursion in an uploaded light curve (JSON or CSV, or a built-in PSPL/flare
 synthetic demo). The backend fits three competing models on the windowed,
@@ -168,18 +178,23 @@ calendar-anchored values, later sectors use a nominal ~27.4-day cadence
 approximation flagged as `nominal: true` in the payload (drop in the
 official mission calendar for research-grade decisions).
 
-The classifier's results panel also exposes two share/export controls:
-a **Share plot** button that rasterises the SVG light-curve + fit overlay
-to a PNG in-browser and uploads it to ImgBB (reusing the transit
+The classifier's results panel exposes three share/export controls:
+a **Share plot** button that rasterises the SVG light-curve + fit
+overlay to a PNG in-browser and uploads it to ImgBB (reusing the transit
 pipeline's `ShareToImgbbButton`), returning URL / BBCode / Markdown copy
-chips; and a **Download ExoFOP package** button that assembles a
-store-only ZIP with a headline `summary.csv` (one row per fit — verdict,
-confidence, PSPL params + errors, all three BICs, ΔBIC, symmetry score),
-`lightcurve_windowed.csv` (the data fed to the fit plus each model's
-curve on the same grid), a human-readable `notes.md` suitable for
-pasting into ExoFOP follow-up notes, a `fit_full.json` snapshot of the
-raw response for reproducibility, and the plot PNG. The package is
-named from the handoff metadata (event id, TIC, sector) when available.
+chips; a **Download PDF report** button that ships the fit result back
+to `/api/microlensing/report` and downloads a reportlab-rendered vetting
+PDF with the verdict banner, target block, observables table, predicted
+planet parameters table, PSPL best-fit table, model-comparison BIC
+table, and the embedded plot; and a **Download ExoFOP package** button
+that assembles a store-only ZIP with a headline `summary.csv` (one row
+per fit — verdict, confidence, PSPL params + errors, all three BICs,
+ΔBIC, symmetry score), `lightcurve_windowed.csv` (the data fed to the
+fit plus each model's curve on the same grid), a human-readable
+`notes.md` suitable for pasting into ExoFOP follow-up notes, a
+`fit_full.json` snapshot of the raw response for reproducibility, and
+the plot PNG. Packages are named from the handoff metadata (event id,
+TIC, sector) when available.
 
 The results table is sortable, filterable ("observable only"), and each
 observable row has an **Analyze →** button that hands the event off to
@@ -846,6 +861,8 @@ POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}               
 POST /api/microlensing/fit                    {time[], flux[], flux_err[], window:{t_start,t_end}, t0_guess} → PSPL + flare + null fits, ΔBIC verdict, symmetry, notes
 POST /api/microlensing/coverage               multipart CSV (event_id,ra,dec,t0,tE) + ?margin_te=<float>  → per-event TESS sector coverage table + bulge-blind-zone flag
 POST /api/microlensing/lightcurve_by_coords   {ra, dec, sector?, radius_arcsec?}  → resolves RA/Dec → nearest TIC via MAST, walks available sectors newest-first, returns {time, flux, flux_err, tic_id, sector, resolved_ra, resolved_dec, separation_arcsec, provider, n_cadences} — powers the Module B → Module A autoload handoff
+POST /api/microlensing/lightcurve_by_tic      {tic_id, sector?}                    → fetch a TESS light curve directly by (TIC, sector), same UX as the transit tab's MAST mode; sector optional (newest LC-provider sector is auto-picked when omitted)
+POST /api/microlensing/report                 {result, metadata?, plot_png_base64?} → renders a PDF vetting report (verdict, observables, predicted planet parameters, model comparison, embedded plot) — no re-fit; ships back the bytes as application/pdf
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
 ```
@@ -876,6 +893,7 @@ vetstar/
 │   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
 │   │   ├── microlensing.py             (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
 │   │   ├── microlensing_coverage.py    (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
+│   │   ├── microlensing_report.py      PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
 │   │   ├── tess_sector_dates.py        Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
 │   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt

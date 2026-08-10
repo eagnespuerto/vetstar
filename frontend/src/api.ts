@@ -497,6 +497,42 @@ export interface MicrolensingModelFit {
   model_flux: number[] | null;
 }
 
+export interface MicrolensingObservables {
+  t0_btjd: number;
+  t0_btjd_err: number | null;
+  t0_bjd: number;
+  einstein_timescale_d: number;
+  einstein_timescale_err_d: number | null;
+  impact_parameter_u0: number;
+  impact_parameter_err: number | null;
+  peak_magnification: number;
+  peak_magnification_observed: number;
+  peak_brightening_mag: number | null;
+  einstein_crossing_duration_d: number;
+  magnification_fwhm_d: number | null;
+  source_flux_fraction: number | null;
+  blend_flux_fraction: number | null;
+  f_s: number;
+  f_b: number;
+  mu_rel_mas_per_yr_fiducial: number | null;
+  mu_rel_note: string;
+}
+
+export interface MicrolensingPlanetPredictions {
+  assumption: string;
+  fiducial_lens_mass_solar: number;
+  fiducial_lens_distance_kpc: number;
+  fiducial_source_distance_kpc: number;
+  theta_E_mas_fiducial: number | null;
+  einstein_radius_au_fiducial: number | null;
+  v_rel_km_s_fiducial: number | null;
+  closest_approach_au_fiducial: number | null;
+  planet_sensitivity_note: string;
+  planet_q_min_detectable: number | null;
+  planet_mass_floor_m_earth_fiducial: number | null;
+  planet_mass_floor_m_jupiter_fiducial: number | null;
+}
+
 export interface MicrolensingFitResponse {
   verdict: "microlensing" | "flare" | "null" | "ambiguous";
   confidence: number;
@@ -515,6 +551,8 @@ export interface MicrolensingFitResponse {
     null_minus_flare: number | null;
   };
   symmetry_score: number | null;
+  observables: MicrolensingObservables | null;
+  planet_predictions: MicrolensingPlanetPredictions | null;
   notes: string[];
 }
 
@@ -528,6 +566,26 @@ export async function fitMicrolensing(
   });
   if (!r.ok) throw new Error(`Microlensing fit failed (${r.status}): ${await r.text()}`);
   return r.json();
+}
+
+/** Ship a fit result + optional metadata + optional plot PNG to the backend
+ *  and receive back a rendered PDF vetting report as a Blob. */
+export async function fetchMicrolensingReport(
+  result: MicrolensingFitResponse,
+  metadata?: Record<string, unknown> | null,
+  plotPngBase64?: string | null,
+): Promise<Blob> {
+  const r = await fetch(`${API_BASE}/api/microlensing/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      result,
+      metadata: metadata ?? null,
+      plot_png_base64: plotPngBase64 ?? null,
+    }),
+  });
+  if (!r.ok) throw new Error(`Microlensing report failed (${r.status}): ${await r.text()}`);
+  return r.blob();
 }
 
 // ----------------------------------------------------------------------------
@@ -619,5 +677,29 @@ export async function fetchLightcurveByCoords(
     body: JSON.stringify(req),
   });
   if (!r.ok) throw new Error(`Coord LC fetch failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+export interface LcByTicResponse {
+  time: number[];
+  flux: number[];
+  flux_err: number[];
+  tic_id: number;
+  sector: number;
+  provider: string | null;
+  filename: string | null;
+  n_cadences: number;
+}
+
+export async function fetchLightcurveByTic(
+  tic_id: number,
+  sector?: number | null
+): Promise<LcByTicResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/lightcurve_by_tic`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tic_id, sector: sector ?? null }),
+  });
+  if (!r.ok) throw new Error(`TIC LC fetch failed (${r.status}): ${await r.text()}`);
   return r.json();
 }

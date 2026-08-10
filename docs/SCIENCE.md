@@ -48,6 +48,12 @@ astrophysics convention: `★` = host star, `p` = planet/companion,
     - 16.2 [Static TESS sector-date table](#162-static-tess-sector-date-table)
     - 16.3 [Observability logic (wings margin)](#163-observability-logic-wings-margin)
     - 16.4 [Bulge / ecliptic blind-zone flag](#164-bulge--ecliptic-blind-zone-flag)
+17. [Observable parameters and predicted planet quantities](#17-observable-parameters-and-predicted-planet-quantities)
+    - 17.1 [Peak magnification, brightening, and FWHM](#171-peak-magnification-brightening-and-fwhm)
+    - 17.2 [Einstein-crossing duration and blend fraction](#172-einstein-crossing-duration-and-blend-fraction)
+    - 17.3 [Fiducial-lens physical scales (θ_E, r_E, v_rel)](#173-fiducial-lens-physical-scales-θ_e-r_e-v_rel)
+    - 17.4 [Planet-detection sensitivity floor](#174-planet-detection-sensitivity-floor)
+18. [TESS-specific microlensing caveats (Harris et al. 2026)](#18-tess-specific-microlensing-caveats-harris-et-al-2026)
 
 ---
 
@@ -700,8 +706,190 @@ to BJD before any downstream calculation.
   cadence, camera layout).
 - **Burke et al. (2020)** — RNAAS 4 176 (`tess-point` package — the
   coordinate → sector/camera/CCD resolver used by Module B).
+- **Harris, Dragomir, Bachelet, Fausnaugh & Johnson (2026)** — ApJL 1005 L33
+  ([DOI 10.3847/2041-8213/ae7a50](https://iopscience.iop.org/article/10.3847/2041-8213/ae7a50)) —
+  TESS's first bound-planet microlensing detection (Gaia23bra). Their
+  pyLIMA joint TESS + Gaia fit sets the standard for breaking the
+  θ_E ↔ M_L degeneracy in TESS-only photometry. Their difference-image
+  photometry methodology, single-sector limitations, and Gaia-alerts +
+  Gaia G-band baseline strategy inform the caveats surfaced by the
+  Vetstar Microlensing pipeline (see §18).
 
 ---
+
+## 17. Observable parameters and predicted planet quantities
+
+The classifier's response includes an `observables` block (derived from
+the PSPL fit alone) and a `planet_predictions` block (fiducial-lens
+physical scales plus a planetary-anomaly detection floor). Both are
+rendered in the on-screen results panel and included in the PDF vetting
+report at `POST /api/microlensing/report`. Backend:
+`backend/app/microlensing.py::compute_observables` and
+`compute_planet_predictions`.
+
+### 17.1 Peak magnification, brightening, and FWHM
+
+At closest approach $u = u_0$ the intrinsic PSPL magnification is
+
+$$A_\mathrm{peak} = \frac{u_0^2 + 2}{u_0 \sqrt{u_0^2 + 4}}$$
+
+With blending, the aperture measures a blended peak
+
+$$A_\mathrm{obs,peak} = \frac{f_s \cdot A_\mathrm{peak} + f_b}{f_s + f_b}$$
+
+and the peak brightening in magnitudes is
+
+$$\Delta m = -2.5 \log_{10} A_\mathrm{obs,peak}$$
+
+The magnification full-width-at-half-maximum in days is obtained by
+inverting $A(u_\mathrm{half}) = (A_\mathrm{peak} + 1)/2$ for
+$u_\mathrm{half} \ge u_0$ (Paczyński's A is monotone decreasing in $u$
+for $u \ge u_0$), then
+
+$$\mathrm{FWHM} = 2 \, t_E \sqrt{u_\mathrm{half}^2 - u_0^2}$$
+
+The classifier solves this numerically by bisection on 80 iterations
+(convergence to $\sim 10^{-24}$ relative precision).
+
+### 17.2 Einstein-crossing duration and blend fraction
+
+The **Einstein-crossing duration** is the total time the source spent
+inside the Einstein ring ($u < 1$, magnification above the canonical
+$3/\sqrt{5} \approx 1.342$ threshold at $u = 1$):
+
+$$T_{u<1} = 2 \, t_E \sqrt{1 - u_0^2} \quad \text{when } u_0 < 1$$
+
+For $u_0 > 1$ the source never enters the ring and the duration is 0.
+The **source flux fraction** $g_\mathrm{s} = f_s / (f_s + f_b)$ and its
+complement (blend fraction) measure how much of the aperture flux
+comes from the lensed source vs. contaminating neighbours in the TESS
+21″ pixel footprint — a large blend depresses the observed
+$\Delta m$ relative to the intrinsic PSPL amplitude and is a major
+systematic in crowded fields.
+
+### 17.3 Fiducial-lens physical scales (θ_E, r_E, v_rel)
+
+Under fiducial bulge-lens priors — $M_L = 0.3\,M_\odot$,
+$D_L = 6\,\mathrm{kpc}$, $D_S = 8\,\mathrm{kpc}$ (Sumi et al. 2011
+median values) — the relative parallax is
+$\pi_\mathrm{rel} = 1\,\mathrm{AU}\,(1/D_L - 1/D_S)$, giving
+
+$$\theta_E = \sqrt{\kappa \, M_L \, \pi_\mathrm{rel}}$$
+
+with $\kappa = 8.144\,\mathrm{mas}/M_\odot$. The physical Einstein
+radius at the lens is $r_E = \theta_E \cdot D_L$ (in AU when
+$\theta_E$ is in mas and $D_L$ in kpc, by definition), and the
+transverse relative velocity is $v_\mathrm{rel} = r_E / t_E$.
+
+These scale as $\sqrt{M_L \pi_\mathrm{rel}}$, so a factor-of-2 shift in
+either input moves them by $<30\%$ — order-of-magnitude reliable
+without additional constraints.
+
+### 17.4 Planet-detection sensitivity floor
+
+A single-lens fit cannot detect a planet — that requires a **binary-lens
+fit** with a resolved caustic-crossing anomaly (Han & Gould 1997). What
+we CAN report is the sensitivity floor: the minimum planet-to-lens mass
+ratio $q_\mathrm{min}$ whose caustic anomaly would be resolvable on the
+current light curve given cadence. The planetary caustic anomaly
+duration for a mass ratio $q$ is
+
+$$\Delta t_\mathrm{anom} \approx 2 \, t_E \, \sqrt{q}$$
+
+Requiring $\Delta t_\mathrm{anom} \ge 2 \times \Delta t_\mathrm{cadence}$
+(so the anomaly spans at least two cadences and is unambiguous) gives
+
+$$q_\mathrm{min} \approx \left( \frac{\Delta t_\mathrm{cadence}}{t_E} \right)^{2}$$
+
+At the fiducial 1-hour effective cadence (TESS 2-min SPOC binned to
+match ~10-min FFI cadence typical for microlensing follow-up) and a
+$t_E = 5\,\mathrm{d}$ event, this yields $q_\mathrm{min} \sim 1.7
+\times 10^{-5}$ — corresponding to a planet mass floor of $\sim 1.7\,
+M_\oplus$ at the fiducial $M_L = 0.3\,M_\odot$. Longer events push the
+floor lower ($t_E = 30\,\mathrm{d}$ gives $q_\mathrm{min} \sim
+5\times 10^{-7}$).
+
+This is a **theoretical floor** — real detection also needs adequate
+SNR through the anomaly, a well-characterised baseline, and (for TESS)
+long-baseline Gaia photometry to lock down the geometry (see §18).
+
+---
+
+## 18. TESS-specific microlensing caveats (Harris et al. 2026)
+
+The Vetstar Microlensing pipeline's methodological caveats and best
+practices follow the first bound-planet microlensing detection in TESS
+data:
+
+**Harris, M., Dragomir, D., Bachelet, E., Fausnaugh, M. & Johnson, S.
+(2026), *TESS's First Bound Microlensing Planet — A Binary
+Microlensing Event Revealing a Planetary Companion toward the
+Galactic Plane*, ApJL 1005, L33.
+[DOI:10.3847/2041-8213/ae7a50](https://iopscience.iop.org/article/10.3847/2041-8213/ae7a50)**
+
+Their analysis of Gaia23bra combined TESS difference-image photometry
+(PSF-matched image-subtraction kernels — the same procedure Fausnaugh
+et al. 2023c developed for TESS transient photometry) with binned Gaia
+G-band alerts, then fit both jointly using `pyLIMA` (Bachelet et al.
+2017, 2024) with a uniform-source binary-lens (USBL) model.
+The joint fit yields a K-dwarf host with
+$M_L = 0.79^{+0.19}_{-0.17}\,M_\odot$ and a Jovian companion with
+$M_P = 1.63^{+0.42}_{-0.38}\,M_\mathrm{Jup}$ at projected separation
+$a_{\perp,\mathrm{min}} \approx 4.8\,\mathrm{AU}$.
+
+### 18.1 Why TESS-only fits are not enough
+
+Three findings from Harris et al. that inform how this pipeline
+qualifies TESS-only results:
+
+1. **Short single-sector baseline** — TESS observes each field for
+   $\sim 27\,\mathrm{d}$, comparable to a typical bulge-lens $t_E$.
+   The wings of the magnification profile often extend beyond the
+   sector, leaving the baseline poorly constrained and the fit
+   partly degenerate. The Coverage tool's `wings_in_window` flag
+   requires $t_0 \pm 1\cdot t_E$ inside the sector as a partial
+   mitigation, but sub-sector-baseline events remain systematically
+   worse-fit than long-baseline surveys.
+2. **21″ pixel scale** — the source is almost always blended with
+   nearby stars, biasing $f_s / f_b$. Harris et al. resolved this
+   with difference-image photometry against a reference stack; SPOC
+   PDCSAP photometry does not attempt this. Vetstar's classifier
+   fits blending as free parameters, but the result is
+   under-constrained without external source identification (e.g.
+   Gaia crossmatch).
+3. **Single-band photometry** — TESS is a broad-band imager. The
+   classical achromaticity test that distinguishes microlensing from
+   variables cannot be run on TESS alone. The classifier surfaces
+   this as an explicit `notes` entry on every fit.
+
+### 18.2 Best-practice recommendation
+
+For events that Vetstar's classifier flags as **microlensing** with
+high confidence, follow-up should include:
+
+- **Gaia baseline photometry** in the G band (Gaia Alerts pull, or
+  Gaia DR3 epoch photometry when available) — this doubles or triples
+  the baseline for typical bulge events, dramatically reducing the
+  $t_E \leftrightarrow u_0$ degeneracy.
+- **Difference-image photometry** on the TESS FFIs at the target's
+  centroid — SPOC PDCSAP dilutes the microlensing signal by including
+  the full pixel neighbourhood. Fausnaugh et al. (2023c) and Harris
+  et al. (2026) describe the standard workflow.
+- **Joint modelling** with `pyLIMA` (Bachelet et al. 2017) or an
+  equivalent — a single-lens fit is a starting point, but a
+  binary-lens (`USBL`) fit is required if you want to detect a
+  planetary companion.
+
+A future Vetstar iteration will surface a "Fetch Gaia G-band baseline"
+button in the classifier that queries the Gaia Alerts feed for events
+at the target coordinates, so the pipeline can support joint fits
+directly. Until then, the classifier's fit is a TESS-only starting
+point; treat verdict-microlensing candidates as *targets for follow-up*,
+not confirmed detections.
+
+---
+
+*To regenerate the equation PNGs after editing any LaTeX, run
 
 ## 15. Microlensing pipeline — Module A: model-comparison classifier
 
