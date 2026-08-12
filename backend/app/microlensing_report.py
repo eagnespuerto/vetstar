@@ -28,6 +28,14 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.flowables import HRFlowable
 
+from .pdf_fonts import ensure_dejavu_registered, font_bold, font_normal
+
+# Register on import so module-level FONT constants below resolve to DejaVu
+# rather than the Helvetica fallback for the first PDF built in this process.
+ensure_dejavu_registered()
+FONT_NORMAL = font_normal()
+FONT_BOLD = font_bold()
+
 
 INK = colors.HexColor("#0f172a")
 BAND = colors.HexColor("#1e293b")
@@ -70,7 +78,7 @@ def _fmt_with_err(val: Any, err: Any, nd: int = 5) -> str:
 
 def _table_style(has_header: bool = False, label_col: bool = True) -> TableStyle:
     cmds = [
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTNAME", (0, 0), (-1, -1), FONT_NORMAL),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TEXTCOLOR", (0, 0), (-1, -1), INK),
         ("GRID", (0, 0), (-1, -1), 0.4, GRID),
@@ -84,13 +92,13 @@ def _table_style(has_header: bool = False, label_col: bool = True) -> TableStyle
         cmds += [
             ("BACKGROUND", (0, 0), (-1, 0), BAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, STRIPE]),
         ]
     else:
         cmds += [("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, STRIPE])]
         if label_col:
-            cmds += [("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold")]
+            cmds += [("FONTNAME", (0, 0), (0, -1), FONT_BOLD)]
     return TableStyle(cmds)
 
 
@@ -114,14 +122,14 @@ def _header_footer(canvas, doc, title: str):
     canvas.setFillColor(BAND)
     canvas.rect(0, letter[1] - 0.55 * inch, letter[0], 0.55 * inch, fill=1, stroke=0)
     canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 12)
+    canvas.setFont(FONT_BOLD, 12)
     canvas.drawString(0.6 * inch, letter[1] - 0.35 * inch, title)
-    canvas.setFont("Helvetica", 8)
+    canvas.setFont(FONT_NORMAL, 8)
     canvas.drawRightString(letter[0] - 0.6 * inch, letter[1] - 0.35 * inch,
                            "Vetstar microlensing vetting report")
     # Footer band.
     canvas.setFillColor(colors.HexColor("#64748b"))
-    canvas.setFont("Helvetica", 8)
+    canvas.setFont(FONT_NORMAL, 8)
     canvas.drawString(0.6 * inch, 0.4 * inch,
                       datetime.now(timezone.utc).strftime("Generated %Y-%m-%d %H:%M UTC"))
     canvas.drawRightString(letter[0] - 0.6 * inch, 0.4 * inch,
@@ -153,12 +161,13 @@ def build_microlensing_pdf(result: Dict[str, Any],
     # ml_-prefixed names to avoid the alias-collision KeyError.
     styles.add(ParagraphStyle("ml_h2", parent=styles["Heading2"],
                               textColor=INK, fontSize=13, spaceAfter=6,
-                              fontName="Helvetica-Bold"))
+                              fontName=FONT_BOLD))
     styles.add(ParagraphStyle("ml_small", parent=styles["Normal"],
-                              textColor=INK, fontSize=9, leading=12))
+                              textColor=INK, fontSize=9, leading=12,
+                              fontName=FONT_NORMAL))
     styles.add(ParagraphStyle("ml_verdict", parent=styles["Normal"],
                               textColor=colors.white, fontSize=14,
-                              alignment=1, fontName="Helvetica-Bold",
+                              alignment=1, fontName=FONT_BOLD,
                               spaceBefore=4, spaceAfter=4))
 
     buf = io.BytesIO()

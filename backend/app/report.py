@@ -38,7 +38,15 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.flowables import HRFlowable
 
+from .pdf_fonts import ensure_dejavu_registered, font_bold, font_normal
 from .pipeline import VettingResult
+
+# Register DejaVu Sans on module import so the module-level FONT constants
+# below (and any TableStyle built at call time) resolve to the Unicode-
+# capable face — matching what microlensing_report.py does.
+ensure_dejavu_registered()
+FONT_NORMAL = font_normal()
+FONT_BOLD = font_bold()
 
 # ----------------------------------------------------------------------
 # Palette — one place, used everywhere
@@ -108,7 +116,7 @@ def _b64_image(b64: str, max_width=CONTENT_W, max_height=4.3 * inch, fallback_as
 # ----------------------------------------------------------------------
 def _table_style(has_header=False, label_col=True):
     cmds = [
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTNAME", (0, 0), (-1, -1), FONT_NORMAL),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TEXTCOLOR", (0, 0), (-1, -1), INK),
         ("GRID", (0, 0), (-1, -1), 0.4, GRID),
@@ -122,13 +130,13 @@ def _table_style(has_header=False, label_col=True):
         cmds += [
             ("BACKGROUND", (0, 0), (-1, 0), BAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, STRIPE]),
         ]
     else:
         cmds += [("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, STRIPE])]
         if label_col:
-            cmds += [("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold")]
+            cmds += [("FONTNAME", (0, 0), (0, -1), FONT_BOLD)]
     return TableStyle(cmds)
 
 
@@ -175,17 +183,17 @@ def _make_decorator(title_line, sub_line):
         canvas.setFillColor(BAND)
         canvas.rect(0, y, PAGE_W, band_h, stroke=0, fill=1)
         canvas.setFillColor(colors.white)
-        canvas.setFont("Helvetica-Bold", 11)
+        canvas.setFont(FONT_BOLD, 11)
         canvas.drawString(LMARGIN, y + 0.18 * inch, title_line)
         if sub_line:
-            canvas.setFont("Helvetica", 9)
+            canvas.setFont(FONT_NORMAL, 9)
             canvas.drawRightString(PAGE_W - RMARGIN, y + 0.19 * inch, sub_line)
         # Footer
         canvas.setStrokeColor(GRID)
         canvas.setLineWidth(0.5)
         canvas.line(LMARGIN, BMARGIN - 0.18 * inch, PAGE_W - RMARGIN, BMARGIN - 0.18 * inch)
         canvas.setFillColor(MUTED)
-        canvas.setFont("Helvetica", 8)
+        canvas.setFont(FONT_NORMAL, 8)
         canvas.drawString(LMARGIN, BMARGIN - 0.32 * inch, "Vetstar · TESS Vetting Studio")
         canvas.drawRightString(
             PAGE_W - RMARGIN, BMARGIN - 0.32 * inch, f"Page {doc.page}"
@@ -199,21 +207,31 @@ def _make_decorator(title_line, sub_line):
 # ----------------------------------------------------------------------
 def _build_styles():
     base = getSampleStyleSheet()
+    # fontName is set explicitly on every style; ParagraphStyle inherits
+    # from Heading1/BodyText which default to Helvetica, so we override
+    # here so DejaVu propagates through.
     return {
         "h1": ParagraphStyle("h1", parent=base["Heading1"], alignment=TA_CENTER,
-                             textColor=INK, fontSize=18, spaceAfter=2),
+                             textColor=INK, fontSize=18, spaceAfter=2,
+                             fontName=FONT_BOLD),
         "h2": ParagraphStyle("h2", parent=base["Heading2"], alignment=TA_LEFT,
-                             textColor=BAND, fontSize=12.5, spaceBefore=10, spaceAfter=0),
+                             textColor=BAND, fontSize=12.5, spaceBefore=10, spaceAfter=0,
+                             fontName=FONT_BOLD),
         "h3": ParagraphStyle("h3", parent=base["Heading3"], alignment=TA_LEFT,
-                             textColor=INK, fontSize=10.5, spaceBefore=6, spaceAfter=2),
+                             textColor=INK, fontSize=10.5, spaceBefore=6, spaceAfter=2,
+                             fontName=FONT_BOLD),
         "body": ParagraphStyle("body", parent=base["BodyText"], textColor=INK,
-                               fontSize=9.5, leading=13, spaceAfter=3),
+                               fontSize=9.5, leading=13, spaceAfter=3,
+                               fontName=FONT_NORMAL),
         "center": ParagraphStyle("center", parent=base["BodyText"], alignment=TA_CENTER,
-                                 textColor=MUTED, fontSize=9, spaceAfter=2),
+                                 textColor=MUTED, fontSize=9, spaceAfter=2,
+                                 fontName=FONT_NORMAL),
         "verdict": ParagraphStyle("verdict", parent=base["Heading1"], alignment=TA_CENTER,
-                                  fontSize=14, textColor=ACCENT, spaceBefore=4, spaceAfter=2),
+                                  fontSize=14, textColor=ACCENT, spaceBefore=4, spaceAfter=2,
+                                  fontName=FONT_BOLD),
         "caption": ParagraphStyle("caption", parent=base["BodyText"], alignment=TA_CENTER,
-                                  textColor=MUTED, fontSize=8, spaceBefore=2, spaceAfter=8),
+                                  textColor=MUTED, fontSize=8, spaceBefore=2, spaceAfter=8,
+                                  fontName=FONT_NORMAL),
     }
 
 
