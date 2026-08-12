@@ -866,6 +866,7 @@ POST /api/microlensing/report                 {result, metadata?, plot_png_base6
 POST /api/microlensing/gaia_alert_lightcurve  {alert_id}                             → pulls a Gaia Alerts G-band CSV (e.g. Gaia23bra) and returns {time_jd, mag, mag_err, mag_err_reported, n_points, source_url} with Kruszyńska+2022-approximated errors
 GET  /api/microlensing/gaia_alerts_near       ?ra=&dec=&radius_arcsec=&microlensing_only= → cone-search the Gaia Alerts master index (cached), returns nearby published alerts with class + date + separation
 POST /api/microlensing/fit_joint              {tess_time, tess_flux, tess_flux_err, gaia_time_jd, gaia_mag, gaia_mag_err, window, t0_guess} → joint TESS + Gaia PSPL fit (shared t0/tE/u0, per-band f_s/f_b), returns per-band χ², combined BIC, and observables/planet_predictions from the joint fit — the Harris et al. 2026 workflow
+POST /api/microlensing/ffi_cutout             {ra, dec, sector?, tic_id?, size_px?, gaia_mag_limit?, gaia_max_sources?} → TESScut FFI median-stack cutout + Gaia DR3 catalog overlay inset (sources sized by G-band magnitude, target crosshair, source_id + separation table) — auto-fetches in the Classifier when target coords + sector are known
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
 ```
@@ -898,6 +899,7 @@ vetstar/
 │   │   ├── microlensing_coverage.py    (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
 │   │   ├── microlensing_report.py      PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
 │   │   ├── gaia_photometry.py          Gaia Alerts CSV fetcher + cone search + Kruszyńska+2022 error inflation (powers the joint TESS+Gaia fit)
+│   │   ├── microlensing_ffi.py         TESScut FFI cutout + Gaia DR3 catalog overlay (for source-blending diagnosis in 21″ pixels)
 │   │   ├── tess_sector_dates.py        Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
 │   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt

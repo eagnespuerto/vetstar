@@ -30,6 +30,7 @@ from .microlensing import (
     analyze_event_joint as microlensing_analyze_event_joint,
 )
 from .microlensing_report import build_microlensing_pdf
+from .microlensing_ffi import make_ffi_gaia_cutout
 from .gaia_photometry import (
     fetch_alert_lightcurve as gaia_fetch_alert_lightcurve,
     search_alerts_near as gaia_search_alerts_near,
@@ -2147,6 +2148,36 @@ def api_microlensing_lightcurve_by_coords(req: MicrolensingLightcurveByCoordsReq
     )
 
 
+class MicrolensingFfiCutoutRequest(BaseModel):
+    ra: float
+    dec: float
+    sector: Optional[int] = None
+    tic_id: Optional[int] = None
+    size_px: int = 15
+    gaia_mag_limit: float = 20.0
+    gaia_max_sources: int = 40
+
+
+@app.post("/api/microlensing/ffi_cutout")
+def api_microlensing_ffi_cutout(req: MicrolensingFfiCutoutRequest):
+    """TESScut FFI cutout + Gaia DR3 overlay for source-blending diagnosis."""
+    result = make_ffi_gaia_cutout(
+        ra=req.ra, dec=req.dec,
+        sector=req.sector, tic_id=req.tic_id,
+        size_px=req.size_px,
+        gaia_mag_limit=req.gaia_mag_limit,
+        gaia_max_sources=req.gaia_max_sources,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=("No TESScut cutout produced. Possible causes: coords "
+                    "outside all TESS sectors, MAST/TESScut temporary failure, "
+                    "or sector not yet public."),
+        )
+    return result
+
+
 @app.post("/api/microlensing/coverage")
 async def api_microlensing_coverage(
     file: UploadFile = File(...),
@@ -2171,13 +2202,15 @@ class MicrolensingReportRequest(BaseModel):
     """Payload for the microlensing PDF report endpoint.
 
     Accepts a fit result dict verbatim (as returned by /api/microlensing/fit)
-    plus optional metadata (event_id, TIC, coords, sector) and an optional
-    plot PNG (base64, no data-URL prefix) to embed. The endpoint doesn't
+    plus optional metadata (event_id, TIC, coords, sector) and two optional
+    plot PNGs (base64, no data-URL prefix) to embed: the classifier
+    light-curve overlay and the FFI + Gaia cutout. The endpoint doesn't
     re-fit — the client already has the numbers, we just render them.
     """
     result: dict
     metadata: Optional[dict] = None
     plot_png_base64: Optional[str] = None
+    ffi_png_base64: Optional[str] = None
 
 
 @app.post("/api/microlensing/report")
@@ -2187,6 +2220,7 @@ def api_microlensing_report(req: MicrolensingReportRequest):
             result=req.result,
             metadata=req.metadata or {},
             plot_png_b64=req.plot_png_base64,
+            ffi_png_b64=req.ffi_png_base64,
         )
     except KeyError as e:
         raise HTTPException(status_code=400,

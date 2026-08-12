@@ -581,6 +581,175 @@ def compute_planet_predictions(pspl_params: Dict[str, float]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ExoFOP-style planet-parameter rows for microlensing
+# ---------------------------------------------------------------------------
+#
+# Mirrors observables.exofop_param_rows for the Transit tab, but scoped to
+# what a single-lens microlensing fit CAN say about the host + planet.
+# Anything the fit doesn't constrain is returned as `None` so the frontend
+# can render it as "—" without pretending we measured it.
+#
+# What we can honestly report (all under fiducial bulge-lens priors —
+# M_L = 0.79 M_sun following Harris et al. 2026's Gaia23bra lens, D_L = 6 kpc,
+# D_S = 8 kpc):
+#   • Peak time t0 in BTJD and BJD
+#   • Einstein timescale tE (days)
+#   • Impact parameter u0
+#   • Peak brightening Δm (mag)
+#   • Physical Einstein radius r_E (AU)
+#   • Projected planet-lens separation a_perp ≈ s · r_E for s ≈ 1
+#   • Host (lens) star radius R_L under a mass-radius relation for the
+#     fiducial K-dwarf lens
+#   • Planet mass floor from the anomaly-detection sensitivity limit
+#   • Planet radius from Chen & Kipping 2017 mass-radius forecaster
+#   • Rp / R★ ratio
+#
+# What we deliberately do NOT report from a single-lens fit:
+#   • Orbital period / eccentricity / inclination — un-derivable from a
+#     single caustic event without radial velocity follow-up.
+#   • Equilibrium temperature / insolation — needs stellar luminosity.
+#   • Transit-analogue depth / duration — not applicable.
+
+_L_TO_R_SOLAR_MAIN_SEQUENCE = (
+    # (M_L in M_sun, R_L in R_sun) waypoints for main-sequence stars.
+    # Rough fit — Pecaut & Mamajek (2013) ASCII table, dwarf sequence.
+    (0.10, 0.13),  # M8V
+    (0.20, 0.24),  # M5V
+    (0.30, 0.30),  # M4V
+    (0.50, 0.46),  # M0V
+    (0.70, 0.68),  # K5V
+    (0.80, 0.78),  # K3V (Harris+2026 lens class)
+    (1.00, 1.00),  # G2V (Sun)
+    (1.30, 1.31),  # F5V
+)
+
+
+def _radius_from_mass_main_sequence(m_solar: float) -> float:
+    """Piecewise-linear interpolation on the Pecaut & Mamajek dwarf sequence.
+    Extrapolates linearly at the ends — treat with caution outside 0.1–1.3 M☉."""
+    for i in range(len(_L_TO_R_SOLAR_MAIN_SEQUENCE) - 1):
+        m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[i]
+        m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[i + 1]
+        if m0 <= m_solar <= m1:
+            f = (m_solar - m0) / (m1 - m0)
+            return r0 + f * (r1 - r0)
+    if m_solar < _L_TO_R_SOLAR_MAIN_SEQUENCE[0][0]:
+        m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[0]
+        m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[1]
+        slope = (r1 - r0) / (m1 - m0)
+        return max(0.05, r0 + slope * (m_solar - m0))
+    m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[-2]
+    m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[-1]
+    slope = (r1 - r0) / (m1 - m0)
+    return r1 + slope * (m_solar - m1)
+
+
+def _chen_kipping_planet_radius_earth(mp_earth: float) -> float:
+    """Chen & Kipping (2017) forecaster — Terran regime + Neptunian break at
+    2.04 M⊕. Rough single-branch approximation for the summary; the fit's
+    error bar dominates anyway.
+
+    Terran (M < 2.04 M⊕):  R = 1.008 · M^0.279
+    Neptunian (2.04 M⊕ ≤ M < 132 M⊕): R = 0.808 · M^0.589
+    Jovian (M ≥ 132 M⊕):   R ≈ 17.74 · M^-0.044 · R_earth (nearly constant ~1 R_Jup)
+    """
+    if mp_earth <= 0 or not math.isfinite(mp_earth):
+        return float("nan")
+    if mp_earth < 2.04:
+        return 1.008 * (mp_earth ** 0.279)
+    if mp_earth < 132.0:
+        return 0.808 * (mp_earth ** 0.589)
+    return 17.74 * (mp_earth ** -0.044)
+
+
+_R_EARTH_KM = 6378.137
+_R_SUN_KM = 6.957e5
+
+
+def compute_exofop_planet_rows(
+    observables: Optional[dict],
+    planet_predictions: Optional[dict],
+    metadata: Optional[dict] = None,
+) -> list:
+    """Return an ordered list of {label, value, unit, required} rows.
+
+    Mirrors observables.exofop_param_rows for the Transit tab in shape and
+    field naming (`Radius`, `Mass`, `Semi-major Axis`, `R_planet/R_star`),
+    but scoped to microlensing-derivable quantities. Fields the fit
+    cannot constrain come back with value=None.
+    """
+    obs = observables or {}
+    pp = planet_predictions or {}
+    meta = metadata or {}
+
+    m_lens_solar = pp.get("fiducial_lens_mass_solar")
+    r_lens_solar = (_radius_from_mass_main_sequence(m_lens_solar)
+                     if m_lens_solar is not None and math.isfinite(m_lens_solar)
+                     else None)
+
+    mp_earth = pp.get("planet_mass_floor_m_earth_fiducial")
+    mp_jup = pp.get("planet_mass_floor_m_jupiter_fiducial")
+    rp_earth = (_chen_kipping_planet_radius_earth(mp_earth)
+                 if mp_earth is not None and math.isfinite(mp_earth) else None)
+
+    # Rp/R★ dimensionless ratio (both converted through R_earth / R_sun km).
+    ratio = None
+    if rp_earth is not None and r_lens_solar is not None and r_lens_solar > 0:
+        ratio = (rp_earth * _R_EARTH_KM) / (r_lens_solar * _R_SUN_KM)
+
+    # Projected planet-lens separation. For s = 1 (planet at Einstein ring)
+    # this is exactly r_E. We do NOT report an absolute semi-major axis
+    # without an orbital inclination assumption — a_perp is what
+    # microlensing directly measures.
+    a_perp = pp.get("einstein_radius_au_fiducial")
+
+    rows = [
+        {"label": "Peak time t0", "unit": "BTJD", "required": True,
+         "value": obs.get("t0_btjd")},
+        {"label": "Peak time t0", "unit": "BJD", "required": True,
+         "value": obs.get("t0_bjd")},
+        {"label": "Einstein timescale tE", "unit": "days", "required": True,
+         "value": obs.get("einstein_timescale_d")},
+        {"label": "Impact parameter u0", "unit": "", "required": True,
+         "value": obs.get("impact_parameter_u0")},
+        {"label": "Peak brightening", "unit": "mag", "required": False,
+         "value": obs.get("peak_brightening_mag")},
+        {"label": "Peak magnification A_max", "unit": "", "required": False,
+         "value": obs.get("peak_magnification")},
+        {"label": "Source flux fraction", "unit": "", "required": False,
+         "value": obs.get("source_flux_fraction")},
+        # --- host + planet quantities under fiducial bulge-lens priors ---
+        {"label": "Host (lens) mass M_L (fiducial)", "unit": "M_Sun", "required": False,
+         "value": m_lens_solar},
+        {"label": "Host (lens) radius R_star (fiducial)", "unit": "R_Sun", "required": False,
+         "value": r_lens_solar},
+        {"label": "Physical Einstein radius r_E", "unit": "AU", "required": False,
+         "value": pp.get("einstein_radius_au_fiducial")},
+        {"label": "Projected separation a_perp (s = 1)", "unit": "AU", "required": False,
+         "value": a_perp},
+        {"label": "Semi-major Axis (a_perp minimum)", "unit": "AU", "required": False,
+         "value": a_perp},  # microlensing measures projected — cite as lower bound
+        {"label": "Planet mass floor", "unit": "M_Earth", "required": False,
+         "value": mp_earth},
+        {"label": "Planet mass floor", "unit": "M_Jup", "required": False,
+         "value": mp_jup},
+        {"label": "Planet radius (Chen & Kipping)", "unit": "R_Earth", "required": False,
+         "value": rp_earth},
+        {"label": "R_planet/R_star", "unit": "", "required": False,
+         "value": ratio},
+        {"label": "Planet-to-lens mass ratio q_min", "unit": "", "required": False,
+         "value": pp.get("planet_q_min_detectable")},
+        # --- Explicitly-unmeasurable-from-single-lens rows, listed as None ---
+        {"label": "Orbital Period", "unit": "days", "required": False, "value": None},
+        {"label": "Eccentricity", "unit": "", "required": False, "value": None},
+        {"label": "Inclination", "unit": "deg", "required": False, "value": None},
+        {"label": "Equilibrium Temperature", "unit": "K", "required": False, "value": None},
+        {"label": "Velocity Semi-amplitude", "unit": "m/s", "required": False, "value": None},
+    ]
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Top-level analyzer
 # ---------------------------------------------------------------------------
 
@@ -705,6 +874,7 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
 
     observables = compute_observables(pspl.params, pspl.param_err) if pspl.success else None
     planet_predictions = compute_planet_predictions(pspl.params) if pspl.success else None
+    exofop_rows = compute_exofop_planet_rows(observables, planet_predictions) if pspl.success else None
 
     return _json_safe({
         "verdict": verdict,
@@ -723,6 +893,7 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
         "symmetry_score": sym,
         "observables": observables,
         "planet_predictions": planet_predictions,
+        "exofop_rows": exofop_rows,
         "notes": notes,
     })
 
@@ -834,6 +1005,7 @@ def analyze_event_joint(
     }
     observables = compute_observables(shared, shared_err) if joint.success else None
     planet_predictions = compute_planet_predictions(shared) if joint.success else None
+    exofop_rows = compute_exofop_planet_rows(observables, planet_predictions) if joint.success else None
 
     notes = [
         "Joint TESS + Gaia fit: shared geometric params (t0, tE, u0), "
@@ -887,5 +1059,6 @@ def analyze_event_joint(
         },
         "observables": observables,
         "planet_predictions": planet_predictions,
+        "exofop_rows": exofop_rows,
         "notes": notes,
     })

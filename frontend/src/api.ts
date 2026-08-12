@@ -533,6 +533,13 @@ export interface MicrolensingPlanetPredictions {
   planet_mass_floor_m_jupiter_fiducial: number | null;
 }
 
+export interface ExofopRow {
+  label: string;
+  value: number | null;
+  unit: string;
+  required: boolean;
+}
+
 export interface MicrolensingFitResponse {
   verdict: "microlensing" | "flare" | "null" | "ambiguous";
   confidence: number;
@@ -553,6 +560,7 @@ export interface MicrolensingFitResponse {
   symmetry_score: number | null;
   observables: MicrolensingObservables | null;
   planet_predictions: MicrolensingPlanetPredictions | null;
+  exofop_rows: ExofopRow[] | null;
   notes: string[];
 }
 
@@ -662,12 +670,13 @@ export async function fitMicrolensingJoint(payload: {
   return r.json();
 }
 
-/** Ship a fit result + optional metadata + optional plot PNG to the backend
+/** Ship a fit result + optional metadata + optional plot PNGs to the backend
  *  and receive back a rendered PDF vetting report as a Blob. */
 export async function fetchMicrolensingReport(
   result: MicrolensingFitResponse,
   metadata?: Record<string, unknown> | null,
   plotPngBase64?: string | null,
+  ffiPngBase64?: string | null,
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/microlensing/report`, {
     method: "POST",
@@ -676,10 +685,49 @@ export async function fetchMicrolensingReport(
       result,
       metadata: metadata ?? null,
       plot_png_base64: plotPngBase64 ?? null,
+      ffi_png_base64: ffiPngBase64 ?? null,
     }),
   });
   if (!r.ok) throw new Error(`Microlensing report failed (${r.status}): ${await r.text()}`);
   return r.blob();
+}
+
+// ---- FFI cutout + Gaia overlay ------------------------------------------
+
+export interface FfiGaiaSource {
+  source_id: number;
+  ra: number;
+  dec: number;
+  phot_g_mean_mag: number | null;
+  separation_arcsec: number;
+}
+
+export interface FfiCutoutResponse {
+  image: string;                 // base64 PNG (overlay-rendered)
+  base_image: string;            // base64 PNG (no overlay)
+  size_px: number;
+  n_frames: number | null;
+  sector: number | null;
+  gaia_sources: FfiGaiaSource[];
+  gaia_n_sources: number;
+  gaia_fov_radius_arcsec: number;
+}
+
+export async function fetchMicrolensingFfi(payload: {
+  ra: number; dec: number;
+  sector?: number | null;
+  tic_id?: number | null;
+  size_px?: number;
+  gaia_mag_limit?: number;
+  gaia_max_sources?: number;
+}): Promise<FfiCutoutResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/ffi_cutout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`FFI cutout failed (${r.status}): ${await r.text()}`);
+  return r.json();
 }
 
 // ----------------------------------------------------------------------------

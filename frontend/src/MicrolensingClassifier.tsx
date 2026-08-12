@@ -10,16 +10,31 @@ import {
   type SectorInfo,
 } from "./api";
 import { ShareToImgbbButton } from "./ShareButton";
+import ExofopBulkPanel, { type ExofopImage } from "./ExofopBulkPanel";
 import { buildExofopPackage, svgToPng } from "./microlensingExport";
 import {
   fetchGaiaAlertLightcurve,
+  fetchMicrolensingFfi,
   fetchMicrolensingReport,
   fitMicrolensingJoint,
   searchGaiaAlertsNear,
+  type ExofopRow,
+  type FfiCutoutResponse,
   type GaiaAlertEntry,
   type GaiaLightcurve,
   type JointFitResponse,
 } from "./api";
+import {
+  CyclingLoader,
+  COORD_LC_MSGS,
+  FFI_CUTOUT_MSGS,
+  GAIA_FETCH_MSGS,
+  GAIA_SEARCH_MSGS,
+  MICROLENSING_FIT_MSGS,
+  MICROLENSING_JOINT_MSGS,
+  PDF_MSGS,
+  TIC_LC_MSGS,
+} from "./Loaders";
 
 // Prefill payload from the Coverage table's "Analyze in Module A" action.
 // The LC itself isn't auto-fetched — that would need a full MAST coord→TIC
@@ -307,6 +322,11 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
     }
   };
 
+  // FFI cutout + Gaia overlay (auto-fetched when target coords + sector known).
+  const [ffiData, setFfiData] = useState<FfiCutoutResponse | null>(null);
+  const [ffiBusy, setFfiBusy] = useState(false);
+  const [ffiErr, setFfiErr] = useState<string | null>(null);
+
   // Gaia baseline + joint fit state (Harris+2026 workflow).
   const [gaiaLc, setGaiaLc] = useState<GaiaLightcurve | null>(null);
   const [gaiaBusy, setGaiaBusy] = useState(false);
@@ -374,6 +394,27 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
   const selWindow = sel
     ? { t_start: Math.min(sel.a, sel.b), t_end: Math.max(sel.a, sel.b) }
     : null;
+
+  // Auto-fetch FFI cutout when we have coords + sector.
+  const ffiFetchKey = `${lastAutoload?.resolved_ra ?? prefill?.ra ?? ""}` +
+    `|${lastAutoload?.resolved_dec ?? prefill?.dec ?? ""}` +
+    `|${lastAutoload?.sector ?? prefill?.sector ?? ""}` +
+    `|${lastAutoload?.tic_id ?? ""}`;
+  useEffect(() => {
+    const ra = lastAutoload?.resolved_ra ?? prefill?.ra;
+    const dec = lastAutoload?.resolved_dec ?? prefill?.dec;
+    const sector = lastAutoload?.sector ?? prefill?.sector ?? null;
+    const tic_id = lastAutoload?.tic_id ?? null;
+    if (ra == null || dec == null) return;
+    setFfiBusy(true); setFfiErr(null); setFfiData(null);
+    let cancelled = false;
+    fetchMicrolensingFfi({ ra, dec, sector, tic_id })
+      .then((r) => { if (!cancelled) setFfiData(r); })
+      .catch((e) => { if (!cancelled) setFfiErr(e.message || String(e)); })
+      .finally(() => { if (!cancelled) setFfiBusy(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ffiFetchKey]);
 
   // ---- Gaia handlers ----
   const loadGaiaByAlertId = async (alertId: string) => {
@@ -465,6 +506,10 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
         lcLabel={lc?.label}
         lcPoints={lc?.time.length ?? 0}
       />
+
+      {(ffiData || ffiBusy || ffiErr) && (
+        <FfiCutoutSection ffiData={ffiData} busy={ffiBusy} err={ffiErr} />
+      )}
 
       <GaiaLoader
         gaiaLc={gaiaLc}
@@ -573,18 +618,22 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
             <button
               onClick={runFit}
               disabled={!selWindow || fitting}
-              className="px-4 py-1.5 text-sm font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300"
+              className="px-4 py-1.5 text-sm font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300 min-w-[10rem]"
             >
-              {fitting ? "Fitting…" : "Fit PSPL / flare / null"}
+              {fitting
+                ? <CyclingLoader messages={MICROLENSING_FIT_MSGS} className="text-xs" />
+                : "Fit PSPL / flare / null"}
             </button>
             {gaiaLc && (
               <button
                 onClick={runJointFit}
                 disabled={!selWindow || jointBusy}
-                className="px-4 py-1.5 text-sm font-semibold bg-fuchsia-600 text-white rounded hover:bg-fuchsia-700 disabled:bg-slate-300"
+                className="px-4 py-1.5 text-sm font-semibold bg-fuchsia-600 text-white rounded hover:bg-fuchsia-700 disabled:bg-slate-300 min-w-[11rem]"
                 title="Joint TESS + Gaia PSPL fit (shared t0/tE/u0, per-band blending). Harris et al. 2026."
               >
-                {jointBusy ? "Joint fitting…" : "Fit joint (TESS + Gaia)"}
+                {jointBusy
+                  ? <CyclingLoader messages={MICROLENSING_JOINT_MSGS} className="text-xs" />
+                  : "Fit joint (TESS + Gaia)"}
               </button>
             )}
             {selWindow && (
@@ -623,6 +672,7 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
               residualModel={residualModel}
               setResidualModel={setResidualModel}
               svgRef={svgRef}
+              ffiPng={ffiData?.image ?? null}
               exportMetadata={{
                 event_id: prefill?.event_id ?? null,
                 tic_id: lastAutoload?.tic_id ?? null,
@@ -685,11 +735,11 @@ function PrefillBanner({
             <button
               onClick={onAutoload}
               disabled={autoloadBusy}
-              className="px-3 py-1 text-xs font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300"
+              className="px-3 py-1 text-xs font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300 min-w-[11rem]"
               title={`Resolve RA=${prefill.ra.toFixed(4)}, Dec=${prefill.dec.toFixed(4)} → nearest TIC and download the light curve from MAST`}
             >
               {autoloadBusy
-                ? "Fetching from MAST…"
+                ? <CyclingLoader messages={COORD_LC_MSGS} className="text-[10px]" />
                 : (lcLoaded ? "Re-fetch from MAST" : "Fetch TESS light curve")}
             </button>
           )}
@@ -836,9 +886,11 @@ function DataLoader({
           <button
             onClick={runFetch}
             disabled={!ticInput || fetchBusy}
-            className="px-3 py-1 text-xs font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300"
+            className="px-3 py-1 text-xs font-semibold bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-300 min-w-[9rem]"
           >
-            {fetchBusy ? "Fetching…" : "Fetch light curve"}
+            {fetchBusy
+              ? <CyclingLoader messages={TIC_LC_MSGS} className="text-[10px]" />
+              : "Fetch light curve"}
           </button>
         </div>
         {sectorErr && (
@@ -997,7 +1049,7 @@ const VERDICT_STYLE: Record<string, string> = {
 
 function ResultsPanel({
   result, visible, setVisible, residualModel, setResidualModel,
-  svgRef, exportMetadata,
+  svgRef, ffiPng, exportMetadata,
 }: {
   result: MicrolensingFitResponse;
   visible: Record<ModelKey, boolean>;
@@ -1005,6 +1057,7 @@ function ResultsPanel({
   residualModel: ModelKey;
   setResidualModel: (m: ModelKey) => void;
   svgRef: React.RefObject<SVGSVGElement>;
+  ffiPng: string | null;
   exportMetadata: {
     event_id: string | null;
     tic_id: number | null;
@@ -1034,6 +1087,7 @@ function ResultsPanel({
       <ExportToolbar
         result={result}
         svgRef={svgRef}
+        ffiPng={ffiPng}
         exportMetadata={exportMetadata}
       />
 
@@ -1125,6 +1179,12 @@ function ResultsPanel({
         <PlanetPredictionsPanel pp={result.planet_predictions} />
       )}
 
+      {/* ExoFOP planet parameters — microlensing-derivable subset, mirrors
+          the transit tab's ExoFOP TOI parameters block in shape + naming. */}
+      {result.exofop_rows && result.exofop_rows.length > 0 && (
+        <ExofopPlanetParamsPanel rows={result.exofop_rows} />
+      )}
+
       {/* Symmetry + notes */}
       <section className="grid md:grid-cols-2 gap-3 text-xs">
         <div className="rounded border border-slate-200 bg-slate-50 p-2">
@@ -1177,10 +1237,11 @@ function ParamStat({ label, value, err }: { label: string; value: number; err: n
 }
 
 function ExportToolbar({
-  result, svgRef, exportMetadata,
+  result, svgRef, ffiPng, exportMetadata,
 }: {
   result: MicrolensingFitResponse;
   svgRef: React.RefObject<SVGSVGElement>;
+  ffiPng: string | null;
   exportMetadata: {
     event_id: string | null;
     tic_id: number | null;
@@ -1226,7 +1287,7 @@ function ExportToolbar({
         try { png = await svgToPng(svgRef.current, 2); setPngB64(png); }
         catch { png = null; }
       }
-      const blob = await fetchMicrolensingReport(result, exportMetadata, png);
+      const blob = await fetchMicrolensingReport(result, exportMetadata, png, ffiPng);
       const url = URL.createObjectURL(blob);
       const stem = ([
         exportMetadata.event_id,
@@ -1301,27 +1362,75 @@ function ExportToolbar({
       <button
         onClick={downloadPdf}
         disabled={pdfBusy}
-        className="px-2 py-1 rounded bg-sky-700 hover:bg-sky-800 text-white font-medium disabled:bg-slate-300"
-        title="Generate a PDF vetting report — verdict, observables, planet predictions, model comparison, and the plot"
+        className="px-2 py-1 rounded bg-sky-700 hover:bg-sky-800 text-white font-medium disabled:bg-slate-300 min-w-[9rem]"
+        title="Generate a PDF vetting report — verdict, observables, planet predictions, ExoFOP rows, FFI + Gaia overlay, and the plot"
       >
-        {pdfBusy ? "rendering PDF…" : "📄 Download PDF report"}
+        {pdfBusy
+          ? <CyclingLoader messages={PDF_MSGS} className="text-[10px]" />
+          : "📄 Download PDF report"}
       </button>
 
-      {/* ExoFOP-style ZIP */}
+      {/* Analysis bundle — plot + LC data + full JSON + notes (not the same
+          format as ExoFOP-TESS bulk upload; that's the separate panel below). */}
       <button
         onClick={downloadZip}
         disabled={zipBusy}
-        className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-medium disabled:bg-slate-300"
-        title="Download a ZIP with the fit summary, windowed light curve, full JSON, and plot PNG — ready to attach to an ExoFOP note"
+        className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-medium disabled:bg-slate-300 min-w-[9rem]"
+        title="ZIP with summary.csv, lightcurve_windowed.csv, fit_full.json, notes.md, and the plot PNG — for local archiving and reproducibility"
       >
-        {zipBusy ? "packaging…" : "⬇ Download ExoFOP package"}
+        {zipBusy ? "packaging…" : "⬇ Analysis bundle"}
       </button>
 
       {renderErr && <span className="text-red-700">plot render: {renderErr}</span>}
       {zipErr && <span className="text-red-700">export: {zipErr}</span>}
       {pdfErr && <span className="text-red-700">PDF: {pdfErr}</span>}
+
+      {/* Real ExoFOP-TESS bulk-upload panel — same convention as the transit
+          tab uses. Requires a TIC ID for the filename scheme. */}
+      {exportMetadata.tic_id != null && (
+        <div className="w-full mt-2">
+          <ExofopBulkPanel
+            ticId={exportMetadata.tic_id}
+            sector={exportMetadata.sector ?? undefined}
+            images={_buildExofopImages(pngB64, ffiPng)}
+            title="⬇ Build ExoFOP-TESS bulk-upload ZIP (transit-tab convention)"
+            caption={
+              <p className="text-slate-500 mt-2">
+                Bundles the microlensing fit plot + FFI/Gaia cutout as
+                <code> TIC{`{id}`}O-xxYYYYMMDD.slug.png</code> inside a
+                <code> xxYYYYMMDD-nnn.zip</code> with a matching
+                <code> .txt</code> descriptor — the same
+                <a
+                  className="text-blue-600 hover:underline mx-1"
+                  href="https://exofop.ipac.caltech.edu/tess/script_upload_help.php"
+                  target="_blank" rel="noopener noreferrer"
+                >
+                  ExoFOP-TESS bulk file upload
+                </a>
+                convention the Transit tab uses. Initials + data tag are
+                remembered between runs.
+              </p>
+            }
+          />
+        </div>
+      )}
     </section>
   );
+}
+
+/** Assemble the ExofopBulkPanel image list — classifier plot first (if
+ *  rasterised), FFI+Gaia cutout second (if fetched). Both are optional. */
+function _buildExofopImages(plotPng: string | null, ffiPng: string | null): ExofopImage[] {
+  const out: ExofopImage[] = [];
+  if (plotPng) {
+    out.push({ key: "microlensing-lc-fit", label: "Microlensing PSPL/flare/null overlay",
+                b64: plotPng, code: "O" });
+  }
+  if (ffiPng) {
+    out.push({ key: "ffi-gaia-cutout", label: "TESScut FFI + Gaia DR3 overlay",
+                b64: ffiPng, code: "O" });
+  }
+  return out;
 }
 
 // ============================================================================
@@ -1404,6 +1513,68 @@ function PlanetPredictionsPanel({ pp }: { pp: NonNullable<MicrolensingFitRespons
 // Gaia loader + joint-fit results
 // ============================================================================
 
+function FfiCutoutSection({
+  ffiData, busy, err,
+}: {
+  ffiData: FfiCutoutResponse | null;
+  busy: boolean;
+  err: string | null;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <h3 className="font-semibold text-slate-800">
+          TESScut FFI + Gaia DR3 overlay
+        </h3>
+        <p className="text-xs text-slate-500">
+          Median-stacked cutout of the TESS 21″ pixels around the target,
+          with catalog neighbours plotted so you can eyeball blending.
+        </p>
+      </div>
+      {busy && (
+        <div className="rounded bg-blue-50 border border-blue-200 p-2 text-xs text-blue-800">
+          <CyclingLoader messages={FFI_CUTOUT_MSGS} />
+        </div>
+      )}
+      {err && !busy && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+          FFI cutout: {err}
+        </p>
+      )}
+      {ffiData && (
+        <div className="flex flex-wrap gap-4">
+          <img
+            src={`data:image/png;base64,${ffiData.image}`}
+            alt="TESS FFI cutout with Gaia overlay"
+            className="max-w-md rounded border border-slate-200"
+          />
+          <div className="text-xs text-slate-700 flex-1 min-w-[15rem]">
+            <p><span className="text-slate-500">Sector:</span> <span className="font-mono">S{String(ffiData.sector ?? 0).padStart(3, "0")}</span></p>
+            <p><span className="text-slate-500">Frames stacked:</span> <span className="font-mono">{ffiData.n_frames ?? "—"}</span></p>
+            <p><span className="text-slate-500">FOV radius (Gaia):</span> <span className="font-mono">{ffiData.gaia_fov_radius_arcsec.toFixed(1)}″</span></p>
+            <p><span className="text-slate-500">Gaia sources in FOV:</span> <span className="font-mono">{ffiData.gaia_n_sources}</span></p>
+            {ffiData.gaia_sources.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
+                  brightest {Math.min(6, ffiData.gaia_sources.length)}
+                </summary>
+                <ul className="mt-1 space-y-0.5 font-mono text-[10px]">
+                  {ffiData.gaia_sources.slice(0, 6).map((s) => (
+                    <li key={s.source_id}>
+                      G={s.phot_g_mean_mag != null ? s.phot_g_mean_mag.toFixed(2) : "—"} ·
+                      Δ {s.separation_arcsec.toFixed(1)}″
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function GaiaLoader({
   gaiaLc, gaiaBusy, gaiaErr, nearbyAlerts, nearbyBusy, canSearchNearby,
   onFetchAlert, onSearchNearby, onClear,
@@ -1463,17 +1634,21 @@ function GaiaLoader({
         <button
           onClick={() => alertId && onFetchAlert(alertId)}
           disabled={!alertId || gaiaBusy}
-          className="px-3 py-1 text-xs font-semibold bg-fuchsia-600 text-white rounded hover:bg-fuchsia-700 disabled:bg-slate-300"
+          className="px-3 py-1 text-xs font-semibold bg-fuchsia-600 text-white rounded hover:bg-fuchsia-700 disabled:bg-slate-300 min-w-[8rem]"
         >
-          {gaiaBusy ? "Fetching…" : "Fetch Gaia LC"}
+          {gaiaBusy
+            ? <CyclingLoader messages={GAIA_FETCH_MSGS} className="text-[10px]" />
+            : "Fetch Gaia LC"}
         </button>
         <button
           onClick={onSearchNearby}
           disabled={!canSearchNearby || nearbyBusy}
-          className="px-3 py-1 text-xs font-medium bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 rounded border border-fuchsia-300 disabled:bg-slate-100 disabled:text-slate-400"
+          className="px-3 py-1 text-xs font-medium bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 rounded border border-fuchsia-300 disabled:bg-slate-100 disabled:text-slate-400 min-w-[10rem]"
           title={canSearchNearby ? "Search Gaia Alerts within 90″ of the current target" : "Load a TESS LC via TIC or the Coverage handoff first — coordinates are needed for the cone search."}
         >
-          {nearbyBusy ? "Searching…" : "Search near target coords"}
+          {nearbyBusy
+            ? <CyclingLoader messages={GAIA_SEARCH_MSGS} className="text-[10px]" />
+            : "Search near target coords"}
         </button>
       </div>
       {gaiaErr && (
@@ -1611,6 +1786,49 @@ function fmtErr(v: number | null | undefined, err: number | null | undefined, nd
   const base = fmt(v, nd);
   if (err == null || !Number.isFinite(err)) return base;
   return `${base} ± ${fmt(err, Math.min(nd, 4))}`;
+}
+
+function ExofopPlanetParamsPanel({ rows }: { rows: ExofopRow[] }) {
+  return (
+    <section>
+      <h5 className="text-sm font-semibold text-slate-700 mb-1">
+        ExoFOP planet parameters <span className="text-xs font-normal text-slate-500">(microlensing-derivable subset — mirrors the Transit tab)</span>
+      </h5>
+      <div className="overflow-x-auto rounded border border-slate-200 bg-white">
+        <table className="min-w-full text-xs">
+          <thead className="bg-slate-100 text-slate-700">
+            <tr>
+              <th className="px-2 py-1 text-left font-semibold">Parameter</th>
+              <th className="px-2 py-1 text-right font-semibold">Value</th>
+              <th className="px-2 py-1 text-left font-semibold">Unit</th>
+              <th className="px-2 py-1 text-center font-semibold">Req.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr
+                key={r.label + i}
+                className={
+                  (r.value == null ? "text-slate-400 " : "text-slate-800 ") +
+                  "border-t border-slate-100 hover:bg-slate-50"
+                }
+              >
+                <td className="px-2 py-1">{r.label}</td>
+                <td className="px-2 py-1 text-right font-mono">{fmt(r.value, 4)}</td>
+                <td className="px-2 py-1 font-mono text-slate-500">{r.unit || "—"}</td>
+                <td className="px-2 py-1 text-center">{r.required ? "*" : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-slate-500 mt-1 italic">
+        Fields marked <b>*</b> are required for an ExoFOP-TESS submission.
+        Rows shown as <b>—</b> are not derivable from a single-lens fit; they
+        need RV follow-up or a binary-lens caustic-crossing detection.
+      </p>
+    </section>
+  );
 }
 
 function ResidualPlot({

@@ -202,6 +202,53 @@ def test_analyze_response_includes_observables():
 
 
 # ---------------------------------------------------------------------------
+# ExoFOP planet rows — microlensing-derivable subset
+# ---------------------------------------------------------------------------
+
+def test_exofop_rows_report_required_fields():
+    from app.microlensing import (
+        compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
+    )
+    pspl = {"t0": 1220.0, "tE": 5.0, "u0": 0.15, "f_s": 1.0, "f_b": 0.0}
+    err = {"t0": 0.001, "tE": 0.02, "u0": 0.001, "f_s": 0.01, "f_b": 0.01}
+    obs = compute_observables(pspl, err)
+    pp = compute_planet_predictions(pspl)
+    rows = compute_exofop_planet_rows(obs, pp)
+    labels = [r["label"] for r in rows]
+    # The 4 required fields — matches the transit convention of marking t0/tE
+    # equivalents as required.
+    assert "Peak time t0" in labels
+    assert "Einstein timescale tE" in labels
+    assert "Impact parameter u0" in labels
+    # Radius-ratio row uses the same label the transit tab does — R_planet/R_star.
+    assert "R_planet/R_star" in labels
+    # Semi-major axis is reported as the projected minimum, matching microlensing
+    # convention (single-lens can't measure the true orbital a).
+    assert any(r["label"].startswith("Semi-major") for r in rows)
+    # Un-derivable rows (period, eccentricity) come back with None values — the
+    # frontend renders them as "—" without pretending we fit them.
+    period_row = next(r for r in rows if r["label"] == "Orbital Period")
+    assert period_row["value"] is None
+
+
+def test_exofop_rows_include_host_star_radius_from_mass_relation():
+    """R_star for the fiducial K-dwarf lens should land near 0.3 R_sun for
+    the default 0.3 M_sun bulge-lens prior — verify the M–R interpolation
+    stays consistent."""
+    from app.microlensing import (
+        compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
+    )
+    pspl = {"t0": 1500.0, "tE": 20.0, "u0": 0.3, "f_s": 0.8, "f_b": 0.2}
+    err = {k: 0.01 for k in pspl}
+    obs = compute_observables(pspl, err)
+    pp = compute_planet_predictions(pspl)
+    rows = compute_exofop_planet_rows(obs, pp)
+    r_star_row = next(r for r in rows if r["label"].startswith("Host (lens) radius"))
+    # 0.3 M_sun in the Pecaut–Mamajek table maps to ~0.30 R_sun.
+    assert r_star_row["value"] == pytest.approx(0.30, abs=0.05)
+
+
+# ---------------------------------------------------------------------------
 # Joint TESS + Gaia fit (Harris+2026 workflow)
 # ---------------------------------------------------------------------------
 
