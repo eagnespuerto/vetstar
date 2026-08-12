@@ -139,8 +139,14 @@ _VERDICT_COLORS = {
 
 def build_microlensing_pdf(result: Dict[str, Any],
                             metadata: Optional[Dict[str, Any]] = None,
-                            plot_png_b64: Optional[str] = None) -> bytes:
-    """Assemble the PDF and return the raw bytes."""
+                            plot_png_b64: Optional[str] = None,
+                            ffi_png_b64: Optional[str] = None) -> bytes:
+    """Assemble the PDF and return the raw bytes.
+
+    `plot_png_b64` is the classifier light-curve plot; `ffi_png_b64` is the
+    optional TESScut FFI + Gaia overlay from /api/microlensing/ffi_cutout.
+    Both are base64 without the data-URL prefix.
+    """
     metadata = metadata or {}
     styles = getSampleStyleSheet()
     # getSampleStyleSheet already registers "h1"–"h5" as aliases, so use
@@ -250,6 +256,27 @@ def build_microlensing_pdf(result: Dict[str, Any],
             styles["ml_small"]))
         story.append(Spacer(1, 0.14 * inch))
 
+    # ---- ExoFOP-style planet parameter rows ----
+    exofop_rows = result.get("exofop_rows") or []
+    if exofop_rows:
+        er_table = [["Parameter", "Value", "Unit"]]
+        for r in exofop_rows:
+            marker = "*" if r.get("required") else ""
+            label = f"{marker}{r['label']}" if marker else r["label"]
+            er_table.append([label, _fmt(r.get("value"), 4), r.get("unit") or ""])
+        story.append(_section_heading(
+            "ExoFOP planet parameters (microlensing-derivable subset)", styles))
+        story.append(_data_table(er_table,
+                                  [3.4 * inch, 1.8 * inch, CONTENT_W - 5.2 * inch]))
+        story.append(Paragraph(
+            "<i>Fields marked * are required for an ExoFOP-TESS TOI submission. "
+            "Rows shown as '—' are not derivable from a single-lens microlensing "
+            "fit (need radial-velocity follow-up or a binary-lens caustic-crossing "
+            "detection). Host/planet properties assume the fiducial bulge-lens "
+            "priors described under 'Predicted planet parameters' below.</i>",
+            styles["ml_small"]))
+        story.append(Spacer(1, 0.14 * inch))
+
     # ---- Planet-detection predictions ----
     pp = result.get("planet_predictions") or {}
     if pp:
@@ -331,6 +358,23 @@ def build_microlensing_pdf(result: Dict[str, Any],
     if interpret_lines:
         story.append(Paragraph("<br/>".join(interpret_lines), styles["ml_small"]))
     story.append(Spacer(1, 0.14 * inch))
+
+    # ---- FFI cutout with Gaia overlay ----
+    if ffi_png_b64:
+        try:
+            ffi_bytes = base64.b64decode(ffi_png_b64)
+            img = Image(io.BytesIO(ffi_bytes),
+                        width=CONTENT_W * 0.7, height=CONTENT_W * 0.7)
+            story.append(_section_heading("TESScut FFI cutout + Gaia DR3 overlay", styles))
+            story.append(KeepTogether([img]))
+            story.append(Paragraph(
+                "<i>Median-stacked TESScut frames with target crosshair (red) "
+                "and Gaia DR3 sources within the FOV plotted as yellow circles "
+                "sized by G-band magnitude. Use to diagnose source blending "
+                "in the 21″ pixels.</i>", styles["ml_small"]))
+            story.append(Spacer(1, 0.14 * inch))
+        except Exception:
+            pass
 
     # ---- Plot ----
     if plot_png_b64:

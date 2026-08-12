@@ -533,6 +533,13 @@ export interface MicrolensingPlanetPredictions {
   planet_mass_floor_m_jupiter_fiducial: number | null;
 }
 
+export interface ExofopRow {
+  label: string;
+  value: number | null;
+  unit: string;
+  required: boolean;
+}
+
 export interface MicrolensingFitResponse {
   verdict: "microlensing" | "flare" | "null" | "ambiguous";
   confidence: number;
@@ -553,6 +560,7 @@ export interface MicrolensingFitResponse {
   symmetry_score: number | null;
   observables: MicrolensingObservables | null;
   planet_predictions: MicrolensingPlanetPredictions | null;
+  exofop_rows: ExofopRow[] | null;
   notes: string[];
 }
 
@@ -568,12 +576,107 @@ export async function fitMicrolensing(
   return r.json();
 }
 
-/** Ship a fit result + optional metadata + optional plot PNG to the backend
+// ---- Gaia Alerts (joint TESS + Gaia workflow, Harris+2026) ----
+
+export interface GaiaLightcurve {
+  alert_id: string;
+  time_jd: number[];
+  mag: number[];
+  mag_err: number[];
+  mag_err_reported: number[];
+  n_points: number;
+  source_url: string;
+}
+
+export interface GaiaAlertEntry {
+  alert_id: string;
+  ra: number;
+  dec: number;
+  classification: string;
+  date: string;
+  separation_arcsec: number;
+}
+
+export async function fetchGaiaAlertLightcurve(alert_id: string): Promise<GaiaLightcurve> {
+  const r = await fetch(`${API_BASE}/api/microlensing/gaia_alert_lightcurve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alert_id }),
+  });
+  if (!r.ok) throw new Error(`Gaia alert LC fetch failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+export async function searchGaiaAlertsNear(
+  ra: number, dec: number, radius_arcsec = 60.0, microlensing_only = true,
+): Promise<{ query: any; n_hits: number; alerts: GaiaAlertEntry[] }> {
+  const qs = new URLSearchParams({
+    ra: String(ra), dec: String(dec),
+    radius_arcsec: String(radius_arcsec),
+    microlensing_only: String(microlensing_only),
+  });
+  const r = await fetch(`${API_BASE}/api/microlensing/gaia_alerts_near?${qs}`);
+  if (!r.ok) throw new Error(`Gaia Alerts search failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+export interface JointFitParams {
+  t0: number; tE: number; u0: number;
+  f_s_T: number; f_b_T: number; f_s_G: number; f_b_G: number;
+}
+
+export interface JointFitResponse {
+  verdict: string;
+  window: {
+    t_start: number; t_end: number;
+    tess_baseline_flux: number; gaia_baseline_mag: number;
+    n_tess: number; n_gaia: number;
+  };
+  tess_time_windowed: number[];
+  tess_flux_normalized: number[];
+  tess_flux_err_normalized: number[];
+  gaia_time_btjd: number[];
+  gaia_flux_normalized: number[];
+  gaia_flux_err_normalized: number[];
+  joint_fit: {
+    params: JointFitParams;
+    param_err: Partial<Record<keyof JointFitParams, number | null>>;
+    chi2_total: number; chi2_tess: number | null; chi2_gaia: number | null;
+    chi2_red: number; bic: number;
+    n_params: number; n_points: number;
+    n_tess: number | null; n_gaia: number | null;
+    success: boolean;
+    model_flux_tess: number[] | null;
+    model_flux_gaia: number[] | null;
+  };
+  observables: MicrolensingObservables | null;
+  planet_predictions: MicrolensingPlanetPredictions | null;
+  notes: string[];
+}
+
+export async function fitMicrolensingJoint(payload: {
+  tess_time: number[]; tess_flux: number[]; tess_flux_err: number[];
+  gaia_time_jd: number[]; gaia_mag: number[]; gaia_mag_err: number[];
+  window: { t_start: number; t_end: number };
+  t0_guess: number;
+  gaia_baseline_window_d?: number;
+}): Promise<JointFitResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/fit_joint`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`Joint fit failed (${r.status}): ${await r.text()}`);
+  return r.json();
+}
+
+/** Ship a fit result + optional metadata + optional plot PNGs to the backend
  *  and receive back a rendered PDF vetting report as a Blob. */
 export async function fetchMicrolensingReport(
   result: MicrolensingFitResponse,
   metadata?: Record<string, unknown> | null,
   plotPngBase64?: string | null,
+  ffiPngBase64?: string | null,
 ): Promise<Blob> {
   const r = await fetch(`${API_BASE}/api/microlensing/report`, {
     method: "POST",
@@ -582,10 +685,49 @@ export async function fetchMicrolensingReport(
       result,
       metadata: metadata ?? null,
       plot_png_base64: plotPngBase64 ?? null,
+      ffi_png_base64: ffiPngBase64 ?? null,
     }),
   });
   if (!r.ok) throw new Error(`Microlensing report failed (${r.status}): ${await r.text()}`);
   return r.blob();
+}
+
+// ---- FFI cutout + Gaia overlay ------------------------------------------
+
+export interface FfiGaiaSource {
+  source_id: number;
+  ra: number;
+  dec: number;
+  phot_g_mean_mag: number | null;
+  separation_arcsec: number;
+}
+
+export interface FfiCutoutResponse {
+  image: string;                 // base64 PNG (overlay-rendered)
+  base_image: string;            // base64 PNG (no overlay)
+  size_px: number;
+  n_frames: number | null;
+  sector: number | null;
+  gaia_sources: FfiGaiaSource[];
+  gaia_n_sources: number;
+  gaia_fov_radius_arcsec: number;
+}
+
+export async function fetchMicrolensingFfi(payload: {
+  ra: number; dec: number;
+  sector?: number | null;
+  tic_id?: number | null;
+  size_px?: number;
+  gaia_mag_limit?: number;
+  gaia_max_sources?: number;
+}): Promise<FfiCutoutResponse> {
+  const r = await fetch(`${API_BASE}/api/microlensing/ffi_cutout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`FFI cutout failed (${r.status}): ${await r.text()}`);
+  return r.json();
 }
 
 // ----------------------------------------------------------------------------

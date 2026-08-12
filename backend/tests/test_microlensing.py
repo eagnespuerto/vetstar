@@ -201,6 +201,150 @@ def test_analyze_response_includes_observables():
     assert obs["peak_magnification"] == pytest.approx(6.7, abs=0.5)
 
 
+# ---------------------------------------------------------------------------
+# ExoFOP planet rows — microlensing-derivable subset
+# ---------------------------------------------------------------------------
+
+def test_exofop_rows_report_required_fields():
+    from app.microlensing import (
+        compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
+    )
+    pspl = {"t0": 1220.0, "tE": 5.0, "u0": 0.15, "f_s": 1.0, "f_b": 0.0}
+    err = {"t0": 0.001, "tE": 0.02, "u0": 0.001, "f_s": 0.01, "f_b": 0.01}
+    obs = compute_observables(pspl, err)
+    pp = compute_planet_predictions(pspl)
+    rows = compute_exofop_planet_rows(obs, pp)
+    labels = [r["label"] for r in rows]
+    # The 4 required fields — matches the transit convention of marking t0/tE
+    # equivalents as required.
+    assert "Peak time t0" in labels
+    assert "Einstein timescale tE" in labels
+    assert "Impact parameter u0" in labels
+    # Radius-ratio row uses the same label the transit tab does — R_planet/R_star.
+    assert "R_planet/R_star" in labels
+    # Semi-major axis is reported as the projected minimum, matching microlensing
+    # convention (single-lens can't measure the true orbital a).
+    assert any(r["label"].startswith("Semi-major") for r in rows)
+    # Un-derivable rows (period, eccentricity) come back with None values — the
+    # frontend renders them as "—" without pretending we fit them.
+    period_row = next(r for r in rows if r["label"] == "Orbital Period")
+    assert period_row["value"] is None
+
+
+def test_exofop_rows_include_host_star_radius_from_mass_relation():
+    """R_star for the fiducial K-dwarf lens should land near 0.3 R_sun for
+    the default 0.3 M_sun bulge-lens prior — verify the M–R interpolation
+    stays consistent."""
+    from app.microlensing import (
+        compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
+    )
+    pspl = {"t0": 1500.0, "tE": 20.0, "u0": 0.3, "f_s": 0.8, "f_b": 0.2}
+    err = {k: 0.01 for k in pspl}
+    obs = compute_observables(pspl, err)
+    pp = compute_planet_predictions(pspl)
+    rows = compute_exofop_planet_rows(obs, pp)
+    r_star_row = next(r for r in rows if r["label"].startswith("Host (lens) radius"))
+    # 0.3 M_sun in the Pecaut–Mamajek table maps to ~0.30 R_sun.
+    assert r_star_row["value"] == pytest.approx(0.30, abs=0.05)
+
+
+# ---------------------------------------------------------------------------
+# Joint TESS + Gaia fit (Harris+2026 workflow)
+# ---------------------------------------------------------------------------
+
+def _make_synthetic_joint(t_tess, t_gaia_jd, true_t0, true_tE, true_u0,
+                            gaia_baseline_mag=17.0, noise_ppm_tess=200.0,
+                            noise_mmag_gaia=10.0, seed=42):
+    """Return TESS (flux, err) and Gaia (mag, err) arrays for a shared PSPL."""
+    from app.microlensing import pspl_flux
+    rng = np.random.default_rng(seed)
+    # TESS: normalised flux (source only, no blend)
+    model_tess = pspl_flux(t_tess, true_t0, true_tE, true_u0, 1.0, 0.0)
+    sigma_t = noise_ppm_tess * 1e-6
+    tess_flux = model_tess + rng.normal(0, sigma_t, t_tess.size)
+    tess_ferr = np.full_like(t_tess, sigma_t)
+    # Gaia: mag centred on baseline, brightened by magnification.
+    # G(t) = G_baseline - 2.5 log10(A(t))
+    t_gaia_btjd = t_gaia_jd - 2_457_000.0
+    from app.microlensing import pspl_magnification
+    A = pspl_magnification(t_gaia_btjd, true_t0, true_tE, true_u0)
+    gaia_mag_true = gaia_baseline_mag - 2.5 * np.log10(A)
+    sigma_g = noise_mmag_gaia * 1e-3
+    gaia_mag = gaia_mag_true + rng.normal(0, sigma_g, t_gaia_jd.size)
+    gaia_merr = np.full_like(t_gaia_jd, sigma_g)
+    return tess_flux, tess_ferr, gaia_mag, gaia_merr
+
+
+def test_joint_fit_recovers_shared_pspl_params():
+    """Synthetic two-band PSPL → joint fit should recover t0/tE/u0."""
+    from app.microlensing import analyze_event_joint
+    # TESS: 400 dense points over 40 days centered on peak
+    t_tess = np.linspace(1200.0, 1240.0, 400)
+    # Gaia: 60 sparse points over 5 years (2016-2021), covering the event
+    t_gaia_jd = np.linspace(2_457_400.0, 2_459_400.0, 60)
+    true_t0, true_tE, true_u0 = 1220.0, 5.0, 0.15
+    tess_flux, tess_ferr, gaia_mag, gaia_merr = _make_synthetic_joint(
+        t_tess, t_gaia_jd, true_t0, true_tE, true_u0,
+        gaia_baseline_mag=17.5, seed=1,
+    )
+    out = analyze_event_joint(
+        tess_time=t_tess, tess_flux=tess_flux, tess_flux_err=tess_ferr,
+        gaia_time_jd=t_gaia_jd, gaia_mag=gaia_mag, gaia_mag_err=gaia_merr,
+        t_start=1200.0, t_end=1240.0, t0_guess=1220.0,
+    )
+    jf = out["joint_fit"]
+    assert jf["success"] is True
+    assert jf["params"]["t0"] == pytest.approx(true_t0, abs=0.05)
+    assert jf["params"]["tE"] == pytest.approx(true_tE, rel=0.1)
+    assert jf["params"]["u0"] == pytest.approx(true_u0, abs=0.03)
+    # Both bands should contribute meaningful chi2 (order-N points each).
+    assert jf["chi2_tess"] > 0.0
+    assert jf["chi2_gaia"] > 0.0
+    assert jf["n_tess"] == 400
+    # Observables + planet predictions come through from the joint fit
+    assert out["observables"] is not None
+    assert out["planet_predictions"] is not None
+    # Sanity: baseline Gaia mag recovered near the truth (17.5).
+    assert out["window"]["gaia_baseline_mag"] == pytest.approx(17.5, abs=0.3)
+
+
+def test_joint_fit_rejects_too_few_gaia_points():
+    from app.microlensing import analyze_event_joint
+    t_tess = np.linspace(1200.0, 1240.0, 200)
+    tess_flux = np.ones_like(t_tess)
+    tess_ferr = np.full_like(t_tess, 1e-3)
+    # Only 3 Gaia points
+    with pytest.raises(ValueError, match="Gaia"):
+        analyze_event_joint(
+            tess_time=t_tess, tess_flux=tess_flux, tess_flux_err=tess_ferr,
+            gaia_time_jd=np.array([2457100.0, 2457200.0, 2457300.0]),
+            gaia_mag=np.array([17.0, 17.0, 17.0]),
+            gaia_mag_err=np.array([0.01, 0.01, 0.01]),
+            t_start=1200.0, t_end=1240.0, t0_guess=1220.0,
+        )
+
+
+def test_joint_fit_response_keys_stable():
+    """Downstream consumers depend on a stable response shape."""
+    from app.microlensing import analyze_event_joint
+    t_tess = np.linspace(1200.0, 1240.0, 400)
+    t_gaia_jd = np.linspace(2_457_400.0, 2_459_400.0, 60)
+    tess_flux, tess_ferr, gaia_mag, gaia_merr = _make_synthetic_joint(
+        t_tess, t_gaia_jd, 1220.0, 5.0, 0.15, seed=2,
+    )
+    out = analyze_event_joint(
+        tess_time=t_tess, tess_flux=tess_flux, tess_flux_err=tess_ferr,
+        gaia_time_jd=t_gaia_jd, gaia_mag=gaia_mag, gaia_mag_err=gaia_merr,
+        t_start=1200.0, t_end=1240.0, t0_guess=1220.0,
+    )
+    for k in ("verdict", "window", "joint_fit", "observables", "planet_predictions",
+              "tess_time_windowed", "gaia_time_btjd", "notes"):
+        assert k in out, f"missing key: {k}"
+    for k in ("params", "chi2_tess", "chi2_gaia", "bic",
+              "model_flux_tess", "model_flux_gaia"):
+        assert k in out["joint_fit"], f"missing joint_fit key: {k}"
+
+
 def test_pspl_matches_mulensmodel_reference():
     mm = pytest.importorskip("MulensModel")
     from app.microlensing import pspl_magnification

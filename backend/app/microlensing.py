@@ -184,6 +184,91 @@ def fit_pspl(t: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
     )
 
 
+def fit_pspl_joint(
+    t_tess: np.ndarray, flux_tess: np.ndarray, flux_err_tess: np.ndarray,
+    t_gaia: np.ndarray, flux_gaia: np.ndarray, flux_err_gaia: np.ndarray,
+    t0_guess: float, window_width: float,
+) -> FitResult:
+    """Joint PSPL fit across two photometric bands (TESS + Gaia).
+
+    Shares the geometric parameters (t0, tE, u0) — those come from the lens
+    geometry and are common — while fitting per-band blending (f_s, f_b) so
+    each band has its own aperture dilution.
+
+    Both bands must already be normalised to a per-band baseline of ~1.0.
+    Gaia magnitudes should be converted to relative flux (10**(-0.4*(G-G_base)))
+    with propagated errors before calling this. Times are in the same units
+    (BTJD; Gaia JD_TCB minus 2457000 is close enough for microlensing scales).
+
+    7 free parameters: t0, tE, u0, f_s_T, f_b_T, f_s_G, f_b_G.
+    """
+    n_t = len(t_tess)
+    n_g = len(t_gaia)
+    if n_t < 5 or n_g < 5:
+        raise ValueError(
+            f"Joint fit needs >=5 points per band; got TESS={n_t}, Gaia={n_g}"
+        )
+
+    p0 = np.array([t0_guess, max(window_width / 4.0, 1e-3), 0.3,
+                   0.8, 0.2, 0.8, 0.2])
+    param_names = ["t0", "tE", "u0", "f_s_T", "f_b_T", "f_s_G", "f_b_G"]
+    lo = [t0_guess - window_width, 1e-4, 1e-3,
+          0.0, 0.0, 0.0, 0.0]
+    hi = [t0_guess + window_width, window_width * 5.0, 5.0,
+          5.0, 5.0, 5.0, 5.0]
+
+    def resid(p: np.ndarray) -> np.ndarray:
+        t0, tE, u0, fsT, fbT, fsG, fbG = p
+        mT = pspl_flux(t_tess, t0, tE, u0, fsT, fbT)
+        mG = pspl_flux(t_gaia, t0, tE, u0, fsG, fbG)
+        rT = (flux_tess - mT) / flux_err_tess
+        rG = (flux_gaia - mG) / flux_err_gaia
+        return np.concatenate([rT, rG])
+
+    try:
+        res = least_squares(resid, p0, bounds=(lo, hi), max_nfev=8000)
+    except Exception as e:
+        return FitResult(
+            params=dict(zip(param_names, p0)), success=False,
+            message=f"Joint PSPL fit failed: {e}",
+            n_params=len(p0), n_points=n_t + n_g,
+            chi2=float("inf"), bic=float("inf"),
+        )
+
+    chi2 = float(np.sum(resid(res.x) ** 2))
+    n = n_t + n_g
+    k = len(p0)
+    params = {name: float(v) for name, v in zip(param_names, res.x)}
+
+    # Per-band chi2 and model curves for reporting.
+    t0, tE, u0, fsT, fbT, fsG, fbG = res.x
+    model_T = pspl_flux(t_tess, t0, tE, u0, fsT, fbT)
+    model_G = pspl_flux(t_gaia, t0, tE, u0, fsG, fbG)
+    chi2_T = float(np.sum(((flux_tess - model_T) / flux_err_tess) ** 2))
+    chi2_G = float(np.sum(((flux_gaia - model_G) / flux_err_gaia) ** 2))
+
+    fit = FitResult(
+        params=params,
+        param_err=_param_errors(res, param_names),
+        chi2=chi2,
+        chi2_red=chi2 / max(n - k, 1),
+        bic=_bic(chi2, k, n),
+        n_params=k,
+        n_points=n,
+        model_flux=None,  # per-band model_flux stashed via a side-channel dict below
+        success=res.success,
+        message=str(res.message),
+    )
+    # Attach per-band data as attributes so analyze_event_joint can pack them.
+    fit.model_flux_tess = model_T  # type: ignore[attr-defined]
+    fit.model_flux_gaia = model_G  # type: ignore[attr-defined]
+    fit.chi2_tess = chi2_T  # type: ignore[attr-defined]
+    fit.chi2_gaia = chi2_G  # type: ignore[attr-defined]
+    fit.n_tess = n_t  # type: ignore[attr-defined]
+    fit.n_gaia = n_g  # type: ignore[attr-defined]
+    return fit
+
+
 def fit_flare(t: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
               t_peak_guess: float, window_width: float) -> FitResult:
     """Fit 3-param Davenport-2014 flare (fixed baseline = 1.0 by normalization)."""
@@ -496,6 +581,175 @@ def compute_planet_predictions(pspl_params: Dict[str, float]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ExoFOP-style planet-parameter rows for microlensing
+# ---------------------------------------------------------------------------
+#
+# Mirrors observables.exofop_param_rows for the Transit tab, but scoped to
+# what a single-lens microlensing fit CAN say about the host + planet.
+# Anything the fit doesn't constrain is returned as `None` so the frontend
+# can render it as "—" without pretending we measured it.
+#
+# What we can honestly report (all under fiducial bulge-lens priors —
+# M_L = 0.79 M_sun following Harris et al. 2026's Gaia23bra lens, D_L = 6 kpc,
+# D_S = 8 kpc):
+#   • Peak time t0 in BTJD and BJD
+#   • Einstein timescale tE (days)
+#   • Impact parameter u0
+#   • Peak brightening Δm (mag)
+#   • Physical Einstein radius r_E (AU)
+#   • Projected planet-lens separation a_perp ≈ s · r_E for s ≈ 1
+#   • Host (lens) star radius R_L under a mass-radius relation for the
+#     fiducial K-dwarf lens
+#   • Planet mass floor from the anomaly-detection sensitivity limit
+#   • Planet radius from Chen & Kipping 2017 mass-radius forecaster
+#   • Rp / R★ ratio
+#
+# What we deliberately do NOT report from a single-lens fit:
+#   • Orbital period / eccentricity / inclination — un-derivable from a
+#     single caustic event without radial velocity follow-up.
+#   • Equilibrium temperature / insolation — needs stellar luminosity.
+#   • Transit-analogue depth / duration — not applicable.
+
+_L_TO_R_SOLAR_MAIN_SEQUENCE = (
+    # (M_L in M_sun, R_L in R_sun) waypoints for main-sequence stars.
+    # Rough fit — Pecaut & Mamajek (2013) ASCII table, dwarf sequence.
+    (0.10, 0.13),  # M8V
+    (0.20, 0.24),  # M5V
+    (0.30, 0.30),  # M4V
+    (0.50, 0.46),  # M0V
+    (0.70, 0.68),  # K5V
+    (0.80, 0.78),  # K3V (Harris+2026 lens class)
+    (1.00, 1.00),  # G2V (Sun)
+    (1.30, 1.31),  # F5V
+)
+
+
+def _radius_from_mass_main_sequence(m_solar: float) -> float:
+    """Piecewise-linear interpolation on the Pecaut & Mamajek dwarf sequence.
+    Extrapolates linearly at the ends — treat with caution outside 0.1–1.3 M☉."""
+    for i in range(len(_L_TO_R_SOLAR_MAIN_SEQUENCE) - 1):
+        m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[i]
+        m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[i + 1]
+        if m0 <= m_solar <= m1:
+            f = (m_solar - m0) / (m1 - m0)
+            return r0 + f * (r1 - r0)
+    if m_solar < _L_TO_R_SOLAR_MAIN_SEQUENCE[0][0]:
+        m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[0]
+        m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[1]
+        slope = (r1 - r0) / (m1 - m0)
+        return max(0.05, r0 + slope * (m_solar - m0))
+    m0, r0 = _L_TO_R_SOLAR_MAIN_SEQUENCE[-2]
+    m1, r1 = _L_TO_R_SOLAR_MAIN_SEQUENCE[-1]
+    slope = (r1 - r0) / (m1 - m0)
+    return r1 + slope * (m_solar - m1)
+
+
+def _chen_kipping_planet_radius_earth(mp_earth: float) -> float:
+    """Chen & Kipping (2017) forecaster — Terran regime + Neptunian break at
+    2.04 M⊕. Rough single-branch approximation for the summary; the fit's
+    error bar dominates anyway.
+
+    Terran (M < 2.04 M⊕):  R = 1.008 · M^0.279
+    Neptunian (2.04 M⊕ ≤ M < 132 M⊕): R = 0.808 · M^0.589
+    Jovian (M ≥ 132 M⊕):   R ≈ 17.74 · M^-0.044 · R_earth (nearly constant ~1 R_Jup)
+    """
+    if mp_earth <= 0 or not math.isfinite(mp_earth):
+        return float("nan")
+    if mp_earth < 2.04:
+        return 1.008 * (mp_earth ** 0.279)
+    if mp_earth < 132.0:
+        return 0.808 * (mp_earth ** 0.589)
+    return 17.74 * (mp_earth ** -0.044)
+
+
+_R_EARTH_KM = 6378.137
+_R_SUN_KM = 6.957e5
+
+
+def compute_exofop_planet_rows(
+    observables: Optional[dict],
+    planet_predictions: Optional[dict],
+    metadata: Optional[dict] = None,
+) -> list:
+    """Return an ordered list of {label, value, unit, required} rows.
+
+    Mirrors observables.exofop_param_rows for the Transit tab in shape and
+    field naming (`Radius`, `Mass`, `Semi-major Axis`, `R_planet/R_star`),
+    but scoped to microlensing-derivable quantities. Fields the fit
+    cannot constrain come back with value=None.
+    """
+    obs = observables or {}
+    pp = planet_predictions or {}
+    meta = metadata or {}
+
+    m_lens_solar = pp.get("fiducial_lens_mass_solar")
+    r_lens_solar = (_radius_from_mass_main_sequence(m_lens_solar)
+                     if m_lens_solar is not None and math.isfinite(m_lens_solar)
+                     else None)
+
+    mp_earth = pp.get("planet_mass_floor_m_earth_fiducial")
+    mp_jup = pp.get("planet_mass_floor_m_jupiter_fiducial")
+    rp_earth = (_chen_kipping_planet_radius_earth(mp_earth)
+                 if mp_earth is not None and math.isfinite(mp_earth) else None)
+
+    # Rp/R★ dimensionless ratio (both converted through R_earth / R_sun km).
+    ratio = None
+    if rp_earth is not None and r_lens_solar is not None and r_lens_solar > 0:
+        ratio = (rp_earth * _R_EARTH_KM) / (r_lens_solar * _R_SUN_KM)
+
+    # Projected planet-lens separation. For s = 1 (planet at Einstein ring)
+    # this is exactly r_E. We do NOT report an absolute semi-major axis
+    # without an orbital inclination assumption — a_perp is what
+    # microlensing directly measures.
+    a_perp = pp.get("einstein_radius_au_fiducial")
+
+    rows = [
+        {"label": "Peak time t0", "unit": "BTJD", "required": True,
+         "value": obs.get("t0_btjd")},
+        {"label": "Peak time t0", "unit": "BJD", "required": True,
+         "value": obs.get("t0_bjd")},
+        {"label": "Einstein timescale tE", "unit": "days", "required": True,
+         "value": obs.get("einstein_timescale_d")},
+        {"label": "Impact parameter u0", "unit": "", "required": True,
+         "value": obs.get("impact_parameter_u0")},
+        {"label": "Peak brightening", "unit": "mag", "required": False,
+         "value": obs.get("peak_brightening_mag")},
+        {"label": "Peak magnification A_max", "unit": "", "required": False,
+         "value": obs.get("peak_magnification")},
+        {"label": "Source flux fraction", "unit": "", "required": False,
+         "value": obs.get("source_flux_fraction")},
+        # --- host + planet quantities under fiducial bulge-lens priors ---
+        {"label": "Host (lens) mass M_L (fiducial)", "unit": "M_Sun", "required": False,
+         "value": m_lens_solar},
+        {"label": "Host (lens) radius R_star (fiducial)", "unit": "R_Sun", "required": False,
+         "value": r_lens_solar},
+        {"label": "Physical Einstein radius r_E", "unit": "AU", "required": False,
+         "value": pp.get("einstein_radius_au_fiducial")},
+        {"label": "Projected separation a_perp (s = 1)", "unit": "AU", "required": False,
+         "value": a_perp},
+        {"label": "Semi-major Axis (a_perp minimum)", "unit": "AU", "required": False,
+         "value": a_perp},  # microlensing measures projected — cite as lower bound
+        {"label": "Planet mass floor", "unit": "M_Earth", "required": False,
+         "value": mp_earth},
+        {"label": "Planet mass floor", "unit": "M_Jup", "required": False,
+         "value": mp_jup},
+        {"label": "Planet radius (Chen & Kipping)", "unit": "R_Earth", "required": False,
+         "value": rp_earth},
+        {"label": "R_planet/R_star", "unit": "", "required": False,
+         "value": ratio},
+        {"label": "Planet-to-lens mass ratio q_min", "unit": "", "required": False,
+         "value": pp.get("planet_q_min_detectable")},
+        # --- Explicitly-unmeasurable-from-single-lens rows, listed as None ---
+        {"label": "Orbital Period", "unit": "days", "required": False, "value": None},
+        {"label": "Eccentricity", "unit": "", "required": False, "value": None},
+        {"label": "Inclination", "unit": "deg", "required": False, "value": None},
+        {"label": "Equilibrium Temperature", "unit": "K", "required": False, "value": None},
+        {"label": "Velocity Semi-amplitude", "unit": "m/s", "required": False, "value": None},
+    ]
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Top-level analyzer
 # ---------------------------------------------------------------------------
 
@@ -620,6 +874,7 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
 
     observables = compute_observables(pspl.params, pspl.param_err) if pspl.success else None
     planet_predictions = compute_planet_predictions(pspl.params) if pspl.success else None
+    exofop_rows = compute_exofop_planet_rows(observables, planet_predictions) if pspl.success else None
 
     return _json_safe({
         "verdict": verdict,
@@ -638,5 +893,172 @@ def analyze_event(time: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
         "symmetry_score": sym,
         "observables": observables,
         "planet_predictions": planet_predictions,
+        "exofop_rows": exofop_rows,
+        "notes": notes,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Joint TESS + Gaia analyzer — the Harris+2026 workflow, minus binary lens
+# ---------------------------------------------------------------------------
+
+_JD_TCB_MINUS_BTJD = 2_457_000.0
+
+
+def analyze_event_joint(
+    tess_time: np.ndarray, tess_flux: np.ndarray, tess_flux_err: np.ndarray,
+    gaia_time_jd: np.ndarray, gaia_mag: np.ndarray, gaia_mag_err: np.ndarray,
+    t_start: float, t_end: float, t0_guess: float,
+    gaia_baseline_window_d: float = 200.0,
+) -> dict:
+    """Joint TESS + Gaia PSPL fit on a user-flagged window.
+
+    - TESS: linear flux, normalised to per-window baseline (25th-percentile
+      weighted mean, same recipe as the TESS-only analyzer).
+    - Gaia: G-band magnitudes converted to relative flux
+      F_G(t) / F_G,base = 10^(-0.4·(G(t) − G_base)), with propagated errors
+      σ_F = F · 0.4·ln(10)·σ_G. Baseline G_base = median of Gaia epochs
+      outside t0 ± `gaia_baseline_window_d`/2 (i.e. well before/after the
+      event). If no out-of-event epochs exist, fall back to a min-mag anchor.
+
+    Shared geometric params (t0, tE, u0); per-band (f_s, f_b).
+    """
+    tess_time = np.asarray(tess_time, dtype=float)
+    tess_flux = np.asarray(tess_flux, dtype=float)
+    tess_flux_err = np.asarray(tess_flux_err, dtype=float)
+    gaia_time_jd = np.asarray(gaia_time_jd, dtype=float)
+    gaia_mag = np.asarray(gaia_mag, dtype=float)
+    gaia_mag_err = np.asarray(gaia_mag_err, dtype=float)
+
+    # --- TESS branch: same windowing + normalisation as the single-band path ---
+    mT = (
+        (tess_time >= t_start) & (tess_time <= t_end)
+        & np.isfinite(tess_time) & np.isfinite(tess_flux) & np.isfinite(tess_flux_err)
+        & (tess_flux_err > 0)
+    )
+    t_t = tess_time[mT]
+    f_t = tess_flux[mT]
+    fe_t = tess_flux_err[mT]
+    if len(t_t) < 8:
+        raise ValueError(f"Need >=8 TESS points in the window; got {len(t_t)}")
+    q = np.quantile(f_t, 0.25)
+    baseline_mask = f_t <= q
+    if baseline_mask.sum() >= 3:
+        w = 1.0 / (fe_t[baseline_mask] ** 2)
+        tess_baseline = float(np.sum(w * f_t[baseline_mask]) / np.sum(w))
+    else:
+        tess_baseline = float(np.median(f_t))
+    if tess_baseline <= 0 or not np.isfinite(tess_baseline):
+        raise ValueError("Cannot normalise TESS: non-positive baseline")
+    f_t_n = f_t / tess_baseline
+    fe_t_n = fe_t / tess_baseline
+
+    # --- Gaia branch: convert JD_TCB → BTJD, filter to finite, mag → flux ---
+    gaia_time_btjd = gaia_time_jd - _JD_TCB_MINUS_BTJD
+    mG = (
+        np.isfinite(gaia_time_btjd) & np.isfinite(gaia_mag) & np.isfinite(gaia_mag_err)
+        & (gaia_mag_err > 0) & (gaia_mag < 90.0)
+    )
+    t_g_btjd = gaia_time_btjd[mG]
+    g = gaia_mag[mG]
+    ge = gaia_mag_err[mG]
+    if len(t_g_btjd) < 5:
+        raise ValueError(f"Need >=5 Gaia points; got {len(t_g_btjd)}")
+
+    # Baseline G — prefer points well outside the event so the peak doesn't
+    # bias the reference. Half-window in days on either side of t0_guess.
+    half = 0.5 * gaia_baseline_window_d
+    oot = (t_g_btjd < (t0_guess - half)) | (t_g_btjd > (t0_guess + half))
+    if oot.sum() >= 5:
+        gaia_baseline_mag = float(np.median(g[oot]))
+    else:
+        # Fallback: quiescent mag = median of the faint tail (upper 60% of mags).
+        gaia_baseline_mag = float(np.quantile(g, 0.4))
+
+    # Convert mag → relative flux F/F_base = 10^(-0.4 (G - G_base))
+    f_g = np.power(10.0, -0.4 * (g - gaia_baseline_mag))
+    # σ_F = F · 0.4·ln(10)·σ_G
+    fe_g = f_g * 0.4 * math.log(10.0) * ge
+
+    window_width = float(t_end - t_start)
+    joint = fit_pspl_joint(
+        t_tess=t_t, flux_tess=f_t_n, flux_err_tess=fe_t_n,
+        t_gaia=t_g_btjd, flux_gaia=f_g, flux_err_gaia=fe_g,
+        t0_guess=t0_guess, window_width=max(window_width, 20.0),
+    )
+
+    # Observables + planet predictions from the joint fit. Repack pspl_params
+    # under the shared-geometry keys the single-band code already uses.
+    shared = {
+        "t0": joint.params["t0"],
+        "tE": joint.params["tE"],
+        "u0": joint.params["u0"],
+        "f_s": joint.params["f_s_T"],   # observables use TESS f_s/f_b for
+        "f_b": joint.params["f_b_T"],   # baseline-normalised context
+    }
+    shared_err = {
+        "t0": joint.param_err.get("t0", float("nan")),
+        "tE": joint.param_err.get("tE", float("nan")),
+        "u0": joint.param_err.get("u0", float("nan")),
+        "f_s": joint.param_err.get("f_s_T", float("nan")),
+        "f_b": joint.param_err.get("f_b_T", float("nan")),
+    }
+    observables = compute_observables(shared, shared_err) if joint.success else None
+    planet_predictions = compute_planet_predictions(shared) if joint.success else None
+    exofop_rows = compute_exofop_planet_rows(observables, planet_predictions) if joint.success else None
+
+    notes = [
+        "Joint TESS + Gaia fit: shared geometric params (t0, tE, u0), "
+        "per-band blending (f_s, f_b) for TESS and Gaia separately. Following "
+        "Harris et al. 2026 (ApJL 1005 L33) — the Gaia long baseline breaks "
+        "the t_E ↔ u0 degeneracy TESS's short single-sector coverage cannot.",
+        "Gaia errors inflated per Kruszynska+2022 (approximation: σ² = "
+        "(1.5·σ_reported)² + (3 mmag)²). Time system: Gaia JD_TCB → BTJD "
+        "subtracts 2457000; TCB↔TDB seconds-level offset ignored (negligible "
+        "for microlensing on multi-day scales).",
+    ]
+    if not joint.success:
+        notes.append(f"Joint fit did not fully converge: {joint.message}")
+
+    return _json_safe({
+        "verdict": "joint_fit",  # separate track from the 4-class TESS-only verdict
+        "confidence": 1.0 - math.exp(-max(joint.chi2, 0.0) / max(joint.n_points, 1)) * 0,  # placeholder — meaningful joint verdict logic is deferred
+        "window": {
+            "t_start": float(t_start), "t_end": float(t_end),
+            "tess_baseline_flux": tess_baseline,
+            "gaia_baseline_mag": gaia_baseline_mag,
+            "n_tess": int(len(t_t)), "n_gaia": int(len(t_g_btjd)),
+        },
+        "tess_time_windowed": t_t.tolist(),
+        "tess_flux_normalized": f_t_n.tolist(),
+        "tess_flux_err_normalized": fe_t_n.tolist(),
+        "gaia_time_btjd": t_g_btjd.tolist(),
+        "gaia_flux_normalized": f_g.tolist(),
+        "gaia_flux_err_normalized": fe_g.tolist(),
+        "joint_fit": {
+            "params": joint.params,
+            "param_err": joint.param_err,
+            "chi2_total": joint.chi2,
+            "chi2_tess": getattr(joint, "chi2_tess", None),
+            "chi2_gaia": getattr(joint, "chi2_gaia", None),
+            "chi2_red": joint.chi2_red,
+            "bic": joint.bic,
+            "n_params": joint.n_params,
+            "n_points": joint.n_points,
+            "n_tess": getattr(joint, "n_tess", None),
+            "n_gaia": getattr(joint, "n_gaia", None),
+            "success": joint.success,
+            "model_flux_tess": (
+                getattr(joint, "model_flux_tess").tolist()
+                if getattr(joint, "model_flux_tess", None) is not None else None
+            ),
+            "model_flux_gaia": (
+                getattr(joint, "model_flux_gaia").tolist()
+                if getattr(joint, "model_flux_gaia", None) is not None else None
+            ),
+        },
+        "observables": observables,
+        "planet_predictions": planet_predictions,
+        "exofop_rows": exofop_rows,
         "notes": notes,
     })

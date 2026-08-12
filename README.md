@@ -863,6 +863,10 @@ POST /api/microlensing/coverage               multipart CSV (event_id,ra,dec,t0,
 POST /api/microlensing/lightcurve_by_coords   {ra, dec, sector?, radius_arcsec?}  → resolves RA/Dec → nearest TIC via MAST, walks available sectors newest-first, returns {time, flux, flux_err, tic_id, sector, resolved_ra, resolved_dec, separation_arcsec, provider, n_cadences} — powers the Module B → Module A autoload handoff
 POST /api/microlensing/lightcurve_by_tic      {tic_id, sector?}                    → fetch a TESS light curve directly by (TIC, sector), same UX as the transit tab's MAST mode; sector optional (newest LC-provider sector is auto-picked when omitted)
 POST /api/microlensing/report                 {result, metadata?, plot_png_base64?} → renders a PDF vetting report (verdict, observables, predicted planet parameters, model comparison, embedded plot) — no re-fit; ships back the bytes as application/pdf
+POST /api/microlensing/gaia_alert_lightcurve  {alert_id}                             → pulls a Gaia Alerts G-band CSV (e.g. Gaia23bra) and returns {time_jd, mag, mag_err, mag_err_reported, n_points, source_url} with Kruszyńska+2022-approximated errors
+GET  /api/microlensing/gaia_alerts_near       ?ra=&dec=&radius_arcsec=&microlensing_only= → cone-search the Gaia Alerts master index (cached), returns nearby published alerts with class + date + separation
+POST /api/microlensing/fit_joint              {tess_time, tess_flux, tess_flux_err, gaia_time_jd, gaia_mag, gaia_mag_err, window, t0_guess} → joint TESS + Gaia PSPL fit (shared t0/tE/u0, per-band f_s/f_b), returns per-band χ², combined BIC, and observables/planet_predictions from the joint fit — the Harris et al. 2026 workflow
+POST /api/microlensing/ffi_cutout             {ra, dec, sector?, tic_id?, size_px?, gaia_mag_limit?, gaia_max_sources?} → TESScut FFI median-stack cutout + Gaia DR3 catalog overlay inset (sources sized by G-band magnitude, target crosshair, source_id + separation table) — auto-fetches in the Classifier when target coords + sector are known
 GET  /api/health                                                                    → {"status":"ok"}
 GET  /docs                                                                          → Swagger UI
 ```
@@ -894,6 +898,8 @@ vetstar/
 │   │   ├── microlensing.py             (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
 │   │   ├── microlensing_coverage.py    (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
 │   │   ├── microlensing_report.py      PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
+│   │   ├── gaia_photometry.py          Gaia Alerts CSV fetcher + cone search + Kruszyńska+2022 error inflation (powers the joint TESS+Gaia fit)
+│   │   ├── microlensing_ffi.py         TESScut FFI cutout + Gaia DR3 catalog overlay (for source-blending diagnosis in 21″ pixels)
 │   │   ├── tess_sector_dates.py        Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
 │   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
 │   └── requirements.txt
