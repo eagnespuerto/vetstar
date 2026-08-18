@@ -3,7 +3,14 @@ name: CI + Deploy
 on:
   push:
     branches: [main, master]
+    # Skip Render/Fly rebuilds when only the Raspberry Pi OS port changed —
+    # pios/ is shipped to Pi users via pios/fetch.sh and is not in the
+    # Docker build context (see .dockerignore).
+    paths-ignore:
+      - 'pios/**'
   pull_request:
+    paths-ignore:
+      - 'pios/**'
   workflow_dispatch:
 
 jobs:

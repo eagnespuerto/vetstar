@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VetStar Pi
+GenericName=TESS Vetting Studio
+Comment=Offline transit and microlensing vetting for Raspberry Pi OS
+Exec=@EXEC@ gui
+TryExec=@EXEC@
+Icon=applications-science
+Terminal=false
+# Science first so LXDE (Pi OS default) files this under the Science menu.
+# Astronomy/Education are additional categories, respected by GNOME/KDE.
+Categories=Science;Astronomy;Education;
+Keywords=astronomy;TESS;transit;microlensing;vetting;exoplanet;
+StartupNotify=true
+StartupWMClass=vetstar-pi

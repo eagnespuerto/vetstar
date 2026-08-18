@@ -1,0 +1,14 @@
+# Minimal deps for VetStar Pi — chosen for the piwheels-prebuilt wheel path so
+# a Pi Zero 2 W / 3B / 4 (1 GB) doesn't spend 40 min compiling numpy.
+#
+# Install with:
+#   pip install --index-url https://www.piwheels.org/simple \
+#               --extra-index-url https://pypi.org/simple \
+#               -r requirements-pi.txt
+#
+# Pinned upper bounds keep import RAM predictable on 1 GB devices.
+numpy>=1.23,<3
+scipy>=1.10,<2
+astropy>=5.3,<8      # FITS reader + BLS + LombScargle only
+matplotlib>=3.6,<4   # Agg backend, no Qt/Tk
+reportlab>=3.6,<5    # single-file, pure-Python PDF
