@@ -1,14 +1,31 @@
-# Minimal deps for VetStar Pi — chosen for the piwheels-prebuilt wheel path so
-# a Pi Zero 2 W / 3B / 4 (1 GB) doesn't spend 40 min compiling numpy.
+# VetStar Pi dependencies.
 #
-# Install with:
+# All packages are available as prebuilt ARM wheels on piwheels, so a
+# fresh install on a 1 GB Pi (Zero 2 W / 3B / 4 / 5) finishes in
+# ~4 minutes with no compilation. Install with:
+#
 #   pip install --index-url https://www.piwheels.org/simple \
 #               --extra-index-url https://pypi.org/simple \
 #               -r requirements-pi.txt
 #
 # Pinned upper bounds keep import RAM predictable on 1 GB devices.
+
+# ---- Core (always needed) ---------------------------------------------
 numpy>=1.23,<3
 scipy>=1.10,<2
-astropy>=5.3,<8      # FITS reader + BLS + LombScargle only
-matplotlib>=3.6,<4   # Agg backend, no Qt/Tk
-reportlab>=3.6,<5    # single-file, pure-Python PDF
+astropy>=5.3,<8            # FITS reader + BLS + LombScargle + WCS
+matplotlib>=3.6,<4         # Agg + TkAgg backend, no Qt/Tk pip install
+reportlab>=3.6,<5          # Single-file, pure-Python PDF
+
+# ---- Remote-service integrations (recommended — optional at runtime) --
+# astroquery drives MAST/TESScut, ExoFOP/TIC v8 catalog, Gaia DR3, SIMBAD,
+# and Vizier cone searches. Each caller in vetstar_pi/ imports it lazily
+# and fails soft when the network is offline, so the base pipeline still
+# runs without it. Skip only if you'll never fetch anything.
+astroquery>=0.4.7,<1
+
+# tess-point (installed as `tess-point`, imported as `tess_stars2px`)
+# resolves (RA, Dec) → (sector, camera, ccd) for the microlensing
+# coverage tool. Coverage exits gracefully with a "no_tess_point" flag
+# per event when this isn't installed.
+tess-point>=0.9.0
