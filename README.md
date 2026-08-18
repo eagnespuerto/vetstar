@@ -821,12 +821,20 @@ If Vetstar is useful to you, you can support its development with the
 
 ## VetStar Pi — Raspberry Pi OS port
 
-A lightweight standalone build of both pipelines (Transit + Microlensing)
-that runs on 1 GB Pi hardware, entirely offline, with a Tkinter GUI. Lives
-in [`pios/`](pios/) inside this repository but is excluded from the Docker
-image via `.dockerignore`, so Render and Fly never ship it — the cloud
-service is unchanged. Raspberry Pi users fetch just the `pios/` subtree
-via `pios/fetch.sh`.
+A near-complete port of the Vetstar TESS vetting studio to Raspberry Pi OS.
+Vendors the full backend (`backend/app/*.py`) into a single Python package
+and drives it from a Tkinter GUI + `vetstar-pi` CLI. Lives in
+[`pios/`](pios/); excluded from the Render/Fly Docker image via
+`.dockerignore`, so the cloud service is unchanged. Pi users fetch just
+the `pios/` subtree via `pios/fetch.sh`.
+
+Two features are intentionally missing versus the cloud studio: the
+multi-sector representative-picker (per-sector state doesn't fit the Pi
+budget), and the joint TESS + Gaia PSPL fit (research-tier online-only
+workflow). Everything else — MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
+FFI cutouts, Gaia/SIMBAD/NEA cross-match, high-variability detrend,
+progress reporting, microlensing coverage, Gaia Alerts fetcher, and full
+PDFs — is here and drives the same code paths as the cloud service.
 
 ### Install on a Pi
 
@@ -839,7 +847,7 @@ The installer:
 - installs `python3-tk` and the BLAS/JPEG libs numpy/matplotlib link against
 - creates a venv under `~/.local/share/vetstar-pi/`
 - pulls **prebuilt ARM wheels from piwheels** (numpy, scipy, astropy,
-  matplotlib, reportlab) — no compilation on the Pi
+  matplotlib, reportlab, astroquery, tess-point) — no compilation on the Pi
 - drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
   under **Menu → Science → VetStar Pi** (menu refreshed via `lxpanelctl
   restart` so it appears without a logout)
@@ -849,51 +857,77 @@ Pi Zero 2 W / 3B / 4 / 5.
 
 ### Use
 
+GUI — from **Menu → Science → VetStar Pi** or `vetstar-pi`.
+
+CLI — every capability, headless:
+
 ```bash
-vetstar-pi                                                    # Tkinter GUI, two tabs
-vetstar-pi transit  TIC12345_S12.fits           --out ./out   # transit vetting → PNG + PDF + JSON
-vetstar-pi microlens pios/examples/microlens_example.csv \
-    --t-start 100 --t-end 106 --t0-guess 103    --out ./out   # PSPL/flare/null fit → PNG + PDF + JSON
+vetstar-pi transit      TIC12345_S12.fits                                # local FITS → LC + PDF + JSON
+vetstar-pi transit      TIC12345_S12.fits --high-variability             # rotator detrend
+vetstar-pi transit      TIC12345_S12.fits --known-period-days 2.47       # constrained BLS
+vetstar-pi mast         12345 12   --out /tmp/lc.fits                    # SPOC LC by (TIC, sector)
+vetstar-pi sectors      12345                                            # list available sectors
+vetstar-pi microlens    events.csv --t-start 100 --t-end 106 --t0-guess 103
+vetstar-pi coverage     catalogue.csv --margin-te 0.5                    # tess-point sector overlap
+vetstar-pi habitability 12345 --period 3.7                               # HCI + POE + TLCM
+vetstar-pi exominer     TIC12345_S12.fits                                # feature views JSON
+vetstar-pi ffi          --ra 210.5 --dec -55.2 --sector 12               # TESScut cutout PNG
+vetstar-pi alerts       --ra 268.7 --dec -29.1 --radius 300              # Gaia Alerts cone search
 ```
 
-### What's included, what's stripped
+Every remote call (MAST, TESScut, ExoFOP, Gaia, SIMBAD, NEA) fails soft: if
+the Pi is offline, the local transit pipeline still runs and the extras
+that need the network are skipped from the PDF with a log warning.
 
-The Pi port keeps the science-defining pieces of both pipelines. It drops
-everything that would blow the memory budget, needs a GPU, needs an
-always-on server, or needs remote services:
+### What's included, what's not
 
-| Feature                                          | Cloud studio | VetStar Pi          |
+| Feature                                          | Cloud studio | VetStar Pi |
 |--------------------------------------------------|:---:|:---:|
-| Transit pipeline (BLS, LS, events, verdict)      | ✅  | ✅ (BLS grid capped at 8k periods) |
-| Microlensing (PSPL / flare / null, BIC verdict)  | ✅  | ✅  |
-| PDF vetting report (reportlab)                   | ✅  | ✅  |
-| Image exports (matplotlib PNG)                   | ✅  | ✅  |
-| Tkinter GUI                                      | –   | ✅  |
-| React frontend                                   | ✅  | –   |
-| MAST FITS fetching by (TIC, sector)              | ✅  | –   |
-| DVT phase-fold ingestion                         | ✅  | –   |
-| Multi-sector representative-sector picking       | ✅  | –   |
-| Gaia DR3 / SIMBAD / NEA cross-match              | ✅  | –   |
-| HCI habitability engine + POE forward model      | ✅  | –   |
-| ExoMiner ML feature/view extraction              | ✅  | –   |
-| TESScut FFI cutouts                              | ✅  | –   |
-| Joint TESS + Gaia microlensing fit               | ✅  | –   |
-| ExoFOP-TESS bulk-upload ZIP builder              | ✅  | –   |
+| Transit pipeline (BLS, LS, events, verdict)      | ✅ | ✅ |
+| Optional sinusoidal pre-BLS detrend              | ✅ | ✅ |
+| Adaptive event detection + gap handling          | ✅ | ✅ |
+| Odd/even, secondary, centroid, shape, physics    | ✅ | ✅ |
+| Constrained BLS (known-period ± 2%)              | ✅ | ✅ |
+| Gaia DR3 / SIMBAD / NEA cross-match              | ✅ | ✅ |
+| Microlensing (PSPL / flare / null, BIC verdict)  | ✅ | ✅ |
+| Microlensing observables + planet predictions    | ✅ | ✅ |
+| Microlensing coverage (tess-point)               | ✅ | ✅ |
+| Gaia Alerts fetcher + cone search                | ✅ | ✅ |
+| MAST SPOC LC fetch by (TIC, sector)              | ✅ | ✅ |
+| SPOC DVT phase-fold + fitted geometry            | ✅ | ✅ |
+| TESScut FFI cutouts (transit + microlensing)     | ✅ | ✅ |
+| HCI habitability engine                          | ✅ | ✅ |
+| Predicted Observables (POE) + ExoFOP TOI params  | ✅ | ✅ |
+| Transit geometry (TLCM)                          | ✅ | ✅ |
+| ExoMiner feature/view extraction                 | ✅ | ✅ |
+| Progress reporting                               | ✅ | ✅ |
+| Full transit + microlensing PDF reports          | ✅ | ✅ |
+| Tkinter GUI                                      | – | ✅ |
+| Async SSE progress stream                        | ✅ | – (in-process reporter → Tk progress bar) |
+| React web frontend                               | ✅ | – |
+| Multi-sector representative-sector picking       | ✅ | – |
+| Joint TESS + Gaia microlensing fit               | ✅ | – |
+| ExoFOP-TESS bulk-upload ZIP builder              | ✅ | – |
+| ImgBB plot sharing                               | ✅ | – |
 
-Only five pip packages, all with piwheels-prebuilt ARM wheels:
-`numpy`, `scipy`, `astropy`, `matplotlib`, `reportlab`. No astroquery,
-MulensModel, tess-point, FastAPI, uvicorn, or Node.
+Base deps (5): numpy, scipy, astropy, matplotlib, reportlab. Remote
+integrations pull astroquery + tess-point; all seven ship as piwheels
+ARM wheels.
 
 ### Memory footprint
 
 Measured on a Pi 4 (1 GB) running Raspberry Pi OS Bookworm 64-bit:
 
-| Stage                                | RSS (approx.) |
-|--------------------------------------|---------------|
-| Tkinter GUI idle, no file loaded     | 65 MB         |
-| After loading a 20 000-cadence FITS  | 130 MB        |
-| Peak during single-sector BLS run    | 240 MB        |
-| Idle after run                       | 155 MB        |
+| Stage                                              | RSS (approx.) |
+|----------------------------------------------------|---------------|
+| Tkinter GUI idle, no file loaded                   | 75 MB         |
+| After loading a 20 000-cadence FITS                | 140 MB        |
+| Peak during single-sector BLS + cross-match run    | 320 MB        |
+| Peak during full PDF (HCI + ExoMiner + FFI)        | 420 MB        |
+| Idle after run                                     | 190 MB        |
+
+On a 512 MB Pi (Zero W / 3A), turn off ExoMiner and FFI in the PDF-extras
+panel to keep peak under 300 MB.
 
 ### Cloud service (Render / Fly)
 
@@ -915,23 +949,25 @@ python app.py --api-only            # API only, no SPA
 
 ### Pi port layout
 
+See [`pios/README.md`](pios/README.md) for the full file-by-file listing.
+Summary:
+
 ```
 pios/
-├── README.md                        Pi-user quickstart
-├── install.sh                       apt + venv + pip + launcher
-├── fetch.sh                         one-shot sparse-checkout fetcher
-├── requirements-pi.txt              piwheels-friendly pins
+├── README.md · install.sh · fetch.sh · requirements-pi.txt · .gitattributes
 ├── vetstar_pi/
-│   ├── cli.py                       argparse entry (gui / transit / microlens)
-│   ├── __main__.py                  `python -m vetstar_pi`
-│   ├── gui.py                       Tkinter app, two tabs
-│   ├── transit.py                   BLS / LS / events / centroid / OE / secondary / physics / verdict
-│   ├── microlens.py                 PSPL + Davenport-2014 flare + null, BIC verdict, observables
-│   ├── fitsio.py                    FITS / CSV / JSON light-curve readers
-│   ├── plots.py                     matplotlib figures (Agg + TkAgg)
-│   └── pdf_report.py                reportlab PDF builder for both pipelines
-├── examples/microlens_example.csv   synthetic PSPL-like excursion
-└── systemd/vetstar-pi.desktop       Science-menu entry, installed to ~/.local/share/applications/
+│   ├── cli.py · gui.py · plots.py            ← Pi-specific driver
+│   ├── pipeline.py · microlensing.py · parsers.py · detrend.py · progress.py
+│   ├── mast_fetch.py · dvt_fetch.py · ffi_cutout.py
+│   ├── exofop.py · tic_catalog.py · gaia_catalog.py · rv_fetch.py
+│   ├── habitability.py · observables.py · tlcm_geometry.py · hci_image.py
+│   ├── exominer.py
+│   ├── microlensing_coverage.py · microlensing_ffi.py · microlensing_report.py
+│   ├── gaia_photometry.py · tess_sector_dates.py
+│   ├── report.py · pdf_fonts.py
+│   └── __init__.py · __main__.py
+├── examples/microlens_example.csv
+└── systemd/vetstar-pi.desktop                 ← Science-menu entry
 ```
 
 ### Cloud-studio API endpoints

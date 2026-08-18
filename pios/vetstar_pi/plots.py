@@ -1,123 +1,96 @@
-"""Matplotlib plot helpers. All figures use the Agg backend so the Pi runs
-headless without a display server. Public entry points return either a
-saved PNG path (:func:`save_png`) or a live ``Figure`` (``build_*``) so the
-Tkinter GUI can embed it via :class:`~matplotlib.backends.backend_tkagg.FigureCanvasTkAgg`.
+"""GUI-only matplotlib helpers.
+
+The vendored ``pipeline.make_plots`` and ``report.build_pdf`` already
+produce all the plots and PDF sections shown on screen and in the report.
+This module is a small extra: it builds a *live* matplotlib Figure the
+Tkinter canvas can embed (so the plot resizes with the window, has native
+zoom, etc.), without going through the base64 round-trip that the PDF
+pipeline uses.
 """
 from __future__ import annotations
 
-import io
 from typing import Optional
 
 import matplotlib
-matplotlib.use("Agg")  # noqa: E402
+matplotlib.use("Agg")  # noqa: E402  (TkAgg gets picked up when gui.py imports it)
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----------------------------------------------------------------------
-# Transit plots
-# ----------------------------------------------------------------------
-def build_transit_overview(result, t, f) -> plt.Figure:
-    """3-panel: full light curve with event markers, BLS periodogram, LS periodogram."""
-    fig, axes = plt.subplots(3, 1, figsize=(9, 8))
+def build_transit_overview(result, t, f):
+    """Two-panel figure: full LC with event shading + zoom of the deepest event."""
+    events = result.events or []
+    fig, axes = plt.subplots(2, 1, figsize=(8.5, 6.0))
 
     ax = axes[0]
-    ax.plot(t, f, "k.", ms=1.5, alpha=0.5)
-    for i, ev in enumerate(result.events, start=1):
+    ax.plot(t, f, "k.", ms=1.4, alpha=0.5)
+    for i, ev in enumerate(events, start=1):
         ax.axvspan(ev["t_start"], ev["t_end"], color="C1", alpha=0.25)
-        ax.text(
-            0.5 * (ev["t_start"] + ev["t_end"]),
-            ax.get_ylim()[1] if ax.get_ylim()[1] < 2 else 1.02,
-            f"E{i}", color="C1", fontsize=8, ha="center", va="bottom",
-        )
     ax.set_xlabel("Time (BTJD or similar)")
-    ax.set_ylabel("Normalized flux")
+    ax.set_ylabel("Normalised flux")
     tic = result.star.tic_id
     ax.set_title(f"Light curve — TIC {tic}" if tic else "Light curve")
 
     ax = axes[1]
-    if result.bls.get("periodogram"):
-        p = result.bls["periodogram"]
-        ax.plot(p["periods"], p["power"], "C0-", lw=0.8)
-        ax.axvline(result.bls["period"], color="C3", ls="--", lw=1,
-                   label=f"P = {result.bls['period']:.4f} d  SDE={result.bls['sde']:.1f}")
-        ax.legend(fontsize=8, loc="upper right")
-    ax.set_xlabel("Period (d)")
-    ax.set_ylabel("BLS power")
-    ax.set_title("Box Least Squares")
-
-    ax = axes[2]
-    if result.lomb_scargle.get("periodogram"):
-        p = result.lomb_scargle["periodogram"]
-        ax.plot(p["periods"], p["power"], "C2-", lw=0.8)
-        ax.axvline(result.lomb_scargle["top_period"], color="C3", ls="--", lw=1,
-                   label=f"P = {result.lomb_scargle['top_period']:.4f} d")
-        ax.legend(fontsize=8, loc="upper right")
-    ax.set_xlabel("Period (d)")
-    ax.set_ylabel("LS power")
-    ax.set_title("Lomb-Scargle")
-
-    fig.tight_layout()
-    return fig
-
-
-def build_transit_zoom(result, t, f) -> Optional[plt.Figure]:
-    """Grid of up to 6 events, one per panel."""
-    events = result.events[:6]
-    if not events:
-        return None
-    n = len(events)
-    cols = min(3, n)
-    rows = int(np.ceil(n / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 2.2 * rows), squeeze=False)
-    for i, ev in enumerate(events):
-        ax = axes[i // cols][i % cols]
-        pad = 0.4 * ev["duration_d"] + 0.05
-        m = (t > ev["t_start"] - pad) & (t < ev["t_end"] + pad)
-        ax.plot(t[m], f[m], "k.", ms=2)
-        ax.axvspan(ev["t_start"], ev["t_end"], color="C1", alpha=0.25)
+    if events:
+        primary = max(events, key=lambda e: e["depth"])
+        pad = max(0.4 * primary["duration_d"], 0.05)
+        m = (t > primary["t_start"] - pad) & (t < primary["t_end"] + pad)
+        ax.plot(t[m], f[m], "k.", ms=2.2)
+        ax.axvspan(primary["t_start"], primary["t_end"], color="C1", alpha=0.25)
         ax.set_title(
-            f"E{i + 1}  depth={ev['depth'] * 1e2:.2f}%  SNR={ev['depth_snr']:.1f}",
-            fontsize=9,
+            f"Deepest event: depth={primary['depth'] * 100:.3f}%  "
+            f"SNR={primary['depth_snr']:.1f}",
+            fontsize=10,
         )
-        ax.tick_params(labelsize=7)
-    # Blank the leftover axes
-    for j in range(n, rows * cols):
-        axes[j // cols][j % cols].axis("off")
+    else:
+        ax.text(0.5, 0.5, "no events detected", ha="center", va="center",
+                transform=ax.transAxes, color="grey")
+        ax.set_xticks([])
+        ax.set_yticks([])
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Flux")
+
     fig.tight_layout()
     return fig
 
 
-# ----------------------------------------------------------------------
-# Microlensing plot
-# ----------------------------------------------------------------------
 def build_microlens_fit(result) -> plt.Figure:
-    """LC in the fit window with all three model overlays + BIC bar chart."""
-    fig, axes = plt.subplots(2, 1, figsize=(8, 6.5), gridspec_kw={"height_ratios": [3, 1]})
+    """LC overlaid with all three model fits + BIC bar chart.
+
+    ``result`` is the dict returned by :func:`microlensing.analyze_event`.
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(8.5, 6.5),
+                             gridspec_kw={"height_ratios": [3, 1]})
 
     ax = axes[0]
-    t = result.t
-    ax.errorbar(t, result.flux_n, yerr=result.flux_err_n,
-                fmt="k.", ms=2, elinewidth=0.5, alpha=0.7)
+    t = np.asarray(result["time_windowed"])
+    f_n = np.asarray(result["flux_normalized"])
+    fe_n = np.asarray(result["flux_err_normalized"])
     order = np.argsort(t)
-    if result.pspl.model_flux is not None:
-        ax.plot(t[order], result.pspl.model_flux[order], "C0-", lw=1.5,
-                label=f"PSPL  BIC={result.pspl.bic:.1f}")
-    if result.flare.model_flux is not None:
-        ax.plot(t[order], result.flare.model_flux[order], "C1--", lw=1.2,
-                label=f"Flare BIC={result.flare.bic:.1f}")
-    ax.axhline(result.null.params["baseline"], color="C7", ls=":", lw=1,
-               label=f"Null  BIC={result.null.bic:.1f}")
+    ax.errorbar(t, f_n, yerr=fe_n, fmt="k.", ms=2, elinewidth=0.5, alpha=0.7)
+
+    pspl = result["models"].get("pspl") or {}
+    flare = result["models"].get("flare") or {}
+    null_ = result["models"].get("null") or {}
+    if pspl.get("model_flux"):
+        ax.plot(t[order], np.asarray(pspl["model_flux"])[order], "C0-", lw=1.6,
+                label=f"PSPL  BIC={pspl.get('bic'):.1f}")
+    if flare.get("model_flux"):
+        ax.plot(t[order], np.asarray(flare["model_flux"])[order], "C1--", lw=1.2,
+                label=f"Flare BIC={flare.get('bic'):.1f}")
+    if null_.get("model_flux"):
+        ax.axhline(np.asarray(null_["model_flux"]).mean(), color="C7", ls=":", lw=1,
+                   label=f"Null  BIC={null_.get('bic'):.1f}")
     ax.set_xlabel("Time")
-    ax.set_ylabel("Normalized flux")
-    ax.set_title(
-        f"Verdict: {result.verdict.upper()}  (confidence {result.confidence:.2f})"
-    )
+    ax.set_ylabel("Normalised flux")
+    conf = result.get("confidence", 0.0)
+    ax.set_title(f"Verdict: {result.get('verdict', '?').upper()}  (confidence {conf:.2f})")
     ax.legend(fontsize=8, loc="best")
 
     ax = axes[1]
     names = ["PSPL", "Flare", "Null"]
-    bics = [result.pspl.bic, result.flare.bic, result.null.bic]
+    bics = [pspl.get("bic", np.nan), flare.get("bic", np.nan), null_.get("bic", np.nan)]
     ax.bar(names, bics, color=["C0", "C1", "C7"])
     ax.set_ylabel("BIC (lower = better)")
 
@@ -125,17 +98,31 @@ def build_microlens_fit(result) -> plt.Figure:
     return fig
 
 
-# ----------------------------------------------------------------------
-# I/O
-# ----------------------------------------------------------------------
-def save_png(fig: plt.Figure, path: str, dpi: int = 120) -> str:
-    fig.savefig(path, format="png", dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    return path
+def build_raw_lc(t, flux, flux_err=None, title="Raw light curve") -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(8.5, 4.5))
+    ax.errorbar(t, flux, yerr=flux_err, fmt="k.", ms=2,
+                elinewidth=0.3 if flux_err is not None else 0, alpha=0.7)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Flux")
+    ax.set_title(title)
+    fig.tight_layout()
+    return fig
 
 
-def fig_to_png_bytes(fig: plt.Figure, dpi: int = 120) -> bytes:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    return buf.getvalue()
+def build_coverage_summary(coverage: dict) -> Optional[plt.Figure]:
+    """One-panel bar chart of per-event observability (green = observable)."""
+    events = coverage.get("events") or []
+    if not events:
+        return None
+    labels = [str(e.get("event_id", i)) for i, e in enumerate(events)]
+    obs = [1 if e.get("observable") else 0 for e in events]
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 0.4), 3.5))
+    ax.bar(labels, obs, color=["#22c55e" if o else "#cbd5e1" for o in obs],
+           edgecolor="white", linewidth=0.6)
+    ax.set_ylim(0, 1.2)
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels(["Not observable", "Observable"])
+    ax.set_title(f"TESS sector coverage — {sum(obs)}/{len(obs)} observable")
+    ax.tick_params(axis="x", labelrotation=90, labelsize=8)
+    fig.tight_layout()
+    return fig
