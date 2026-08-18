@@ -819,28 +819,126 @@ If Vetstar is useful to you, you can support its development with the
 
 ---
 
-## Developer info
+## VetStar Pi — Raspberry Pi OS port
 
-### Run locally
+A lightweight standalone build of both pipelines (Transit + Microlensing)
+that runs on 1 GB Pi hardware, entirely offline, with a Tkinter GUI. Lives
+in [`pios/`](pios/) inside this repository but is excluded from the Docker
+image via `.dockerignore`, so Render and Fly never ship it — the cloud
+service is unchanged. Raspberry Pi users fetch just the `pios/` subtree
+via `pios/fetch.sh`.
 
-```bash
-python app.py
-```
-
-Installs Python deps if missing, builds the React frontend if needed,
-starts a single Uvicorn process at `http://127.0.0.1:8000`.
-
-Requirements: Python ≥ 3.10 and Node.js ≥ 18 (first run only).
+### Install on a Pi
 
 ```bash
-python app.py --port 9000          # custom port
-python app.py --host 0.0.0.0       # listen on all interfaces
-python app.py --reload             # auto-reload on backend changes
-python app.py --skip-build         # don't rebuild the frontend
-python app.py --api-only           # API only, no SPA
+curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | bash
 ```
 
-### API endpoints
+The installer:
+
+- installs `python3-tk` and the BLAS/JPEG libs numpy/matplotlib link against
+- creates a venv under `~/.local/share/vetstar-pi/`
+- pulls **prebuilt ARM wheels from piwheels** (numpy, scipy, astropy,
+  matplotlib, reportlab) — no compilation on the Pi
+- drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
+  under **Menu → Science → VetStar Pi** (menu refreshed via `lxpanelctl
+  restart` so it appears without a logout)
+
+Tested on Raspberry Pi OS Bookworm (Python 3.11) and Bullseye (Python 3.9),
+Pi Zero 2 W / 3B / 4 / 5.
+
+### Use
+
+```bash
+vetstar-pi                                                    # Tkinter GUI, two tabs
+vetstar-pi transit  TIC12345_S12.fits           --out ./out   # transit vetting → PNG + PDF + JSON
+vetstar-pi microlens pios/examples/microlens_example.csv \
+    --t-start 100 --t-end 106 --t0-guess 103    --out ./out   # PSPL/flare/null fit → PNG + PDF + JSON
+```
+
+### What's included, what's stripped
+
+The Pi port keeps the science-defining pieces of both pipelines. It drops
+everything that would blow the memory budget, needs a GPU, needs an
+always-on server, or needs remote services:
+
+| Feature                                          | Cloud studio | VetStar Pi          |
+|--------------------------------------------------|:---:|:---:|
+| Transit pipeline (BLS, LS, events, verdict)      | ✅  | ✅ (BLS grid capped at 8k periods) |
+| Microlensing (PSPL / flare / null, BIC verdict)  | ✅  | ✅  |
+| PDF vetting report (reportlab)                   | ✅  | ✅  |
+| Image exports (matplotlib PNG)                   | ✅  | ✅  |
+| Tkinter GUI                                      | –   | ✅  |
+| React frontend                                   | ✅  | –   |
+| MAST FITS fetching by (TIC, sector)              | ✅  | –   |
+| DVT phase-fold ingestion                         | ✅  | –   |
+| Multi-sector representative-sector picking       | ✅  | –   |
+| Gaia DR3 / SIMBAD / NEA cross-match              | ✅  | –   |
+| HCI habitability engine + POE forward model      | ✅  | –   |
+| ExoMiner ML feature/view extraction              | ✅  | –   |
+| TESScut FFI cutouts                              | ✅  | –   |
+| Joint TESS + Gaia microlensing fit               | ✅  | –   |
+| ExoFOP-TESS bulk-upload ZIP builder              | ✅  | –   |
+
+Only five pip packages, all with piwheels-prebuilt ARM wheels:
+`numpy`, `scipy`, `astropy`, `matplotlib`, `reportlab`. No astroquery,
+MulensModel, tess-point, FastAPI, uvicorn, or Node.
+
+### Memory footprint
+
+Measured on a Pi 4 (1 GB) running Raspberry Pi OS Bookworm 64-bit:
+
+| Stage                                | RSS (approx.) |
+|--------------------------------------|---------------|
+| Tkinter GUI idle, no file loaded     | 65 MB         |
+| After loading a 20 000-cadence FITS  | 130 MB        |
+| Peak during single-sector BLS run    | 240 MB        |
+| Idle after run                       | 155 MB        |
+
+### Cloud service (Render / Fly)
+
+The cloud studio (React + FastAPI + Docker) is unchanged. `pios/` is in
+`.dockerignore` so it never enters the build context, and
+`.github/workflows/ci-deploy.yml` uses `paths-ignore: pios/**` so pushes
+that only touch the Pi port don't spin the Docker CI or the deploy jobs.
+
+To run the full cloud studio locally (needs Python ≥ 3.10 + Node ≥ 18):
+
+```bash
+python app.py                       # http://127.0.0.1:8000
+python app.py --port 9000           # custom port
+python app.py --host 0.0.0.0        # listen on all interfaces
+python app.py --reload              # auto-reload on backend changes
+python app.py --skip-build          # don't rebuild the frontend
+python app.py --api-only            # API only, no SPA
+```
+
+### Pi port layout
+
+```
+pios/
+├── README.md                        Pi-user quickstart
+├── install.sh                       apt + venv + pip + launcher
+├── fetch.sh                         one-shot sparse-checkout fetcher
+├── requirements-pi.txt              piwheels-friendly pins
+├── vetstar_pi/
+│   ├── cli.py                       argparse entry (gui / transit / microlens)
+│   ├── __main__.py                  `python -m vetstar_pi`
+│   ├── gui.py                       Tkinter app, two tabs
+│   ├── transit.py                   BLS / LS / events / centroid / OE / secondary / physics / verdict
+│   ├── microlens.py                 PSPL + Davenport-2014 flare + null, BIC verdict, observables
+│   ├── fitsio.py                    FITS / CSV / JSON light-curve readers
+│   ├── plots.py                     matplotlib figures (Agg + TkAgg)
+│   └── pdf_report.py                reportlab PDF builder for both pipelines
+├── examples/microlens_example.csv   synthetic PSPL-like excursion
+└── systemd/vetstar-pi.desktop       Science-menu entry, installed to ~/.local/share/applications/
+```
+
+### Cloud-studio API endpoints
+
+Kept here for reference — the cloud service and its build/deploy paths
+are unchanged. None of the endpoints below exist in the Pi port; use the
+CLI or GUI instead.
 
 ```
 POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → JSON

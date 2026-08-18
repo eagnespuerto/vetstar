@@ -1,0 +1,6 @@
+# Force LF endings on shell scripts and the .desktop launcher so they work
+# when checked out on Raspberry Pi OS from a Windows-configured Git.
+*.sh              text eol=lf
+*.desktop         text eol=lf
+install.sh        text eol=lf
+fetch.sh          text eol=lf

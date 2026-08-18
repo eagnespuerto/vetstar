@@ -33,3 +33,7 @@ tess-vetting-studio.exe
 # Git metadata
 .git
 .gitignore.bak
+
+# VetStar Pi — Raspberry Pi OS port. Ships to Pi users via pios/fetch.sh;
+# has no place in the Render / Fly Docker image.
+pios
