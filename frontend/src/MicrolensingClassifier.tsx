@@ -1056,7 +1056,7 @@ function ResultsPanel({
   setVisible: (v: Record<ModelKey, boolean>) => void;
   residualModel: ModelKey;
   setResidualModel: (m: ModelKey) => void;
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
   ffiPng: string | null;
   exportMetadata: {
     event_id: string | null;
@@ -1240,7 +1240,7 @@ function ExportToolbar({
   result, svgRef, ffiPng, exportMetadata,
 }: {
   result: MicrolensingFitResponse;
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
   ffiPng: string | null;
   exportMetadata: {
     event_id: string | null;
