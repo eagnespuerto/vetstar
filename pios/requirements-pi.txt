@@ -11,11 +11,11 @@
 # Pinned upper bounds keep import RAM predictable on 1 GB devices.
 
 # ---- Core (always needed) ---------------------------------------------
-numpy>=1.23,<3
-scipy>=1.10,<2
-astropy>=5.3,<8            # FITS reader + BLS + LombScargle + WCS
-matplotlib>=3.6,<4         # Agg + TkAgg backend, no Qt/Tk pip install
-reportlab>=3.6,<5          # Single-file, pure-Python PDF
+numpy>=1.26,<3
+scipy>=1.11,<2
+astropy>=6.0,<9            # FITS reader + BLS + LombScargle + WCS
+matplotlib>=3.7,<4         # Agg + TkAgg backend, no Qt/Tk pip install
+reportlab>=4.0,<6          # Single-file, pure-Python PDF
 
 # ---- Remote-service integrations (recommended — optional at runtime) --
 # astroquery drives MAST/TESScut, ExoFOP/TIC v8 catalog, Gaia DR3, SIMBAD,
@@ -28,4 +28,4 @@ astroquery>=0.4.7,<1
 # resolves (RA, Dec) → (sector, camera, ccd) for the microlensing
 # coverage tool. Coverage exits gracefully with a "no_tess_point" flag
 # per event when this isn't installed.
-tess-point>=0.9.0
+tess-point>=0.9.4
