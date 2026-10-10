@@ -32,6 +32,11 @@ from scipy.ndimage import median_filter
 # blends.
 CROSSMATCH_RADIUS_ARCSEC = 5.0
 
+# Hard wall-clock budget for the remote catalog queries. On expiry the
+# slow source is reported as an error and the verdict stands unchanged.
+CROSSMATCH_TIMEOUT_S = 30.0
+_CROSSMATCH_POOL = None
+
 # exoplanets.org full-catalog CSV. The site has been static since ~2018 but
 # remains the canonical machine-readable mirror of the original Exoplanet
 # Orbit Database. We pull the whole table once per process and cone-search
@@ -235,6 +240,90 @@ def _query_nasa_exoplanet_archive(ra: float, dec: float, radius_arcsec: float) -
         return {"error": str(exc)}
 
 
+def _crossmatch_pool():
+    """Shared worker pool for catalog queries (created lazily)."""
+    global _CROSSMATCH_POOL
+    if _CROSSMATCH_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _CROSSMATCH_POOL = ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="crossmatch"
+        )
+    return _CROSSMATCH_POOL
+
+
+def _collect_with_deadline(futs: dict, timeout_s: float) -> dict:
+    """Wait for ``futs`` up to ``timeout_s`` total; late/failed ones → error dict.
+
+    Late futures are abandoned (left running in the pool) rather than
+    awaited, so a hung remote service can't stall the pipeline.
+    """
+    import concurrent.futures as cf
+    cf.wait(list(futs.values()), timeout=timeout_s)
+    out = {}
+    for key, fut in futs.items():
+        if not fut.done():
+            fut.cancel()
+            out[key] = {"error": f"timed out after {timeout_s:.0f}s"}
+            continue
+        try:
+            out[key] = fut.result()
+        except Exception as exc:
+            out[key] = {"error": str(exc)}
+    return out
+
+
+def _query_gaia_dr3(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
+    """Nearest Gaia DR3 source with its non-single-star flag, or None."""
+    from astroquery.gaia import Gaia
+    Gaia.ROW_LIMIT = 5
+    adql = (
+        "SELECT TOP 1 source_id, ra, dec, phot_g_mean_mag, "
+        "non_single_star, "
+        "DISTANCE(POINT('ICRS', ra, dec), "
+        f"POINT('ICRS', {ra}, {dec})) * 3600 AS dist_arcsec "
+        "FROM gaiadr3.gaia_source "
+        f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
+        f"CIRCLE('ICRS', {ra}, {dec}, {radius_arcsec / 3600.0})) "
+        "ORDER BY dist_arcsec ASC"
+    )
+    # Synchronous job: a TOP 1 cone search is tiny, and the async variant
+    # polls the archive's job queue with no upper bound.
+    tbl = Gaia.launch_job(adql).get_results()
+    if len(tbl) == 0:
+        return None
+    row = tbl[0]
+    return {
+        "source_id": int(row["source_id"]),
+        "dist_arcsec": float(row["dist_arcsec"]),
+        "g_mag": float(row["phot_g_mean_mag"]) if row["phot_g_mean_mag"] is not None else None,
+        "nss_flag": int(row["non_single_star"]) if row["non_single_star"] is not None else 0,
+        "nss_description": _gaia_nss_description(row["non_single_star"]),
+    }
+
+
+def _query_simbad(coord, radius) -> Optional[dict]:
+    """Nearest SIMBAD object with its otype/ids, or None."""
+    from astroquery.simbad import Simbad
+    sb = Simbad()
+    sb.TIMEOUT = 15
+    # otype is included by default in newer astroquery; ids is opt-in.
+    # Wrap each in try/except so version drift doesn't crash the query.
+    for field_name in ("otype", "ids"):
+        try:
+            sb.add_votable_fields(field_name)
+        except Exception:
+            pass
+    tbl = sb.query_region(coord, radius=radius)
+    if tbl is None or len(tbl) == 0:
+        return None
+    row = tbl[0]
+    return {
+        "main_id": _row_get(row, "MAIN_ID", "main_id"),
+        "otype":   _row_get(row, "OTYPE", "otype") or "",
+        "ids":     _row_get(row, "IDS", "ids") or "",
+    }
+
+
 def crossmatch_known_object(
     ra: Optional[float],
     dec: Optional[float],
@@ -271,85 +360,33 @@ def crossmatch_known_object(
     coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
     radius = radius_arcsec * u.arcsec
 
-    sources_tried = []
-    gaia_match = None
-    simbad_match = None
+    sources_tried = ["Gaia DR3", "SIMBAD", "NASA Exoplanet Archive"]
+
+    # Run the remote queries concurrently under one wall-clock budget.
+    # Neither astroquery's Gaia async TAP job nor its pyvo-backed SIMBAD
+    # query honours a timeout, so a slow/queued service used to block the
+    # job indefinitely (and the SSE stream then gave up after 10 min).
+    pool = _crossmatch_pool()
+    futs = {
+        "gaia": pool.submit(_query_gaia_dr3, ra, dec, radius_arcsec),
+        "simbad": pool.submit(_query_simbad, coord, radius),
+        "nea": pool.submit(_query_nasa_exoplanet_archive, ra, dec, radius_arcsec),
+    }
+    results = _collect_with_deadline(futs, CROSSMATCH_TIMEOUT_S)
+    gaia_match = results["gaia"]
+    simbad_match = results["simbad"]
+    nea_match = results["nea"]
     exoplanets_org_match = None
-    nea_match = None
-
-    # ----- Gaia DR3 ----------------------------------------------------
-    try:
-        from astroquery.gaia import Gaia
-        sources_tried.append("Gaia DR3")
-        Gaia.ROW_LIMIT = 5
-        # gaiadr3.gaia_source contains non_single_star; we also pull the
-        # in_qso_candidates / in_galaxy_candidates flags so we can flag
-        # non-stellar matches.
-        adql = (
-            "SELECT TOP 1 source_id, ra, dec, phot_g_mean_mag, "
-            "non_single_star, "
-            "DISTANCE(POINT('ICRS', ra, dec), "
-            f"POINT('ICRS', {ra}, {dec})) * 3600 AS dist_arcsec "
-            "FROM gaiadr3.gaia_source "
-            f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
-            f"CIRCLE('ICRS', {ra}, {dec}, {radius_arcsec / 3600.0})) "
-            "ORDER BY dist_arcsec ASC"
-        )
-        job = Gaia.launch_job_async(adql)
-        tbl = job.get_results()
-        if len(tbl) > 0:
-            row = tbl[0]
-            nss_desc = _gaia_nss_description(row["non_single_star"])
-            gaia_match = {
-                "source_id": int(row["source_id"]),
-                "dist_arcsec": float(row["dist_arcsec"]),
-                "g_mag": float(row["phot_g_mean_mag"]) if row["phot_g_mean_mag"] is not None else None,
-                "nss_flag": int(row["non_single_star"]) if row["non_single_star"] is not None else 0,
-                "nss_description": nss_desc,
-            }
-    except Exception as exc:  # network/service issue: keep going
-        gaia_match = {"error": str(exc)}
-
-    # ----- SIMBAD ------------------------------------------------------
-    try:
-        from astroquery.simbad import Simbad
-        sources_tried.append("SIMBAD")
-        sb = Simbad()
-        sb.TIMEOUT = 15
-        # otype is included by default in newer astroquery; ids is opt-in.
-        # Wrap each in try/except so version drift doesn't crash the query.
-        for field_name in ("otype", "ids"):
-            try:
-                sb.add_votable_fields(field_name)
-            except Exception:
-                pass
-        tbl = sb.query_region(coord, radius=radius)
-        if tbl is not None and len(tbl) > 0:
-            row = tbl[0]
-            simbad_match = {
-                "main_id": _row_get(row, "MAIN_ID", "main_id"),
-                "otype":   _row_get(row, "OTYPE", "otype") or "",
-                "ids":     _row_get(row, "IDS", "ids") or "",
-            }
-    except Exception as exc:
-        simbad_match = {"error": str(exc)}
-
-    # ----- NASA Exoplanet Archive (live TAP) --------------------------
-    try:
-        sources_tried.append("NASA Exoplanet Archive")
-        nea_match = _query_nasa_exoplanet_archive(ra, dec, radius_arcsec)
-    except Exception as exc:
-        nea_match = {"error": str(exc)}
 
     # ----- exoplanets.org (fallback / corroborating) ------------------
     # Only hit exoplanets.org when NEA didn't give us a confirmed match —
     # NEA is the authoritative live source, the .org mirror is frozen at 2018.
     if not (nea_match and nea_match.get("matched")):
-        try:
-            sources_tried.append("exoplanets.org")
-            exoplanets_org_match = _query_exoplanets_org(ra, dec, radius_arcsec)
-        except Exception as exc:
-            exoplanets_org_match = {"error": str(exc)}
+        sources_tried.append("exoplanets.org")
+        fut = pool.submit(_query_exoplanets_org, ra, dec, radius_arcsec)
+        exoplanets_org_match = _collect_with_deadline(
+            {"org": fut}, CROSSMATCH_TIMEOUT_S
+        )["org"]
 
     # ----- Decide whether this counts as a "known" classification -----
     headline = None
