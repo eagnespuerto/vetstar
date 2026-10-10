@@ -68,7 +68,17 @@ def _load_tess_point_midtimes() -> Dict[int, float]:
     except Exception:
         return {}
     # midtimes[i] corresponds to sector (i + 1) — the array is 0-indexed.
-    return {i + 1: float(mt) - _BTJD_OFFSET for i, mt in enumerate(midtimes_jd)}
+    # Stop at the first midtime that doesn't advance: tess-point 0.9.5 ships a
+    # placeholder for its last sector (S135 at BTJD 4058.5, ~950 d before S134).
+    out: Dict[int, float] = {}
+    prev = float("-inf")
+    for i, mt in enumerate(midtimes_jd):
+        btjd = float(mt) - _BTJD_OFFSET
+        if not btjd > prev:
+            break
+        out[i + 1] = btjd
+        prev = btjd
+    return out
 
 
 # Loaded once at import time; harmless if empty.
