@@ -785,9 +785,13 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
     # same Rp/R* that the report prints.
     planet = PlanetCandidate(
         radius_earth=None,
+        # Only a catalogue-measured a; a Kepler III value derived by the
+        # ExoFOP parser would pre-empt the TLCM photometric a below.
         semi_major_axis_au=(
             query.semi_major_axis_au
-            or (best_toi.get("semi_major_axis_au") if best_toi else None)
+            or (best_toi.get("semi_major_axis_au")
+                if best_toi and best_toi.get("semi_major_axis_source") == "exofop"
+                else None)
         ),
         orbital_period_d=(
             query.orbital_period_d

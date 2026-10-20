@@ -1,0 +1,63 @@
+{
+ "basic_info": {
+  "tic_id": "156002449"
+ },
+ "tois": [
+  {
+   "toi": "TOI 324.01",
+   "disp_tess": "EB",
+   "disp_tfop": "PC",
+   "sector": "2,29,69",
+   "notes": "~2300 ppm secondary in spoc-s01-s69; retired as TFOP FP/EB"
+  }
+ ],
+ "planet_parameters": [
+  {
+   "prov": "toi",
+   "prov_title": "TOIs (TESS Project)",
+   "prov_num": "1"
+  },
+  {
+   "name": "TIC 156002449.01",
+   "toi": "TOI 324.01",
+   "per": "5.284869067171003",
+   "dep_m": 30.027148,
+   "dep_p": "27277.099088251955",
+   "dur": "4.772549427283615",
+   "rad": "21.377065955597526",
+   "puser": "TESS project"
+  },
+  {
+   "prov": "ctoi",
+   "prov_title": "Planet Parameters (User uploaded)",
+   "prov_num": "5"
+  },
+  {
+   "name": "TIC 156002449.01",
+   "toi": "TOI 324.01",
+   "disp": "PC",
+   "per": "5.2835",
+   "dep_m": "27.366865",
+   "dep_p": "24890.8",
+   "dur": "4.6826",
+   "rad": "27.0692",
+   "sma": "0.0588",
+   "pnotes": "no periastron data, computed using NASA Observables and TLCM based on S104 LC",
+   "puser": "puerto"
+  }
+ ],
+ "stellar_parameters": [
+  {
+   "prov": "tic",
+   "prov_title": "TESS Input Catalog Stellar Parameters",
+   "prov_num": "1"
+  },
+  {
+   "teff": "6113",
+   "logg": "4.28914",
+   "srad": "1.27295",
+   "mass": "1.15",
+   "dist": "944.552"
+  }
+ ]
+}

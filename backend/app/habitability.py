@@ -422,9 +422,10 @@ def _score_toi_disposition(disposition: Optional[str], toi: Optional[str]) -> Su
     if d in ("PC", "APC"):
         return SubScore("TOI disposition", 0.75, w, "Planet candidate",
                         f"TOI {toi}: {d} — passed TESS pipeline vetting.")
-    if d in ("FP", "FA"):
+    if d in ("FP", "FA", "EB"):
         return SubScore("TOI disposition", 0.05, w, "False positive/alarm",
-                        f"TOI {toi}: {d} — ExoFOP flags this as a false positive or alarm.")
+                        f"TOI {toi}: {d} — ExoFOP flags this as a false positive, "
+                        f"false alarm or eclipsing binary.")
     return SubScore("TOI disposition", 0.50, w, f"Disposition: {d}",
                     f"TOI {toi}: unrecognised disposition code '{d}'.")
 

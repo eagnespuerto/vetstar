@@ -101,46 +101,110 @@ def _from_exofop(tic_id: int) -> Optional[dict]:
         "distance": _pick("dist", "distance", "st_dist"),
     }
 
-    # TOI entries
-    tois = []
-    raw_tois = data.get("planet_parameters") or data.get("tois") or []
+    tois = _parse_tois(data, star)
+
+    return {"star": star, "tois": tois, "source": "exofop"}
+
+
+def _toi_key(v) -> str:
+    """Normalise "TOI 324.01" / "TOI-324.01" / "324.01" / 324.01 to "324.01"."""
+    s = str(v or "").strip().upper()
+    for prefix in ("TOI-", "TOI "):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+    return s.strip().strip(".")
+
+
+def _first(row: dict, *keys):
+    for k in keys:
+        v = _f(row.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def _parse_tois(data: dict, star: dict) -> list:
+    """Build the TOI list from an ExoFOP target JSON.
+
+    ``planet_parameters`` is a flat list in which provenance header rows
+    ({prov, prov_title, prov_num}) introduce the data rows that follow. Only
+    rows under the ``prov == "toi"`` header (the TESS project's own TOI
+    values) are used: user-uploaded rows (``prov == "ctoi"``) mix in
+    community fits and vetstar's own uploads, which would make the catalogue
+    cross-check circular. Data rows use ``per`` (d), ``dep_p`` (ppm),
+    ``dur`` (h), ``rad`` (R_E) and ``sma`` (AU); legacy ``period`` /
+    ``depth`` / ``prad`` / ``pl_*`` names are kept as fallbacks.
+
+    Dispositions are not in those rows: they come from the top-level ``tois``
+    list as ``disp_tfop`` (TFOP working group, preferred) and ``disp_tess``
+    (TESS project), keyed by the same "TOI nnn.nn" string.
+    """
+    raw_pp = data.get("planet_parameters") or []
+    if isinstance(raw_pp, dict):
+        raw_pp = list(raw_pp.values())
+    raw_tois = data.get("tois") or []
     if isinstance(raw_tois, dict):
         raw_tois = list(raw_tois.values())
-    for t in (raw_tois if isinstance(raw_tois, list) else []):
-        if not isinstance(t, dict):
+
+    params: dict = {}
+    prov = "toi"    # header-less (legacy) lists are treated as TESS-project rows
+    for row in (raw_pp if isinstance(raw_pp, list) else []):
+        if not isinstance(row, dict):
             continue
-        toi_num = str(t.get("toi") or t.get("toi_id") or "").strip(".")
-        if not toi_num:
+        if "prov_num" in row:
+            prov = str(row.get("prov") or "").lower()
             continue
-        period = _f(t.get("period") or t.get("pl_orbper"))
-        depth  = _f(t.get("depth") or t.get("dep_ppm") or t.get("pl_trandep"))
-        if depth and depth < 100:
-            depth = depth * 1e4          # ExoFOP sometimes returns percent
-        dur  = _f(t.get("duration") or t.get("pl_trandur"))
-        rp   = _f(t.get("prad") or t.get("pl_rade"))
-        a_au = _f(t.get("a") or t.get("pl_orbsmax"))
+        key = _toi_key(row.get("toi") or row.get("toi_id"))
+        if prov != "toi" or not key:
+            continue
+        params.setdefault(key, row)
+
+    meta: dict = {}
+    for row in (raw_tois if isinstance(raw_tois, list) else []):
+        if isinstance(row, dict):
+            key = _toi_key(row.get("toi") or row.get("toi_id"))
+            if key:
+                meta.setdefault(key, row)
+
+    tois = []
+    for key in list(dict.fromkeys([*params, *meta])):
+        p = params.get(key, {})
+        m = meta.get(key, {})
+        period = _first(p, "per", "period", "pl_orbper")
+        depth = _first(p, "dep_p")
+        if depth is None:
+            depth = _first(p, "depth", "dep_ppm", "pl_trandep")
+            if depth and depth < 100:
+                depth = depth * 1e4      # legacy fields were sometimes percent
+        a_au = _first(p, "sma", "a", "pl_orbsmax")
+        a_source = "exofop" if a_au is not None else None
         # Derive a_au via Kepler's 3rd law if absent
         if a_au is None and period and star.get("mass"):
             try:
                 a_au = round((star["mass"] * (period / 365.25) ** 2) ** (1 / 3), 5)
+                a_source = "Kepler III (ExoFOP P + M*)"
             except Exception:
                 pass
-        disp = str(t.get("disposition") or t.get("tfopwg_disp") or "").strip().upper()
-        raw_sec = str(t.get("sectors") or t.get("sectors_observed") or "")
+        disp_tfop = str(m.get("disp_tfop") or "").strip().upper()
+        disp_tess = str(m.get("disp_tess") or "").strip().upper()
+        legacy = str(p.get("disposition") or p.get("tfopwg_disp") or p.get("disp") or "").strip().upper()
+        raw_sec = str(m.get("sector") or p.get("sectors") or p.get("sectors_observed") or "")
         sectors = [s.strip() for s in raw_sec.replace(";", ",").split(",")
                    if s.strip().lstrip("-").isdigit()]
         tois.append({
-            "toi_number":        toi_num,
+            "toi_number":        key,
             "period_d":          period,
             "depth_ppm":         depth,
-            "duration_hr":       dur,
-            "radius_earth":      rp,
+            "duration_hr":       _first(p, "dur", "duration", "pl_trandur"),
+            "radius_earth":      _first(p, "rad", "prad", "pl_rade"),
             "semi_major_axis_au": a_au,
-            "disposition":       disp or None,
+            "semi_major_axis_source": a_source,
+            "disposition":       disp_tfop or disp_tess or legacy or None,
+            "disposition_tess":  disp_tess or None,
+            "notes":             (m.get("notes") or None),
             "sectors":           sectors,
         })
-
-    return {"star": star, "tois": tois, "source": "exofop"}
+    return tois
 
 
 def _from_tic_catalog(tic_id: int) -> dict:
