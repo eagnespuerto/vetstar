@@ -683,6 +683,46 @@ class MultisectorQuery(BaseModel):
         return v
 
 
+R_SUN_IN_R_EARTH = 109.076   # IAU nominal R_sun / R_earth (equatorial)
+
+
+def _resolve_planet_radius(
+    *,
+    override_earth: Optional[float] = None,
+    radius_ratio_k: Optional[float] = None,
+    rstar_sun: Optional[float] = None,
+    has_dvt: bool = False,
+    catalog_radius_earth: Optional[float] = None,
+    r_companion_rjup: Optional[float] = None,
+) -> tuple:
+    """Pick the planet radius (R_earth) and say where it came from.
+
+    ``radius_ratio_k`` is the Rp/R* the TLCM geometry (and the ExoFOP block)
+    reports: the SPOC DV RPRS fit, else sqrt(DV depth), else sqrt(pipeline
+    depth). The radius must be k * R* so the two printed values agree.
+
+    Priority: explicit override -> SPOC DV k * R* -> ExoFOP catalogue radius
+    -> pipeline k * R* -> discrete-dip R_companion_Rjup. The discrete-dip
+    value comes from the single deepest dilution-corrected event, which can
+    be several times the phase-folded depth, so it is the last resort.
+    """
+    if override_earth is not None:
+        return override_earth, "override"
+    k_radius = (
+        radius_ratio_k * rstar_sun * R_SUN_IN_R_EARTH
+        if radius_ratio_k and rstar_sun else None
+    )
+    if k_radius is not None and has_dvt:
+        return k_radius, f"SPOC DV (Rp/R*={radius_ratio_k:.4f}, R*={rstar_sun:.2f} R_sun)"
+    if catalog_radius_earth is not None:
+        return catalog_radius_earth, "exofop"
+    if k_radius is not None:
+        return k_radius, f"pipeline depth (Rp/R*={radius_ratio_k:.4f}, R*={rstar_sun:.2f} R_sun)"
+    if r_companion_rjup is not None:
+        return r_companion_rjup * 11.209, "pipeline (R_companion_Rjup, discrete dip)"
+    return None, None
+
+
 def _habitability_bundle(query: HabitabilityQuery) -> dict:
     """Compute the full HCI + observables + TLCM bundle for a target.
 
@@ -741,43 +781,10 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
             if d in ("CP", "KP"):
                 break
 
-    RJUP_TO_REARTH = 11.209
-    RSUN_TO_RJUP = 9.73
-
-    radius_earth = query.radius_earth
-    radius_source = "override"
-
-    if radius_earth is None and best_toi:
-        radius_earth = best_toi.get("radius_earth")
-        if radius_earth is not None:
-            radius_source = "exofop"
-
-    if radius_earth is None and query.R_companion_Rjup is not None:
-        radius_earth = query.R_companion_Rjup * RJUP_TO_REARTH
-        radius_source = "pipeline (R_companion_Rjup)"
-
-    if radius_earth is None and query.vetting_verdict:
-        import math
-        depth = None
-        events = query.vetting_verdict.get("_events", [])
-        if not depth:
-            depth = query.vetting_verdict.get("_depth")
-        bls_depth = query.vetting_verdict.get("_bls_depth")
-        if bls_depth and not depth:
-            depth = bls_depth
-
-        stellar_r = (
-            query.stellar_radius_sun
-            or star.get("radius")
-        )
-        if depth and depth > 0 and stellar_r and stellar_r > 0:
-            ratio = math.sqrt(min(depth, 0.99))
-            r_comp_rjup = ratio * stellar_r * RSUN_TO_RJUP
-            radius_earth = r_comp_rjup * RJUP_TO_REARTH
-            radius_source = f"derived (depth={depth:.5f}, R*={stellar_r:.2f} R_sun)"
-
+    # Radius is resolved after the TLCM geometry below, so it can use the
+    # same Rp/R* that the report prints.
     planet = PlanetCandidate(
-        radius_earth=radius_earth,
+        radius_earth=None,
         semi_major_axis_au=(
             query.semi_major_axis_au
             or (best_toi.get("semi_major_axis_au") if best_toi else None)
@@ -850,6 +857,7 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
         rstar_sun=planet.stellar_radius_sun,
         impact_parameter=vv.get("_dvt_impact_b"),   # fitted b from SPOC DV
         a_over_rs_spoc=vv.get("_dvt_a_over_rs"),    # fitted ARAT from SPOC DV
+        radius_ratio_spoc=vv.get("_dvt_rprs"),      # fitted RPRS from SPOC DV
         grazing=str(vv.get("_shape_class", "")).startswith("V"),
         mstar_sun=planet.stellar_mass_sun,
     ).to_dict()
@@ -870,6 +878,15 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
             planet.stellar_mass_sun = dens_est["mass_sun"]
             planet.stellar_teff = dens_est["teff"]
             density_estimate_used = dens_est
+
+    planet.radius_earth, radius_source = _resolve_planet_radius(
+        override_earth=query.radius_earth,
+        radius_ratio_k=tlcm_geo.get("radius_ratio_k"),
+        rstar_sun=planet.stellar_radius_sun,
+        has_dvt=bool(vv.get("_dvt_rprs") or vv.get("_dvt_depth_frac")),
+        catalog_radius_earth=best_toi.get("radius_earth") if best_toi else None,
+        r_companion_rjup=query.R_companion_Rjup,
+    )
 
     a_source = "exofop/override"
     if planet.semi_major_axis_au is None and tlcm_geo.get("a_au_photometric"):
@@ -1000,6 +1017,7 @@ def _attach_hci_summary_to_plots(
                 "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
                 "_dvt_impact_b": tce.get("impact_b") if tce else None,
                 "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
+                "_dvt_rprs": tce.get("rprs") if tce else None,
             }
         )
         if n_sectors_with_detections is None:
@@ -1100,6 +1118,7 @@ def _build_report_extras(
                     "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
                     "_dvt_impact_b": tce.get("impact_b") if tce else None,
                     "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
+                    "_dvt_rprs": tce.get("rprs") if tce else None,
                 }
             )
             if n_sectors_with_detections is not None:
@@ -1622,6 +1641,8 @@ async def observables(query: ObservablesQuery):
     grazing = query.grazing
     impact_parameter = query.impact_parameter
     a_over_rs_spoc = None
+    rprs_spoc = None
+    r_companion_rjup = None
     if query.vetting_verdict:
         vv = query.vetting_verdict
         dvt_dur_h = vv.get("_dvt_duration_h")
@@ -1635,10 +1656,11 @@ async def observables(query: ObservablesQuery):
         if impact_parameter is None and vv.get("_dvt_impact_b") is not None:
             impact_parameter = vv.get("_dvt_impact_b")
         a_over_rs_spoc = vv.get("_dvt_a_over_rs")
+        rprs_spoc = vv.get("_dvt_rprs")
         if not grazing and str(vv.get("_shape_class", "")).startswith("V"):
             grazing = True
-        if rp_rjup is None and vv.get("_R_companion_Rjup") is not None:
-            rp_rjup = vv.get("_R_companion_Rjup")
+        # Discrete-dip radius: last resort only (see _resolve_planet_radius).
+        r_companion_rjup = vv.get("_R_companion_Rjup")
 
     # TLCM transit geometry: radius ratio, a/Rs, model-independent stellar
     # density, photometric semi-major axis, and (with RV) absolute mass.
@@ -1651,6 +1673,7 @@ async def observables(query: ObservablesQuery):
         rstar_sun=rstar,
         impact_parameter=impact_parameter,
         a_over_rs_spoc=a_over_rs_spoc,
+        radius_ratio_spoc=rprs_spoc,
         grazing=grazing,
         k_rv_ms=query.k_rv_ms,
         eccentricity=query.eccentricity,
@@ -1688,6 +1711,17 @@ async def observables(query: ObservablesQuery):
     mp_mjup = query.mp_mjup
     if mp_mjup is None and tlcm.get("radial_velocity", {}).get("mp_mjup"):
         mp_mjup = tlcm["radial_velocity"]["mp_mjup"]
+
+    # Radius from the same Rp/R* the TLCM block reports; compute_observables
+    # would otherwise fall back to sqrt(depth) and ignore a DV RPRS fit.
+    if rp_rjup is None and query.rp_earth is None:
+        rp_earth_k, _ = _resolve_planet_radius(
+            radius_ratio_k=tlcm.get("radius_ratio_k"),
+            rstar_sun=rstar,
+            r_companion_rjup=r_companion_rjup,
+        )
+        if rp_earth_k is not None:
+            rp_rjup = rp_earth_k / 11.209
 
     result = compute_observables(
         teff_k=teff,
