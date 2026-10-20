@@ -52,11 +52,13 @@ _NEA_TAP_SYNC = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 # SIMBAD object-type prefixes that we treat as "known" classifications. The
 # value is the verdict headline we substitute in when one is matched.
 # Order matters: planet host beats binary beats variable, because a confirmed
-# exoplanet host is the more specific (and more useful) label.
+# exoplanet host is the more specific (and more useful) label. Matching is by
+# prefix, so a longer otype must precede any shorter one it starts with
+# ("Pl?" before "Pl"), or a SIMBAD candidate is read as a confirmed planet.
 _SIMBAD_OTYPE_MAP = [
     # Exoplanet-related
-    ("Pl",  "Known Planet"),         # confirmed exoplanet
     ("Pl?", "Known Planet Candidate"),
+    ("Pl",  "Known Planet"),         # confirmed exoplanet
     # Eclipsing binaries
     ("EB*", "Known Eclipsing Binary"),
     ("Al*", "Known Eclipsing Binary (Algol)"),
@@ -73,6 +75,11 @@ _SIMBAD_OTYPE_MAP = [
     ("V*",  "Known Variable Star"),
     ("CV*", "Known Cataclysmic Variable"),
 ]
+
+# Catalogue labels that are themselves unconfirmed. They are reported as a
+# reason but never replace the pipeline verdict: a SIMBAD "Pl?" entry is just
+# a TOI, and TOIs are regularly retired as false positives / EBs.
+_UNCONFIRMED_HEADLINES = {"Known Planet Candidate"}
 
 
 def _gaia_nss_description(nss_flag) -> Optional[str]:
@@ -459,6 +466,40 @@ def crossmatch_known_object(
         elif exoplanets_org_match and exoplanets_org_match.get("dist_arcsec") is not None:
             out["distance_arcsec"] = exoplanets_org_match["dist_arcsec"]
     return out
+
+
+def apply_known_object_override(verdict: dict, known: dict) -> dict:
+    """Fold a ``crossmatch_known_object`` result into ``verdict`` in place.
+
+    A confirmed catalogue classification replaces the headline at 0.99
+    confidence. An unconfirmed one (SIMBAD "Pl?") only adds a reason: the
+    pipeline's own verdict stands.
+    """
+    if not known.get("matched"):
+        return verdict
+    headline = known["headline"]
+    where = (
+        (f" — {known['name']}" if known.get("name") else "")
+        + (f" ({known['description']})" if known.get("description") else "")
+        + (
+            f" at {known['distance_arcsec']:.2f}\" from target"
+            if known.get("distance_arcsec") is not None else ""
+        )
+    )
+    if headline in _UNCONFIRMED_HEADLINES:
+        verdict.setdefault("reasons", []).insert(
+            0, f"Catalog note: {headline}{where}; unconfirmed, verdict not overridden."
+        )
+        verdict.setdefault("flags", []).append("known_object_candidate")
+        return verdict
+    verdict["original_headline"] = verdict.get("headline")
+    verdict["original_category"] = verdict.get("category")
+    verdict["headline"] = headline
+    verdict["category"] = "known_object"
+    verdict["confidence"] = 0.99
+    verdict.setdefault("reasons", []).insert(0, f"Catalog override: {headline}{where}.")
+    verdict.setdefault("flags", []).append("known_object_override")
+    return verdict
 
 
 # ----------------------------------------------------------------------
@@ -1642,24 +1683,7 @@ def run_full_vetting(
     # External catalog cross-match (unchanged).
     reporter("crossmatch", 0.0)
     known = crossmatch_known_object(star.ra, star.dec)
-    if known.get("matched"):
-        verdict["original_headline"] = verdict.get("headline")
-        verdict["original_category"] = verdict.get("category")
-        verdict["headline"] = known["headline"]
-        verdict["category"] = "known_object"
-        verdict["confidence"] = 0.99
-        match_reason = (
-            f"Catalog override: {known['headline']}"
-            + (f" — {known['name']}" if known.get("name") else "")
-            + (f" ({known['description']})" if known.get("description") else "")
-            + (
-                f" at {known['distance_arcsec']:.2f}\" from target"
-                if known.get("distance_arcsec") is not None else ""
-            )
-            + "."
-        )
-        verdict.setdefault("reasons", []).insert(0, match_reason)
-        verdict.setdefault("flags", []).append("known_object_override")
+    apply_known_object_override(verdict, known)
     reporter("crossmatch", 1.0)
 
     # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.

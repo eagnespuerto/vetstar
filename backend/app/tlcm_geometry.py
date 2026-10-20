@@ -207,6 +207,7 @@ def compute_tlcm_geometry(
     rstar_sun: Optional[float] = None,
     impact_parameter: Optional[float] = None,
     a_over_rs_spoc: Optional[float] = None,
+    radius_ratio_spoc: Optional[float] = None,
     grazing: bool = False,
     k_rv_ms: Optional[float] = None,
     eccentricity: float = 0.0,
@@ -220,12 +221,18 @@ def compute_tlcm_geometry(
     derivation and removes the b=0 central-transit assumption, producing a
     cleaner semi-major axis estimate.  All other quantities (stellar density,
     inclination, photometric a) are still derived from this value.
+
+    ``radius_ratio_spoc`` accepts the SPOC DV-fitted Rp/R★ (RPRS keyword).
+    When supplied it is used as k instead of sqrt(depth): the limb-darkened
+    model fit is the better estimate, and the radius reported alongside it
+    must be derived from the same k.
     """
     res = TLCMGeometry()
     res.inputs = {
         "period_d": period_d, "t14_d": t14_d, "depth_frac": depth_frac,
         "rstar_sun": rstar_sun, "impact_parameter": impact_parameter,
         "a_over_rs_spoc": a_over_rs_spoc,
+        "radius_ratio_spoc": radius_ratio_spoc,
         "grazing": grazing, "k_rv_ms": k_rv_ms, "eccentricity": eccentricity,
         "mstar_sun": mstar_sun,
     }
@@ -233,7 +240,10 @@ def compute_tlcm_geometry(
 
     # Radius ratio
     k = None
-    if depth_frac is not None and depth_frac > 0:
+    if radius_ratio_spoc is not None and radius_ratio_spoc > 0:
+        k = radius_ratio_spoc
+        res.radius_ratio_k = k
+    elif depth_frac is not None and depth_frac > 0:
         k = radius_ratio_from_depth(depth_frac)
         res.radius_ratio_k = k
         if grazing:
