@@ -1424,6 +1424,7 @@ def _build_report_extras(
                     t0=t0 if t0 is not None else 0.0,
                     duration=duration,
                     crowdsap=getattr(star, "crowdsap", None),
+                    events=result.events,
                 )
     except Exception as e:
         log.warning("Report ExoMiner recompute failed: %s", e)

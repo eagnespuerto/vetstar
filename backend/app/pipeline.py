@@ -983,10 +983,38 @@ def centroid_check(
     }
 
 
-def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0) -> dict:
+def count_events_by_parity(events, period, t0, half_window) -> tuple:
+    """Count detected events that fall inside an odd vs an even folded window.
+
+    An event counts when its midpoint lies within ``half_window`` (plus the
+    event's own half-width) of a predicted transit at ``t0 + n·period``.
+    Returns ``(n_odd, n_even)``.
+    """
+    n_odd = n_even = 0
+    for ev in events or ():
+        t_mid = 0.5 * (ev["t_start"] + ev["t_end"])
+        cyc = int(np.round((t_mid - t0) / period))
+        offset = abs(t_mid - t0 - cyc * period)
+        if offset > half_window + 0.5 * (ev["t_end"] - ev["t_start"]):
+            continue
+        if cyc % 2 == 1:
+            n_odd += 1
+        else:
+            n_even += 1
+    return n_odd, n_even
+
+
+def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0,
+                   events: Optional[list] = None) -> dict:
     """Compare even- vs odd-numbered transits.  Big depth difference -> EB.
 
     ``odd_even_sigma`` is the user-tunable EB-flag threshold (default 3σ).
+
+    ``events`` are the discrete dips from :func:`detect_events`. When given,
+    the test only runs if at least one real event lands in an odd window and
+    one in an even window. Counting in-window *points* is not enough: with a
+    single transit and a spurious BLS period, one parity holds the transit and
+    the other holds only out-of-transit noise, which reads as a huge mismatch.
     """
     if period is None or period <= 0:
         return {"available": False, "reason": "no period"}
@@ -998,13 +1026,21 @@ def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0) -> d
         return {"available": False, "reason": "no in-transit points"}
     odd = in_tr & (cycle % 2 == 1)
     even = in_tr & (cycle % 2 == 0)
-    if odd.sum() < 3 or even.sum() < 3:
-        return {
+    n_odd_ev = n_even_ev = None
+    if events is not None:
+        n_odd_ev, n_even_ev = count_events_by_parity(events, period, t0, half)
+    if (odd.sum() < 3 or even.sum() < 3
+            or (events is not None and (n_odd_ev < 1 or n_even_ev < 1))):
+        out = {
             "available": False,
             "reason": "insufficient odd or even transits",
             "n_odd": int(odd.sum()),
             "n_even": int(even.sum()),
         }
+        if events is not None:
+            out["n_odd_events"] = n_odd_ev
+            out["n_even_events"] = n_even_ev
+        return out
     d_odd = 1.0 - np.median(f[odd])
     d_even = 1.0 - np.median(f[even])
     err_odd = np.std(f[odd]) / np.sqrt(odd.sum())
@@ -1012,7 +1048,7 @@ def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0) -> d
     diff = d_odd - d_even
     diff_err = math.sqrt(err_odd**2 + err_even**2)
     sigma = abs(diff) / diff_err if diff_err > 0 else 0
-    return {
+    out = {
         "available": True,
         "depth_odd": float(d_odd),
         "depth_even": float(d_even),
@@ -1023,6 +1059,10 @@ def odd_even_check(t, f, period, t0, duration, odd_even_sigma: float = 3.0) -> d
         "flag_eb": bool(sigma > odd_even_sigma),
         "threshold_sigma": float(odd_even_sigma),
     }
+    if events is not None:
+        out["n_odd_events"] = n_odd_ev
+        out["n_even_events"] = n_even_ev
+    return out
 
 
 def secondary_eclipse_search(t, f, period, t0, duration, secondary_sigma: float = 3.0) -> dict:
@@ -1701,6 +1741,7 @@ def run_full_vetting(
     odd_even = odd_even_check(
         t_c, f_c, bls["period"], bls["t0"], bls["duration"],
         odd_even_sigma=odd_even_sigma,
+        events=events,
     )
     reporter("odd_even", 1.0)
     reporter("secondary", 0.0)
