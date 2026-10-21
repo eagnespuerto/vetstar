@@ -121,3 +121,37 @@ def test_simbad_confirmed_planet_still_overrides(monkeypatch):
     assert verdict["headline"] == "Known Planet"
     assert verdict["confidence"] == 0.99
     assert verdict["original_headline"] == "Planet Candidate"
+
+
+def test_exoplanets_org_parser_keeps_only_positioned_rows():
+    import io
+
+    csv_text = (
+        "NAME,PER,RA,DEC,HOSTNAME,EXTRA\n"
+        "Foo b,3.5,10.0,-20.0,Foo,x\n"
+        "Blank c,1.2,,,Blank,x\n"          # no coordinates: must not sit at (0, 0)
+        "Bar b,,11.5,5.25,Bar,x\n"         # missing period -> None, not '--'
+        "Bad d,2.0,nan,1.0,Bad,x\n"
+    )
+    tbl = pipeline._parse_exoplanets_org_csv(io.StringIO(csv_text))
+    assert tbl["ra"].tolist() == [10.0, 11.5]
+    assert tbl["dec"].tolist() == [-20.0, 5.25]
+    assert tbl["name"] == ["Foo b", "Bar b"]
+    assert tbl["host"] == ["Foo", "Bar"]
+    assert tbl["period"] == ["3.5", None]
+
+    pipeline_cache = pipeline._EXOPLANETS_ORG_CACHE
+    try:
+        pipeline._EXOPLANETS_ORG_CACHE = tbl
+        hit = pipeline._query_exoplanets_org(10.0, -20.0, 5.0)
+        assert hit["matched"] and hit["name"] == "Foo b" and hit["period_days"] == "3.5"
+        assert pipeline._query_exoplanets_org(0.0, 0.0, 5.0)["matched"] is False
+    finally:
+        pipeline._EXOPLANETS_ORG_CACHE = pipeline_cache
+
+
+def test_exoplanets_org_parser_rejects_header_without_coordinates():
+    import io
+
+    assert pipeline._parse_exoplanets_org_csv(io.StringIO("NAME,PER\nx,1\n")) is None
+    assert pipeline._parse_exoplanets_org_csv(io.StringIO("")) is None

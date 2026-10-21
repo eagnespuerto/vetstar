@@ -55,7 +55,7 @@ def test_start_prefetch_submits_heaviest_first():
 
     rec = Recorder()
     main._start_prefetch(rec, 123, 5, 10.0, -20.0)
-    assert rec.names == ["ffi", "dvt", "crossmatch", "exofop"]
+    assert rec.names == ["ffi_cube", "dvt", "crossmatch", "exofop"]
 
     rec = Recorder()
     main._start_prefetch(rec, 123, 5, 10.0, -20.0, report=False)
@@ -147,3 +147,80 @@ def test_vet_job_reports_pdf_failure_without_losing_result(monkeypatch):
     done = events[-1]["result"]
     assert done["report"] is None
     assert "font missing" in done["report_error"]
+
+
+def _fake_tesscut_cube(tmp_path, n=50, size=7):
+    """Minimal TESScut-shaped cube: FLUX/QUALITY table + aperture image."""
+    from astropy.io import fits
+
+    rng = np.random.default_rng(1)
+    flux = rng.normal(100, 1, (n, size, size)).astype("float32")
+    quality = np.zeros(n, dtype="int32")
+    quality[::10] = 1
+    cols = fits.ColDefs([
+        fits.Column(name="FLUX", format=f"{size * size}E", dim=f"({size},{size})", array=flux),
+        fits.Column(name="QUALITY", format="J", array=quality),
+    ])
+    hdul = fits.HDUList([
+        fits.PrimaryHDU(),
+        fits.BinTableHDU.from_columns(cols),
+        fits.ImageHDU(np.ones((size, size), dtype="int32")),
+    ])
+    tmpdir = tmp_path / "ffi_cube"
+    tmpdir.mkdir()
+    path = tmpdir / "cutout.fits"
+    hdul.writeto(path)
+    return {"path": str(path), "tmpdir": str(tmpdir), "sector": 7, "size_px": size}
+
+
+def test_render_ffi_cube_renders_and_removes_temp_dir(tmp_path):
+    from backend.app.ffi_cutout import render_ffi_cube
+
+    cube = _fake_tesscut_cube(tmp_path)
+    out = render_ffi_cube(cube, ra=10.0, dec=-20.0, tic_id=42, max_frames=20)
+    assert out is not None and out["image"]
+    assert out["n_frames"] == 20 and out["sector"] == 7
+    assert not (tmp_path / "ffi_cube").exists()
+
+
+def test_ffi_cutout_from_prefetch_caches_and_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "_ffi_cache", {})
+    pf = Prefetcher(max_workers=1)
+    try:
+        # Nothing prefetched -> caller should fetch normally.
+        assert main._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0) is main._UNSET
+
+        cube = _fake_tesscut_cube(tmp_path)
+        pf.submit("ffi_cube", lambda: cube)
+        out = main._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0)
+        assert out and out["image"]
+        assert main._ffi_cache[(42, 7)] is out
+        # Second call is served from the cache shared with /api/ffi_cutout.
+        assert main._ffi_cutout_from_prefetch(Prefetcher(), 42, 7, 10.0, -20.0) is out
+    finally:
+        pf.close()
+
+
+def test_prefetcher_abandon_cleans_up_late_results():
+    import threading
+
+    gate = threading.Event()
+    seen = []
+    pf = Prefetcher(max_workers=1)
+    try:
+        pf.submit("slow", lambda: (gate.wait(5), "cube")[1])
+        assert pf.get("slow", timeout=0.05) is None
+        pf.abandon("slow", seen.append)
+        assert seen == []
+        gate.set()
+        for _ in range(100):
+            if seen:
+                break
+            time.sleep(0.02)
+        assert seen == ["cube"]
+        # Already-finished futures are cleaned up immediately.
+        pf.abandon("slow", seen.append)
+        assert seen == ["cube", "cube"]
+        pf.abandon("never-submitted", seen.append)  # no-op
+    finally:
+        pf.close()

@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
-from .prefetch import PLOT_LOCK, REPORTS, VET_SLOTS, Prefetcher
+from .prefetch import PLOT_LOCK, REPORTS, VET_SLOTS, Prefetcher, release_memory
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -446,16 +446,42 @@ def _start_prefetch(pf: Prefetcher, tic_id, sector, ra, dec, *, report: bool = T
     """Kick off every remote fetch that doesn't need the pipeline result,
     heaviest first so the slow ones finish while BLS runs: the TESScut FFI
     cube, the SPOC DVT download, the Gaia/SIMBAD/NEA cross-match, then
-    ExoFOP. ``report=False`` skips the PDF-only fetches (FFI, ExoFOP)."""
+    ExoFOP. ``report=False`` skips the PDF-only fetches (FFI, ExoFOP).
+
+    The FFI cube is only *downloaded* here; ``_ffi_cutout_from_prefetch``
+    reads it after the pipeline so it never sits in memory alongside the
+    light curve and BLS arrays (512 MB budget)."""
     have_coords = ra is not None and dec is not None
-    if report and have_coords:
-        pf.submit("ffi", _get_ffi_cutout, tic_id, sector, ra, dec)
+    if report and have_coords and (tic_id, sector) not in _ffi_cache:
+        from .ffi_cutout import download_ffi_cube
+        pf.submit("ffi_cube", download_ffi_cube, ra, dec, sector=sector)
     if tic_id:
         pf.submit("dvt", _fetch_dvt_soft, tic_id, sector)
     if have_coords:
         pf.submit("crossmatch", crossmatch_known_object, ra, dec)
     if report and tic_id:
         pf.submit("exofop", query_exofop, tic_id)
+
+
+def _ffi_cutout_from_prefetch(pf: Prefetcher, tic_id, sector, ra, dec):
+    """Render the prefetched FFI cube (cached like ``_get_ffi_cutout``, so
+    the on-page cutout panel reuses it). ``_UNSET`` when no download was
+    started, so the caller falls back to a normal fetch."""
+    from .ffi_cutout import discard_ffi_cube, render_ffi_cube
+
+    key = (tic_id, sector)
+    if key in _ffi_cache:
+        return _ffi_cache[key]
+    if not pf.has("ffi_cube"):
+        return _UNSET
+    cube = pf.get("ffi_cube", timeout=60)
+    if cube is None:
+        # Failed, or still downloading: drop its temp dir whenever it lands.
+        pf.abandon("ffi_cube", discard_ffi_cube)
+        return None
+    cutout = render_ffi_cube(cube, ra, dec, tic_id=tic_id)
+    _ffi_cache[key] = cutout
+    return cutout
 
 
 def _prefetched_crossmatch(pf: Prefetcher):
@@ -675,10 +701,12 @@ def _run_vet_job(job: JobState, work) -> None:
         log.exception("vet job failed")
         JOBS.finish_err(job, f"{type(e).__name__}: {e}")
     finally:
+        # A job that failed before the PDF step still owns the cube's temp dir.
+        from .ffi_cutout import discard_ffi_cube
+        pf.abandon("ffi_cube", discard_ffi_cube)
         pf.close()
+        release_memory()
         VET_SLOTS.release()
-        import gc
-        gc.collect()
 
 
 def _publish_and_report(job: JobState, rep: ProgressReporter, pf: Prefetcher,
@@ -701,9 +729,13 @@ def _publish_and_report(job: JobState, rep: ProgressReporter, pf: Prefetcher,
     rep("report", 0.0)
     report, report_error = None, None
     try:
+        star = result.star
         extras = _build_report_extras(
             result, dvt=dvt, hci_bundle=bundle,
-            ffi_cutout=pf.get("ffi", timeout=90) if pf.has("ffi") else _UNSET,
+            ffi_cutout=_ffi_cutout_from_prefetch(
+                pf, star.tic_id, star.sector,
+                getattr(star, "ra", None), getattr(star, "dec", None),
+            ),
         )
         rep("report", 0.6)
         pdf = build_pdf(

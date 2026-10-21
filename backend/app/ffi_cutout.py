@@ -140,23 +140,21 @@ def render_cutout_png(
 # ----------------------------------------------------------------------
 # Fetch + render (network)
 # ----------------------------------------------------------------------
-def make_ffi_cutout(
+def download_ffi_cube(
     ra: float,
     dec: float,
     sector: Optional[int] = None,
-    tic_id: Optional[int] = None,
     size_px: int = _DEFAULT_SIZE_PX,
-    max_frames: int = 400,
 ) -> Optional[dict]:
-    """Fetch a TESScut FFI cutout at (ra, dec) for ``sector`` and render it.
+    """Download the TESScut cutout cube for (ra, dec) to a temp dir.
 
-    Memory-conscious: the cutout is downloaded to a temp file and read with
-    ``memmap``, and the median image is built from at most ``max_frames``
-    evenly-spaced good cadences — so we never hold the full sector cube
-    (which can be ~80 MB and OOM a small instance) in RAM at once.
+    Network only: nothing is read into memory, so the vet job can start this
+    early (it is the slowest remote fetch) while the light curve is parsed
+    and BLS runs, and read it with ``render_ffi_cube`` afterwards.
 
-    Returns ``{"image": <base64 png>, "size_px": int, "n_frames": int,
-    "sector": int|None}`` or ``None`` if the cutout could not be produced.
+    Returns ``{"path", "tmpdir", "sector", "size_px"}`` or ``None``. The
+    caller owns ``tmpdir``: ``render_ffi_cube`` (or ``discard_ffi_cube``)
+    removes it.
     """
     if ra is None or dec is None:
         log.info("FFI cutout skipped: no coordinates")
@@ -167,9 +165,7 @@ def make_ffi_cutout(
 
     tmpdir = None
     try:
-        import numpy as _np
         from astropy.coordinates import SkyCoord
-        from astropy.io import fits
         from astroquery.mast import Tesscut
 
         coord = SkyCoord(float(ra), float(dec), unit="deg")
@@ -181,37 +177,90 @@ def make_ffi_cutout(
             sectors = Tesscut.get_sectors(coordinates=coord)
             if sectors is None or len(sectors) == 0:
                 log.info("TESScut: no sectors cover (%.4f, %.4f)", ra, dec)
+                shutil.rmtree(tmpdir, ignore_errors=True)
                 return None
             sector = int(max(int(s) for s in sectors["sector"]))
-        kwargs = {"coordinates": coord, "size": int(size_px), "path": tmpdir,
-                  "inflate": True, "sector": int(sector)}
-
-        manifest = Tesscut.download_cutouts(**kwargs)
+        manifest = Tesscut.download_cutouts(
+            coordinates=coord, size=int(size_px), path=tmpdir,
+            inflate=True, sector=int(sector),
+        )
         if manifest is None or len(manifest) == 0 or "Local Path" not in manifest.colnames:
             log.info("TESScut returned no cutout file for (%.4f, %.4f) S%s", ra, dec, sector)
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return None
-        path = str(manifest["Local Path"][0])
+        return {
+            "path": str(manifest["Local Path"][0]),
+            "tmpdir": tmpdir,
+            "sector": int(sector),
+            "size_px": int(size_px),
+        }
+    except Exception as e:  # network, missing sector — all soft.
+        log.warning("FFI cutout download failed for (%.4f, %.4f) S%s: %s", ra, dec, sector, e)
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
 
-        with fits.open(path, memmap=True) as hdul:
-            data = hdul[1].data
-            n = len(data)
-            quality = None
-            for q in ("QUALITY", "DQUALITY"):
-                if q in data.columns.names:
-                    quality = _np.asarray(data[q])
-                    break
-            good = _np.where(quality == 0)[0] if quality is not None else _np.arange(n)
-            if good.size == 0:
-                good = _np.arange(n)
-            if good.size > max_frames:
-                good = good[_np.linspace(0, good.size - 1, max_frames).astype(int)]
-            # Fancy-indexing a memmapped column loads only the selected rows.
-            flux = _np.asarray(data["FLUX"][good], dtype=float)
-            aperture = None
-            try:
-                aperture = _np.asarray(hdul[2].data)
-            except Exception:
-                pass
+
+def discard_ffi_cube(cube: Optional[dict]) -> None:
+    """Remove a downloaded cube's temp dir without rendering it."""
+    if cube and cube.get("tmpdir"):
+        import shutil
+        shutil.rmtree(cube["tmpdir"], ignore_errors=True)
+
+
+def _read_cube(path: str, max_frames: int):
+    """Return ``(flux, aperture, n_frames)`` as in-memory copies, so nothing
+    keeps the memmap (and the file) open once this returns — on Windows an
+    open view stops the temp dir from being deleted."""
+    from astropy.io import fits
+
+    with fits.open(path, memmap=True) as hdul:
+        data = hdul[1].data
+        n = len(data)
+        quality = None
+        for q in ("QUALITY", "DQUALITY"):
+            if q in data.columns.names:
+                quality = np.array(data[q])
+                break
+        good = np.where(quality == 0)[0] if quality is not None else np.arange(n)
+        if good.size == 0:
+            good = np.arange(n)
+        if good.size > max_frames:
+            good = good[np.linspace(0, good.size - 1, max_frames).astype(int)]
+        # Fancy-indexing a memmapped column loads only the selected rows.
+        flux = np.array(data["FLUX"][good], dtype=float)
+        aperture = None
+        try:
+            aperture = np.array(hdul[2].data)
+        except Exception:
+            pass
+        del data
+    return flux, aperture, int(good.size)
+
+
+def render_ffi_cube(
+    cube: Optional[dict],
+    ra: float,
+    dec: float,
+    tic_id: Optional[int] = None,
+    max_frames: int = 400,
+) -> Optional[dict]:
+    """Read a cube from ``download_ffi_cube`` and render the PNG, then delete
+    its temp dir.
+
+    Memory-conscious: the cube is read with ``memmap`` and the median image
+    is built from at most ``max_frames`` evenly-spaced good cadences — so we
+    never hold the full sector cube (which can be ~80 MB and OOM a small
+    instance) in RAM at once.
+
+    Returns ``{"image": <base64 png>, "size_px": int, "n_frames": int,
+    "sector": int|None}`` or ``None``.
+    """
+    if not cube:
+        return None
+    sector = cube.get("sector")
+    try:
+        flux, aperture, n_frames = _read_cube(cube["path"], max_frames)
 
         from .prefetch import PLOT_LOCK
         with PLOT_LOCK:
@@ -221,13 +270,30 @@ def make_ffi_cutout(
             )
         return {
             "image": image,
-            "size_px": int(size_px),
-            "n_frames": int(good.size),
+            "size_px": int(cube.get("size_px") or _DEFAULT_SIZE_PX),
+            "n_frames": n_frames,
             "sector": int(sector) if sector is not None else None,
         }
-    except Exception as e:  # network, missing sector, parse error — all soft.
-        log.warning("FFI cutout failed for (%.4f, %.4f) S%s: %s", ra, dec, sector, e)
+    except Exception as e:  # parse/render error — soft.
+        log.warning("FFI cutout render failed for (%.4f, %.4f) S%s: %s", ra, dec, sector, e)
         return None
     finally:
-        if tmpdir:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        discard_ffi_cube(cube)
+
+
+def make_ffi_cutout(
+    ra: float,
+    dec: float,
+    sector: Optional[int] = None,
+    tic_id: Optional[int] = None,
+    size_px: int = _DEFAULT_SIZE_PX,
+    max_frames: int = 400,
+) -> Optional[dict]:
+    """Fetch a TESScut FFI cutout at (ra, dec) for ``sector`` and render it
+    (``download_ffi_cube`` + ``render_ffi_cube``).
+
+    Returns ``{"image": <base64 png>, "size_px": int, "n_frames": int,
+    "sector": int|None}`` or ``None`` if the cutout could not be produced.
+    """
+    cube = download_ffi_cube(ra, dec, sector=sector, size_px=size_px)
+    return render_ffi_cube(cube, ra, dec, tic_id=tic_id, max_frames=max_frames)

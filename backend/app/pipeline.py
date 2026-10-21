@@ -42,7 +42,7 @@ _CROSSMATCH_POOL = None
 # Orbit Database. We pull the whole table once per process and cone-search
 # in memory — it's only ~5k rows.
 _EXOPLANETS_ORG_CSV_URL = "http://exoplanets.org/csv-files/exoplanets.csv"
-_EXOPLANETS_ORG_CACHE: Optional[object] = None  # cached astropy Table or False on failure
+_EXOPLANETS_ORG_CACHE: Optional[object] = None  # cached column dict, or False on failure
 
 # NASA Exoplanet Archive TAP service. Unlike exoplanets.org this is actively
 # maintained, so we use it as the authoritative confirmed-planet source and
@@ -130,26 +130,83 @@ def _row_get(row, *names):
     return None
 
 
-def _load_exoplanets_org_table():
-    """Download the exoplanets.org catalog once and cache it.
+def _parse_exoplanets_org_csv(lines) -> Optional[dict]:
+    """Keep only what the cone search needs from the exoplanets.org CSV.
 
-    Returns an astropy Table on success, or ``None`` on failure (offline,
-    HTTP error, parse error). Cached for the process lifetime.
+    The full table has ~5k rows and dozens of columns (~11 MB of text);
+    reading it all with astropy's pure-Python CSV reader built hundreds of
+    thousands of string objects (well over 100 MB transient, ~80 MB cached)
+    — enough to push a 512 MB instance over the edge mid-vet. Streaming it
+    through ``csv`` and keeping five columns costs well under 1 MB.
+
+    Returns ``{"ra", "dec": float arrays, "name", "host", "period": lists of
+    str|None}`` with only rows that have finite coordinates, or ``None`` if
+    the header lacks RA/DEC.
+    """
+    import csv
+
+    def _clean(v):
+        s = (v or "").strip()
+        return s if s and s.lower() != "nan" else None
+
+    reader = csv.reader(lines)
+    header = next(reader, None)
+    if not header:
+        return None
+    idx = {h.strip().upper(): i for i, h in enumerate(header)}
+    if "RA" not in idx or "DEC" not in idx:
+        return None
+    i_ra, i_dec = idx["RA"], idx["DEC"]
+    i_name = idx.get("NAME")
+    i_host = idx.get("STAR", idx.get("HOSTNAME"))
+    i_per = idx.get("PER")
+
+    ra, dec, name, host, period = [], [], [], [], []
+    for row in reader:
+        try:
+            r, d = float(row[i_ra]), float(row[i_dec])
+        except (IndexError, ValueError):
+            continue
+        if not (math.isfinite(r) and math.isfinite(d)):
+            continue
+        get = lambda i: _clean(row[i]) if i is not None and i < len(row) else None  # noqa: E731
+        ra.append(r)
+        dec.append(d)
+        name.append(get(i_name))
+        host.append(get(i_host))
+        period.append(get(i_per))
+    return {
+        "ra": np.array(ra, dtype=float),
+        "dec": np.array(dec, dtype=float),
+        "name": name,
+        "host": host,
+        "period": period,
+    }
+
+
+def _load_exoplanets_org_table() -> Optional[dict]:
+    """Download the exoplanets.org catalog once and cache the columns the
+    cone search needs (see ``_parse_exoplanets_org_csv``).
+
+    Returns ``None`` on failure (offline, HTTP error, parse error). Cached
+    for the process lifetime.
     """
     global _EXOPLANETS_ORG_CACHE
     if _EXOPLANETS_ORG_CACHE is not None:
         return _EXOPLANETS_ORG_CACHE if _EXOPLANETS_ORG_CACHE is not False else None
     try:
+        import io
         from urllib.request import Request, urlopen
-        from astropy.io import ascii as ascii_io
         req = Request(
             _EXOPLANETS_ORG_CSV_URL,
             headers={"User-Agent": "vetstar/known-obj-fix"},
         )
         with urlopen(req, timeout=20) as resp:
-            data = resp.read().decode("utf-8", errors="replace")
-        tbl = ascii_io.read(data, format="csv", fast_reader=False)
-        _EXOPLANETS_ORG_CACHE = tbl
+            # Stream line by line instead of holding the whole body.
+            tbl = _parse_exoplanets_org_csv(
+                io.TextIOWrapper(resp, encoding="utf-8", errors="replace", newline="")
+            )
+        _EXOPLANETS_ORG_CACHE = tbl if tbl is not None else False
         return tbl
     except Exception:
         _EXOPLANETS_ORG_CACHE = False
@@ -167,16 +224,8 @@ def _query_exoplanets_org(ra: float, dec: float, radius_arcsec: float) -> Option
     if tbl is None:
         return {"error": "exoplanets.org catalog unavailable"}
 
-    # exoplanets.org uses RA/DEC in degrees (columns "RA" and "DEC"); some
-    # rows are blank. Build a numeric mask once.
-    try:
-        ra_col = np.array(tbl["RA"], dtype=float)
-        dec_col = np.array(tbl["DEC"], dtype=float)
-    except Exception:
-        return {"error": "exoplanets.org missing RA/DEC columns"}
-
-    finite = np.isfinite(ra_col) & np.isfinite(dec_col)
-    if not finite.any():
+    ra_col, dec_col = tbl["ra"], tbl["dec"]
+    if ra_col.size == 0:
         return {"matched": False, "n_rows": 0}
 
     # Small-angle haversine for cone search; fine for arcsec-scale radii.
@@ -184,22 +233,17 @@ def _query_exoplanets_org(ra: float, dec: float, radius_arcsec: float) -> Option
     dra = (ra_col - ra) * cos_dec
     ddec = dec_col - dec
     sep_arcsec = np.sqrt(dra * dra + ddec * ddec) * 3600.0
-    sep_arcsec[~finite] = np.inf
 
     idx = int(np.argmin(sep_arcsec))
     best = float(sep_arcsec[idx])
     if best > radius_arcsec:
         return {"matched": False, "closest_arcsec": best}
 
-    row = tbl[idx]
-    name = _row_get(row, "NAME") or "exoplanets.org candidate"
-    host = _row_get(row, "STAR", "HOSTNAME")
-    period = _row_get(row, "PER")
     return {
         "matched": True,
-        "name": name,
-        "host": host,
-        "period_days": period,
+        "name": tbl["name"][idx] or "exoplanets.org candidate",
+        "host": tbl["host"][idx],
+        "period_days": tbl["period"][idx],
         "dist_arcsec": best,
     }
 
