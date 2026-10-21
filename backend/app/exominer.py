@@ -141,8 +141,15 @@ def run_exominer(
     t0: float,
     duration: float,
     crowdsap: Optional[float] = None,
+    events: Optional[list] = None,
 ) -> dict:
-    """Full ExoMiner feature extraction. Returns dict {scalars, arrays, plots}."""
+    """Full ExoMiner feature extraction. Returns dict {scalars, arrays, plots}.
+
+    ``events`` are the pipeline's discrete dips; when omitted they are
+    re-detected from ``f``. The odd/even sigma is only computed when at least
+    one real event falls in an odd and one in an even local window, so a
+    single transit can't be scored against pure noise.
+    """
 
     f_sg = _sg_detrend(t, f, duration)
     phi = _phase_fold(t, period, t0)
@@ -201,11 +208,21 @@ def run_exominer(
         sel = in_local & mask
         return float(1.0 - np.median(f_sg[sel])) if sel.sum() > 5 else float("nan")
 
+    from .pipeline import count_events_by_parity, detect_events
+    if events is None:
+        events = detect_events(t, f)
+    n_odd_ev, n_even_ev = count_events_by_parity(
+        events, period, t0, half_local * period,
+    )
     d_odd, d_even = _depth(odd_mask), _depth(even_mask)
     std_oe = float(np.nanstd(f_sg[in_local])) if in_local.sum() > 5 else 1e-6
+    odd_even_available = (
+        n_odd_ev >= 1 and n_even_ev >= 1
+        and not (math.isnan(d_odd) or math.isnan(d_even))
+    )
     odd_even_sigma = (
         float(abs(d_odd - d_even) / max(std_oe * math.sqrt(2), 1e-9))
-        if not (math.isnan(d_odd) or math.isnan(d_even))
+        if odd_even_available
         else 0.0
     )
 
@@ -232,6 +249,7 @@ def run_exominer(
         "depth_ppm":             round(depth_ppm, 1),
         "transit_count":         transit_count,
         "odd_even_sigma":        round(odd_even_sigma, 3),
+        "odd_even_available":    bool(odd_even_available),
         "secondary_depth_sigma": round(sec_sigma, 3),
         "centroid_shift_sigma":  round(cen_sigma, 3),
         "scatter_mad":           round(scatter_mad, 6),
@@ -259,7 +277,10 @@ def run_exominer(
     )
     plots["odd_even_view"] = _plot_multi_view(
         [(lc, ov, "Odd transits"), (lc, ev, "Even transits")],
-        f"Odd vs even transit views  (odd/even σ = {odd_even_sigma:.2f})",
+        f"Odd vs even transit views  (odd/even σ = {odd_even_sigma:.2f})"
+        if odd_even_available else
+        "Odd vs even transit views  (odd/even σ not available: "
+        "insufficient odd or even transits)",
     )
 
     if has_centroid:
