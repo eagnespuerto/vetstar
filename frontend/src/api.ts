@@ -91,6 +91,20 @@ function plotKwargs(p: DetectParams): Record<string, any> {
   return out;
 }
 
+function mastBody(ticId: number, sector: number, params: DetectParams): string {
+  return JSON.stringify({
+    tic_id: ticId, sector,
+    detect_threshold: params.threshold,
+    detect_min_snr: params.minSnr,
+    high_variability: params.highVariability,
+    rotation_period_days: params.rotationPeriod,
+    secondary_sigma: params.secondarySigma,
+    odd_even_sigma: params.oddEvenSigma,
+    ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
+    ...plotKwargs(params),
+  });
+}
+
 export async function mastAnalyze(ticId: number, sector: number, params: DetectParams = DEFAULT_PARAMS) {
   const r = await fetch(`${API_BASE}/api/mast/analyze`, {
     method: "POST",
@@ -134,17 +148,7 @@ export async function mastAnalyzeWithProgress(
   params: DetectParams = DEFAULT_PARAMS,
   onProgress?: (e: ProgressEvent) => void,
 ): Promise<any> {
-  const body = JSON.stringify({
-    tic_id: ticId, sector,
-    detect_threshold: params.threshold,
-    detect_min_snr: params.minSnr,
-    high_variability: params.highVariability,
-    rotation_period_days: params.rotationPeriod,
-    secondary_sigma: params.secondarySigma,
-    odd_even_sigma: params.oddEvenSigma,
-    ...(hasKnownPeriod(params) ? { known_period_days: params.knownPeriod } : {}),
-    ...plotKwargs(params),
-  });
+  const body = mastBody(ticId, sector, params);
 
   // Kick off the job. If the async endpoint is missing (older deployment),
   // fall back to the blocking endpoint so the user still gets a result.
@@ -183,6 +187,99 @@ export async function mastAnalyzeWithProgress(
       reject(new Error("Progress stream disconnected"));
     };
   });
+}
+
+// ---------- One-click vet + PDF report ----------------------------------
+//
+// /api/vet_async (MAST) and /api/vet_async/upload start one job that vets
+// the target, streams the result as soon as it exists ("result" event), then
+// builds the PDF from that same result and finishes with "done". The PDF is
+// fetched afterwards from /api/reports/{id}, so no second pipeline run.
+// ----------------------------------------------------------------------
+
+export interface VetReport {
+  report_id: string;
+  filename: string;
+}
+
+export interface VetOutcome {
+  report: VetReport | null;
+  reportError: string | null;
+}
+
+export interface VetCallbacks {
+  onProgress?: (e: ProgressEvent) => void;
+  /** Called once with the vetting result, before the PDF is built. */
+  onResult?: (result: any) => void;
+}
+
+export function reportUrl(reportId: string): string {
+  return `${API_BASE}/api/reports/${reportId}`;
+}
+
+function streamVetJob(jobId: string, cb: VetCallbacks): Promise<VetOutcome> {
+  return new Promise<VetOutcome>((resolve, reject) => {
+    const es = new EventSource(`${API_BASE}/api/jobs/${jobId}/stream`);
+    es.onmessage = (msg) => {
+      let data: any;
+      try { data = JSON.parse(msg.data); } catch { return; }
+      if (data.type === "progress") {
+        cb.onProgress?.({ stage: data.stage, percent: data.percent, message: data.message });
+      } else if (data.type === "result") {
+        cb.onResult?.(data.result);
+      } else if (data.type === "done") {
+        cb.onProgress?.({ stage: "done", percent: 100, message: "complete" });
+        es.close();
+        resolve({
+          report: data.result?.report ?? null,
+          reportError: data.result?.report_error ?? null,
+        });
+      } else if (data.type === "error") {
+        es.close();
+        reject(new Error(data.message || "analysis failed"));
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      reject(new Error("Progress stream disconnected"));
+    };
+  });
+}
+
+async function kickoffJob(r: Response): Promise<string> {
+  if (!r.ok) throw new Error(`Vetting kickoff failed (${r.status}): ${await r.text()}`);
+  return (await r.json()).job_id;
+}
+
+export async function vetMastAndReport(
+  ticId: number,
+  sector: number,
+  params: DetectParams = DEFAULT_PARAMS,
+  cb: VetCallbacks = {},
+): Promise<VetOutcome> {
+  const jobId = await kickoffJob(await fetch(`${API_BASE}/api/vet_async`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: mastBody(ticId, sector, params),
+  }));
+  return streamVetJob(jobId, cb);
+}
+
+export async function vetUploadAndReport(
+  file: File,
+  params: DetectParams = DEFAULT_PARAMS,
+  cb: VetCallbacks = {},
+): Promise<VetOutcome> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const plot =
+    (typeof params.plotDetrend === "boolean" ? `&plot_detrend=${params.plotDetrend}` : "") +
+    (typeof params.plotBinMinutes === "number" ? `&plot_bin_minutes=${params.plotBinMinutes}` : "");
+  const jobId = await kickoffJob(await fetch(
+    `${API_BASE}/api/vet_async/upload${qs(params)}${plot}`,
+    { method: "POST", body: fd },
+  ));
+  return streamVetJob(jobId, cb);
 }
 
 export async function fetchHabitability(

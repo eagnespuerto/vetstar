@@ -126,14 +126,15 @@ def fetch_dvt(tic_id: int, sector: Optional[int] = None) -> Optional[dict]:
     can degrade gracefully.
     """
     from astroquery.mast import Observations
-    from .mast_fetch import retry
+    from .mast_fetch import MAST_DOWNLOAD_LOCK, retry
 
     dvt_products = _get_dvt_products(tic_id, sector)
     if dvt_products is None:
         return None
 
     def download():
-        return Observations.download_products(dvt_products[:1])
+        with MAST_DOWNLOAD_LOCK:
+            return Observations.download_products(dvt_products[:1])
 
     try:
         manifest = retry(download, name=f"DVT download TIC {tic_id}")
@@ -302,6 +303,12 @@ def _col(data, cols: list[str], name: str):
 # -----------------------------------------------------------------------
 
 def _plot_phase_fold(phases, lc_init, model_init, tce: dict) -> str:
+    from .prefetch import PLOT_LOCK
+    with PLOT_LOCK:
+        return _plot_phase_fold_locked(phases, lc_init, model_init, tce)
+
+
+def _plot_phase_fold_locked(phases, lc_init, model_init, tce: dict) -> str:
     """Render phase-folded data + SPOC transit model. Returns base64 PNG."""
     try:
         import matplotlib

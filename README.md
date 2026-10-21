@@ -94,14 +94,26 @@ pipeline is new in v1.0.0.
   the bar climbs while it works. The same toggles are available on the
   in-browser **Manual tiny-dip selector**, applied client-side so dragging
   stays snappy. Analysis still always runs on the raw cadences.
-- **Live progress bar** during analysis. Vetstar streams stage-by-stage
-  progress (MAST fetch → clean → Lomb-Scargle → detrend → BLS → events →
-  centroid/shape → odd-even / secondary → physics → verdict → cross-match →
-  plots) over Server-Sent Events to the UI, replacing the previous
-  indeterminate spinner with a labelled percent bar. The async kickoff
-  endpoint (`POST /api/mast/analyze_async` + `GET /api/jobs/{id}/stream`)
-  runs alongside the blocking `POST /api/mast/analyze`, which stays
-  available as a fallback for older clients.
+- **One click: vet + PDF.** **Vet & build PDF report** (Upload tab) and
+  **Fetch, vet & build PDF report** (MAST tab) run a single job: the
+  vetting appears on the page as soon as it finishes, then the PDF is built
+  from that same result and a **Download PDF report** button appears. No
+  second MAST download or pipeline run.
+- **Slow fetches start first.** As soon as the target's TIC/sector/
+  coordinates are known, the job starts the slow remote fetches in a small
+  background pool, heaviest first: the TESScut FFI cutout, the SPOC DVT
+  file, the Gaia/SIMBAD/NEA cross-match, then ExoFOP. They overlap the
+  light-curve download and BLS, so the pipeline doesn't stall on them later.
+- **Sized for 512 MB.** One vetting job runs at a time (`VETSTAR_MAX_JOBS`,
+  default 1; later jobs show "Waiting for a free worker"), the prefetch pool
+  has 3 threads, the light-curve cache keeps the last 6 targets, and only the
+  last 4 PDFs are kept, each for 30 min.
+- **Phase-aware progress bar.** Stage-by-stage progress streams over
+  Server-Sent Events and is grouped into four phases: Load light curve →
+  Vet → SPOC DV + habitability → PDF report. The bar turns green for the PDF
+  phase and stays up under the results until the PDF is ready. The older
+  endpoints (`POST /api/mast/analyze_async`, `POST /api/mast/analyze`,
+  `POST /api/mast/report`, `POST /api/report`) still work for other clients.
 - **PDF report** for archiving — a clean, consistent multi-page layout: every
   page carries the same header band and a footer with page numbers, tables
   share one zebra-striped style, section headings stay attached to their
@@ -676,11 +688,12 @@ This means:
 
 ### Step 3 — run vetting
 
-Click **Run vetting** (Upload tab) or **Fetch & vet** (MAST tab). Analysis
-takes 10–30 seconds; a **stage-labelled progress bar** below the loader
-shows real progress (MAST fetch → clean → Lomb-Scargle → detrend → BLS →
-events → centroid/shape → odd-even / secondary → physics → verdict →
-cross-match → plots), driven by an SSE stream from the backend. You'll see:
+Click **Vet & build PDF report** (Upload tab) or **Fetch, vet & build PDF
+report** (MAST tab). Vetting takes 10–30 seconds plus however long MAST takes
+to serve the light curve. The progress bar shows four phases (Load light
+curve → Vet → SPOC DV + habitability → PDF report) and the current stage,
+driven by an SSE stream from the backend. Results appear as soon as vetting
+finishes and the PDF keeps building underneath (see Step 6). You'll see:
 
 - A **verdict banner** (planet candidate / large planet candidate / EB
   candidate / blend / ambiguous) with confidence
@@ -745,7 +758,8 @@ A **Download multi-sector PDF** button exports the whole analysis (see Step 6).
 
 ### Step 6 — download PDF
 
-Click **Download PDF report** or **Fetch & download PDF** for a clean
+The PDF is built by the same job as the on-page vetting. When the bar
+finishes, click **Download PDF report** for a clean
 multi-page PDF (repeating header band + page-numbered footer) with the
 verdict, all vetting tables, diagnostic plots, the FFI cutout, the HCI
 summary (including the combined HCI/observables/TLCM image), the **ExoFOP TOI
@@ -983,6 +997,10 @@ GET  /api/mast/sectors/{tic}                                                    
 POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, plot_detrend?, plot_bin_minutes?}   → JSON
 POST /api/mast/analyze_async   {tic_id, sector, ...same as /api/mast/analyze}                              → {"job_id": "..."}
 GET  /api/jobs/{job_id}/stream                                                                            → Server-Sent Events; data: {"type":"progress","stage":..., "percent":..., "message":...} per stage, final {"type":"done","result":{...}} or {"type":"error","message":"..."}
+POST /api/vet_async            {tic_id, sector, ...same as /api/mast/analyze}                              → {"job_id": "..."}; vet + PDF in one job
+POST /api/vet_async/upload     multipart file + same query params as /api/analyze (+ plot_detrend, plot_bin_minutes) → {"job_id": "..."}
+                               stream for both: progress…, {"type":"result","result":{...}} (render now), progress…, {"type":"done","result":{"report":{"report_id","filename"}|null,"report_error":...}}
+GET  /api/reports/{report_id}                                                                             → the PDF built by a vet job (last 4 kept, 30 min)
 POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → PDF (incl. HCI + ExoFOP + ExoMiner)
 POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
 POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON

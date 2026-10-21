@@ -1555,7 +1555,12 @@ def run_full_vetting(
     reporter=None,
     plot_detrend: bool = True,
     plot_bin_minutes: Optional[int] = 30,
+    known_object=None,
 ) -> VettingResult:
+    """``known_object`` is an optional zero-arg callable returning a
+    ``crossmatch_known_object`` result that was started earlier (see
+    ``prefetch.Prefetcher``), so the remote catalogue queries overlap the
+    BLS search instead of running after it."""
     from .detrend import apply_variability_detrend
     if reporter is None:
         from .progress import make_noop_reporter
@@ -1682,21 +1687,25 @@ def run_full_vetting(
 
     # External catalog cross-match (unchanged).
     reporter("crossmatch", 0.0)
-    known = crossmatch_known_object(star.ra, star.dec)
+    known = known_object() if known_object is not None else None
+    if not known:
+        known = crossmatch_known_object(star.ra, star.dec)
     apply_known_object_override(verdict, known)
     reporter("crossmatch", 1.0)
 
     # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.
     # For now keep the existing call signature; Task 7 adds the new kwargs.
     reporter("plots", 0.0)
-    plots = make_plots(
-        t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
-        bls.get("_periodogram"), ls,
-        detrend_meta=detrend_meta,
-        f_raw=f_raw_for_plot,
-        plot_detrend=plot_detrend,
-        bin_minutes=plot_bin_minutes,
-    )
+    from .prefetch import PLOT_LOCK
+    with PLOT_LOCK:
+        plots = make_plots(
+            t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,
+            bls.get("_periodogram"), ls,
+            detrend_meta=detrend_meta,
+            f_raw=f_raw_for_plot,
+            plot_detrend=plot_detrend,
+            bin_minutes=plot_bin_minutes,
+        )
     reporter("plots", 1.0)
 
     summary = {
