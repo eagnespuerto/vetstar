@@ -87,20 +87,23 @@ def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float
         return _ffi_cache[key]
 
     cutout = None
+    # Not a `with` block: its exit calls shutdown(wait=True), which would
+    # block until the fetch finished and make the timeout useless.
+    ex = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(
-                make_ffi_cutout, ra=ra, dec=dec, sector=sector,
-                tic_id=tic_id, size_px=size_px,
-            )
-            cutout = fut.result(timeout=timeout_s)
+        fut = ex.submit(
+            make_ffi_cutout, ra=ra, dec=dec, sector=sector,
+            tic_id=tic_id, size_px=size_px,
+        )
+        cutout = fut.result(timeout=timeout_s)
     except FutureTimeout:
         log.warning("FFI cutout timed out after %.0fs for TIC %s S%s", timeout_s, tic_id, sector)
-        cutout = None  # don't cache a timeout — a retry may succeed
-        return None
+        return None  # don't cache a timeout — a retry may succeed
     except Exception as e:
         log.warning("FFI cutout error for TIC %s S%s: %s", tic_id, sector, e)
         cutout = None
+    finally:
+        ex.shutdown(wait=False)
 
     _ffi_cache[key] = cutout  # cache success or a clean "no cutout" (None)
     return cutout
@@ -2199,13 +2202,27 @@ class MicrolensingFfiCutoutRequest(BaseModel):
 @app.post("/api/microlensing/ffi_cutout")
 def api_microlensing_ffi_cutout(req: MicrolensingFfiCutoutRequest):
     """TESScut FFI cutout + Gaia DR3 overlay for source-blending diagnosis."""
-    result = make_ffi_gaia_cutout(
-        ra=req.ra, dec=req.dec,
-        sector=req.sector, tic_id=req.tic_id,
-        size_px=req.size_px,
-        gaia_mag_limit=req.gaia_mag_limit,
-        gaia_max_sources=req.gaia_max_sources,
-    )
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
+    # Bounded like _get_ffi_cutout so a stuck MAST/Gaia call can't hang the
+    # request until the gateway gives up.
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        result = ex.submit(
+            make_ffi_gaia_cutout,
+            ra=req.ra, dec=req.dec,
+            sector=req.sector, tic_id=req.tic_id,
+            size_px=req.size_px,
+            gaia_mag_limit=req.gaia_mag_limit,
+            gaia_max_sources=req.gaia_max_sources,
+        ).result(timeout=60.0)
+    except FutureTimeout:
+        raise HTTPException(
+            status_code=504,
+            detail="TESScut/Gaia took too long to respond. Please try again.",
+        )
+    finally:
+        ex.shutdown(wait=False)
     if result is None:
         raise HTTPException(
             status_code=404,

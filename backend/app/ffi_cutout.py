@@ -174,9 +174,17 @@ def make_ffi_cutout(
 
         coord = SkyCoord(float(ra), float(dec), unit="deg")
         tmpdir = tempfile.mkdtemp(prefix="ffi_")
-        kwargs = {"coordinates": coord, "size": int(size_px), "path": tmpdir, "inflate": True}
-        if sector is not None:
-            kwargs["sector"] = int(sector)
+        if sector is None:
+            # Without a sector TESScut returns a cube for *every* sector that
+            # covers the target — many MB each, enough to exhaust a small
+            # instance. Pick the most recent covering sector instead.
+            sectors = Tesscut.get_sectors(coordinates=coord)
+            if sectors is None or len(sectors) == 0:
+                log.info("TESScut: no sectors cover (%.4f, %.4f)", ra, dec)
+                return None
+            sector = int(max(int(s) for s in sectors["sector"]))
+        kwargs = {"coordinates": coord, "size": int(size_px), "path": tmpdir,
+                  "inflate": True, "sector": int(sector)}
 
         manifest = Tesscut.download_cutouts(**kwargs)
         if manifest is None or len(manifest) == 0 or "Local Path" not in manifest.colnames:
