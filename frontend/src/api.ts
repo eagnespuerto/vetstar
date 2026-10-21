@@ -374,16 +374,44 @@ export interface FfiCutoutRequest {
   size_px?: number;
 }
 
-export async function runFfiCutout(req: FfiCutoutRequest): Promise<FfiCutoutResult> {
-  const r = await fetch(`${API_BASE}/api/ffi_cutout`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`FFI cutout failed (${r.status}): ${text}`);
+// Gateway errors (502/503/504) come back as the host's HTML error page —
+// retry once (the server may be waking up or restarting), then surface a
+// short message instead of dumping the HTML into the UI.
+async function postCutout(url: string, body: unknown): Promise<Response> {
+  const send = () =>
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  let r = await send();
+  if (r.status === 502 || r.status === 503 || r.status === 504) {
+    await new Promise((res) => setTimeout(res, 5000));
+    r = await send();
   }
+  return r;
+}
+
+async function cutoutError(r: Response): Promise<Error> {
+  if (r.status === 502 || r.status === 503 || r.status === 504) {
+    return new Error(
+      `FFI cutout failed (${r.status}): the server is temporarily unavailable. Please try again in a minute.`,
+    );
+  }
+  let text = await r.text();
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j.detail === "string") text = j.detail;
+  } catch {
+    /* not JSON */
+  }
+  if (/^\s*<!doctype|^\s*<html/i.test(text)) text = "unexpected server response";
+  return new Error(`FFI cutout failed (${r.status}): ${text.slice(0, 300)}`);
+}
+
+export async function runFfiCutout(req: FfiCutoutRequest): Promise<FfiCutoutResult> {
+  const r = await postCutout(`${API_BASE}/api/ffi_cutout`, req);
+  if (!r.ok) throw await cutoutError(r);
   return r.json();
 }
 
@@ -721,12 +749,8 @@ export async function fetchMicrolensingFfi(payload: {
   gaia_mag_limit?: number;
   gaia_max_sources?: number;
 }): Promise<FfiCutoutResponse> {
-  const r = await fetch(`${API_BASE}/api/microlensing/ffi_cutout`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(`FFI cutout failed (${r.status}): ${await r.text()}`);
+  const r = await postCutout(`${API_BASE}/api/microlensing/ffi_cutout`, payload);
+  if (!r.ok) throw await cutoutError(r);
   return r.json();
 }
 
