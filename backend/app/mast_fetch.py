@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from typing import List, Optional, Tuple
 
@@ -32,6 +33,12 @@ DEFAULT_AUTHORS: List[Tuple[str, int]] = [
     ("TESS-SPOC", 600),
     ("QLP", 1800),
 ]
+
+# astroquery downloads a light curve and its DVT into the same
+# mastDownload/<obs_id>/ folder and creates it without exist_ok, so two
+# concurrent downloads (LC + prefetched DVT) race on Windows (WinError 183).
+# Only the file download is serialised; the slow metadata queries overlap.
+MAST_DOWNLOAD_LOCK = threading.Lock()
 
 # 30" cone covers the TESS pixel (21"/px) plus a small buffer.
 CONE_RADIUS_DEG = 30 / 3600.0
@@ -301,7 +308,8 @@ def fetch_spoc_lightcurve(
 
     # 5. Download.
     def download():
-        return Observations.download_products(lc_products[:1])
+        with MAST_DOWNLOAD_LOCK:
+            return Observations.download_products(lc_products[:1])
 
     manifest = retry(download, name="download")
     if len(manifest) == 0 or "Local Path" not in manifest.colnames:

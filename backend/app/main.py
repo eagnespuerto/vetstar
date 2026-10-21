@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
+from .prefetch import PLOT_LOCK, REPORTS, VET_SLOTS, Prefetcher
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,10 +43,12 @@ from .microlensing_coverage import (
 )
 from .parsers import parse_upload
 from .pipeline import (
+    CROSSMATCH_TIMEOUT_S,
     run_full_vetting,
     clean_lightcurve,
     measure_shape,
     centroid_check,
+    crossmatch_known_object,
 )
 from .report import build_pdf
 
@@ -68,6 +71,7 @@ app.add_middleware(
 # Process-local — fine for single-worker Render deployment.
 # -------------------------------------------------
 _lc_cache: dict = {}
+_LC_CACHE_MAX = 6
 
 # FFI cutout cache so the on-screen panel and the PDF don't each hit TESScut.
 # Keyed by (tic_id, sector). Process-local.
@@ -141,8 +145,15 @@ def _cache_lc(parsed: dict) -> None:
             "mom_y": mom_y,
             "star": star,
         }
-        _lc_cache[(tic_id, sector)] = entry
+        key = (tic_id, sector)
+        _lc_cache.pop(key, None)
+        _lc_cache[key] = entry
         _lc_cache["__last__"] = entry
+        # Bounded for the 512 MB budget: a 20-s cadence sector is several
+        # MB of arrays. Dicts keep insertion order, so evict the oldest.
+        targets = [k for k in _lc_cache if k != "__last__"]
+        for old in targets[:-_LC_CACHE_MAX]:
+            _lc_cache.pop(old, None)
     except Exception as exc:
         log.warning("LC cache update failed: %s", exc)
 
@@ -198,7 +209,8 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
                   known_period_days: Optional[float] = None,
                   reporter: Optional[ProgressReporter] = None,
                   plot_detrend: bool = True,
-                  plot_bin_minutes: Optional[int] = 30):
+                  plot_bin_minutes: Optional[int] = 30,
+                  known_object=None):
     th, snr = _clamp_params(detect_threshold, detect_min_snr)
     sec_sig = _validate_secondary_sigma(secondary_sigma)
     oe_sig = _validate_odd_even_sigma(odd_even_sigma)
@@ -220,6 +232,7 @@ def _run_pipeline(parsed: dict, detect_threshold: float, detect_min_snr: float,
         reporter=reporter,
         plot_detrend=plot_detrend,
         plot_bin_minutes=plot_bin_minutes,
+        known_object=known_object,
     )
 
 
@@ -420,66 +433,113 @@ async def mast_sectors(tic_id: int):
         raise _handle_exception("mast_sectors", e)
 
 
-def _mast_fetch_and_analyze(query: MastQuery, reporter: Optional[ProgressReporter] = None):
-    rep = reporter or make_noop_reporter()
-
-    rep("mast_fetch", 0.0)
-    try:
-        info = fetch_spoc_lightcurve(query.tic_id, query.sector)
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        raise _handle_exception("mast_fetch", e)
-    rep("mast_fetch", 1.0)
-
-    # Opportunistically fetch the companion DVT file produced by SPOC DV.
-    # Provides fitted period, a/R★ (ARAT), impact parameter, and a phase-fold
-    # plot with the transit model overlay — cleaner than BLS-only estimates.
-    # Fails soft: None when not yet available (recent sector, FFI-only target).
-    rep("dvt_fetch", 0.0)
+def _fetch_dvt_soft(tic_id: int, sector: Optional[int]) -> Optional[dict]:
     try:
         from .dvt_fetch import fetch_dvt
-        info["dvt"] = fetch_dvt(query.tic_id, query.sector)
-    except Exception as _e:
-        log.warning("DVT fetch skipped for TIC %s S%s: %s", query.tic_id, query.sector, _e)
-        info["dvt"] = None
-    rep("dvt_fetch", 1.0)
-
-    rep("parse", 0.0)
-    try:
-        parsed = parse_upload(info["path"], info["filename"])
+        return fetch_dvt(tic_id, sector)
     except Exception as e:
-        raise _handle_exception(
-            f"parse downloaded FITS ({os.path.basename(info.get('path', ''))})", e
-        )
-    rep("parse", 1.0)
+        log.warning("DVT fetch skipped for TIC %s S%s: %s", tic_id, sector, e)
+        return None
 
-    _cache_lc(parsed)
 
+def _start_prefetch(pf: Prefetcher, tic_id, sector, ra, dec, *, report: bool = True) -> None:
+    """Kick off every remote fetch that doesn't need the pipeline result,
+    heaviest first so the slow ones finish while BLS runs: the TESScut FFI
+    cube, the SPOC DVT download, the Gaia/SIMBAD/NEA cross-match, then
+    ExoFOP. ``report=False`` skips the PDF-only fetches (FFI, ExoFOP)."""
+    have_coords = ra is not None and dec is not None
+    if report and have_coords:
+        pf.submit("ffi", _get_ffi_cutout, tic_id, sector, ra, dec)
+    if tic_id:
+        pf.submit("dvt", _fetch_dvt_soft, tic_id, sector)
+    if have_coords:
+        pf.submit("crossmatch", crossmatch_known_object, ra, dec)
+    if report and tic_id:
+        pf.submit("exofop", query_exofop, tic_id)
+
+
+def _prefetched_crossmatch(pf: Prefetcher):
+    """``known_object`` callable for the pipeline: the prefetched cross-match,
+    or None (the pipeline then queries itself) when it wasn't started."""
+    if not pf.has("crossmatch"):
+        return None
+    # The cross-match runs two bounded rounds (main sources, exoplanets.org).
+    return lambda: pf.get("crossmatch", timeout=2 * CROSSMATCH_TIMEOUT_S + 5)
+
+
+def _mast_fetch_and_analyze(query: MastQuery, reporter: Optional[ProgressReporter] = None,
+                            pf: Optional[Prefetcher] = None, report: bool = False):
+    """Fetch the SPOC light curve for (TIC, sector) and vet it.
+
+    The target's TIC v8 coordinates are looked up first so the slow remote
+    fetches (``_start_prefetch``) run in parallel with the light-curve
+    download and the pipeline. Pass ``pf`` to keep the prefetcher (and its
+    FFI/ExoFOP results) for the PDF; otherwise it is closed here.
+    ``info["dvt"]`` holds the SPOC DVT dict, or None.
+    """
+    rep = reporter or make_noop_reporter()
+    own_pf = pf is None
+    pf = pf or Prefetcher()
     try:
-        result = _run_pipeline(
-            parsed, query.detect_threshold, query.detect_min_snr,
-            high_variability=query.high_variability,
-            rotation_period_days=query.rotation_period_days,
-            secondary_sigma=query.secondary_sigma,
-            odd_even_sigma=query.odd_even_sigma,
-            known_period_days=query.known_period_days,
-            reporter=rep,
-            plot_detrend=query.plot_detrend,
-            plot_bin_minutes=query.plot_bin_minutes,
-        )
-    except Exception as e:
-        raise _handle_exception("pipeline", e)
+        rep("mast_fetch", 0.0)
+        try:
+            from .tic_catalog import fetch_tic_stellar
+            tic_star = fetch_tic_stellar(query.tic_id)  # lru-cached; reused by the HCI backfill
+        except Exception as e:
+            log.warning("TIC coordinate lookup failed for TIC %s: %s", query.tic_id, e)
+            tic_star = {}
+        _start_prefetch(pf, query.tic_id, query.sector,
+                        tic_star.get("ra"), tic_star.get("dec"), report=report)
 
-    return result, info
+        try:
+            info = fetch_spoc_lightcurve(query.tic_id, query.sector)
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        except Exception as e:
+            raise _handle_exception("mast_fetch", e)
+        rep("mast_fetch", 1.0)
+
+        rep("parse", 0.0)
+        try:
+            parsed = parse_upload(info["path"], info["filename"])
+        except Exception as e:
+            raise _handle_exception(
+                f"parse downloaded FITS ({os.path.basename(info.get('path', ''))})", e
+            )
+        rep("parse", 1.0)
+
+        _cache_lc(parsed)
+
+        try:
+            result = _run_pipeline(
+                parsed, query.detect_threshold, query.detect_min_snr,
+                high_variability=query.high_variability,
+                rotation_period_days=query.rotation_period_days,
+                secondary_sigma=query.secondary_sigma,
+                odd_even_sigma=query.odd_even_sigma,
+                known_period_days=query.known_period_days,
+                reporter=rep,
+                plot_detrend=query.plot_detrend,
+                plot_bin_minutes=query.plot_bin_minutes,
+                known_object=_prefetched_crossmatch(pf),
+            )
+        except Exception as e:
+            raise _handle_exception("pipeline", e)
+
+        # SPOC DV companion file: fitted period, a/R*, impact parameter and a
+        # phase fold with the transit model. None when not yet available
+        # (recent sector, FFI-only target).
+        rep("dvt_fetch", 0.0)
+        info["dvt"] = pf.get("dvt", timeout=120)
+        rep("dvt_fetch", 1.0)
+        return result, info
+    finally:
+        if own_pf:
+            pf.close()
 
 
-@app.post("/api/mast/analyze")
-async def mast_analyze(query: MastQuery):
-    result, info = _mast_fetch_and_analyze(query)
-    _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
-    out = result.to_dict()
-    out["mast"] = {
+def _mast_meta(info: dict) -> dict:
+    return {
         "filename": os.path.basename(info.get("path", "")),
         "obs_id": info.get("obs_id"),
         "matched_observations": info.get("matched"),
@@ -488,6 +548,14 @@ async def mast_analyze(query: MastQuery):
         "fallback": info.get("fallback", False),
         "tried": info.get("tried", []),
     }
+
+
+@app.post("/api/mast/analyze")
+async def mast_analyze(query: MastQuery):
+    result, info = _mast_fetch_and_analyze(query)
+    _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
+    out = result.to_dict()
+    out["mast"] = _mast_meta(info)
     out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
     # Include DVT summary for the frontend (phase-fold plot + fitted parameters).
     out["dvt"] = _summarize_dvt(info.get("dvt"))
@@ -514,15 +582,7 @@ def _run_mast_job(query: MastQuery, job: JobState) -> None:
         result, info = _mast_fetch_and_analyze(query, reporter=reporter)
         _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
         out = result.to_dict()
-        out["mast"] = {
-            "filename": os.path.basename(info.get("path", "")),
-            "obs_id": info.get("obs_id"),
-            "matched_observations": info.get("matched"),
-            "author": info.get("author"),
-            "exptime": info.get("exptime"),
-            "fallback": info.get("fallback", False),
-            "tried": info.get("tried", []),
-        }
+        out["mast"] = _mast_meta(info)
         out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
         out["dvt"] = _summarize_dvt(info.get("dvt"))
         JOBS.finish_ok(job, out)
@@ -581,6 +641,183 @@ async def job_stream(job_id: str):
             "X-Accel-Buffering": "no",   # disable nginx response buffering
             "Connection": "keep-alive",
         },
+    )
+
+
+# -------------------------------------------------
+# Vet + PDF report in one job.
+#
+# One click vets the target, shows the result on the page, then builds the
+# PDF from that same result (no second MAST download or pipeline run):
+#   POST /api/vet_async          (MastQuery JSON)        → {job_id}
+#   POST /api/vet_async/upload   (multipart, same query
+#                                 params as /api/analyze) → {job_id}
+#   GET  /api/jobs/{job_id}/stream
+#        progress … {"type":"result","result":{...}}   ← render now
+#        progress … {"type":"done","result":{"report":{"report_id","filename"}|null,
+#                                             "report_error":str|null}}
+#   GET  /api/reports/{report_id}  → the PDF (kept ~30 min, last few only)
+# -------------------------------------------------
+
+def _run_vet_job(job: JobState, work) -> None:
+    """Worker-thread wrapper: hold a vetting slot (one job at a time on a
+    512 MB box), own the prefetcher, and turn failures into SSE errors."""
+    rep = JOBS.reporter_for(job)
+    pf = Prefetcher()
+    if not VET_SLOTS.acquire(blocking=False):
+        rep("queued", 0.0)
+        VET_SLOTS.acquire()
+    try:
+        work(job, rep, pf)
+    except HTTPException as e:
+        JOBS.finish_err(job, f"{e.status_code}: {e.detail}")
+    except Exception as e:
+        log.exception("vet job failed")
+        JOBS.finish_err(job, f"{type(e).__name__}: {e}")
+    finally:
+        pf.close()
+        VET_SLOTS.release()
+        import gc
+        gc.collect()
+
+
+def _publish_and_report(job: JobState, rep: ProgressReporter, pf: Prefetcher,
+                        result, dvt: Optional[dict], out_extra: dict, fname: str) -> None:
+    """Shared tail of the vet job: HCI → push the result to the page →
+    ExoMiner + prefetched FFI cutout → PDF → done."""
+    rep("habitability", 0.0)
+    bundle = _attach_hci_summary_to_plots(
+        result, dvt=dvt, exofop=pf.get("exofop", timeout=60),
+    )
+    rep("habitability", 1.0)
+
+    out = result.to_dict()
+    out.update(out_extra)
+    out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+    out["dvt"] = _summarize_dvt(dvt)
+    JOBS.push_result(job, out)
+    del out
+
+    rep("report", 0.0)
+    report, report_error = None, None
+    try:
+        extras = _build_report_extras(
+            result, dvt=dvt, hci_bundle=bundle,
+            ffi_cutout=pf.get("ffi", timeout=90) if pf.has("ffi") else _UNSET,
+        )
+        rep("report", 0.6)
+        pdf = build_pdf(
+            result,
+            hci_bundle=extras.get("hci_bundle"),
+            exominer=extras.get("exominer"),
+            ffi_cutout=extras.get("ffi_cutout"),
+            dvt=dvt,
+        )
+        report = {"report_id": REPORTS.put(pdf, fname), "filename": fname}
+    except Exception as e:
+        log.exception("PDF build failed in vet job")
+        report_error = f"{type(e).__name__}: {e}"
+    JOBS.finish_ok(job, {"report": report, "report_error": report_error})
+
+
+def _vet_mast_work(query: MastQuery):
+    def work(job, rep, pf):
+        result, info = _mast_fetch_and_analyze(query, reporter=rep, pf=pf, report=True)
+        fname = f"vetting_TIC{query.tic_id}_S{query.sector:03d}.pdf"
+        _publish_and_report(job, rep, pf, result, info.get("dvt"),
+                            {"mast": _mast_meta(info)}, fname)
+    return work
+
+
+def _vet_upload_work(tmp_path: str, filename: str, pipeline_kwargs: dict):
+    def work(job, rep, pf):
+        try:
+            rep("parse", 0.0)
+            parsed = parse_upload(tmp_path, filename)
+            if parsed.get("metadata_only"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This ExoFOP file contains only target metadata (no time "
+                        "series). Upload a FITS light curve instead."
+                    ),
+                )
+            rep("parse", 1.0)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        star = parsed["star"]
+        _start_prefetch(pf, star.tic_id, star.sector, star.ra, star.dec)
+        _cache_lc(parsed)
+        result = _run_pipeline(parsed, reporter=rep,
+                               known_object=_prefetched_crossmatch(pf),
+                               **pipeline_kwargs)
+        del parsed
+        rep("dvt_fetch", 0.0)
+        dvt = pf.get("dvt", timeout=120)
+        rep("dvt_fetch", 1.0)
+        tic = result.star.tic_id or uuid.uuid4().hex[:8]
+        _publish_and_report(job, rep, pf, result, dvt, {}, f"vetting_TIC{tic}.pdf")
+    return work
+
+
+def _start_vet_job(work) -> dict:
+    job = JOBS.create()
+    import threading as _t
+    _t.Thread(target=_run_vet_job, args=(job, work), daemon=True).start()
+    return {"job_id": job.job_id}
+
+
+@app.post("/api/vet_async")
+async def vet_async(query: MastQuery):
+    return _start_vet_job(_vet_mast_work(query))
+
+
+@app.post("/api/vet_async/upload")
+async def vet_async_upload(
+    file: UploadFile = File(...),
+    detect_threshold: float = 0.997,
+    detect_min_snr: float = 4.0,
+    high_variability: bool = False,
+    rotation_period_days: Optional[float] = None,
+    secondary_sigma: float = 3.0,
+    odd_even_sigma: float = 3.0,
+    known_period_days: Optional[float] = None,
+    plot_detrend: bool = True,
+    plot_bin_minutes: Optional[int] = 30,
+):
+    _validate_known_period_days(known_period_days)
+    _validate_secondary_sigma(secondary_sigma)
+    _validate_odd_even_sigma(odd_even_sigma)
+    tmp_path = _save_upload_to_tempfile(file)  # the job deletes it after parsing
+    return _start_vet_job(_vet_upload_work(tmp_path, file.filename, {
+        "detect_threshold": detect_threshold,
+        "detect_min_snr": detect_min_snr,
+        "high_variability": high_variability,
+        "rotation_period_days": rotation_period_days,
+        "secondary_sigma": secondary_sigma,
+        "odd_even_sigma": odd_even_sigma,
+        "known_period_days": known_period_days,
+        "plot_detrend": plot_detrend,
+        "plot_bin_minutes": plot_bin_minutes,
+    }))
+
+
+@app.get("/api/reports/{report_id}")
+def get_report(report_id: str):
+    item = REPORTS.get(report_id)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Report expired or unknown — run the vetting again to rebuild it.",
+        )
+    pdf, fname = item
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
@@ -726,19 +963,22 @@ def _resolve_planet_radius(
     return None, None
 
 
-def _habitability_bundle(query: HabitabilityQuery) -> dict:
+def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None) -> dict:
     """Compute the full HCI + observables + TLCM bundle for a target.
 
     Factored out of the /api/habitability route so the PDF report flow can
     reuse exactly the same computation server-side (no frontend plumbing).
+    ``exofop`` is an already-fetched ``query_exofop`` result (prefetch).
     """
-    try:
-        exofop = query_exofop(query.tic_id)
-    except Exception as e:
-        log.warning("ExoFOP query failed for TIC %s: %s", query.tic_id, e)
-        exofop = {"star": {}, "tois": [], "source": "unavailable"}
+    if exofop is None:
+        try:
+            exofop = query_exofop(query.tic_id)
+        except Exception as e:
+            log.warning("ExoFOP query failed for TIC %s: %s", query.tic_id, e)
+            exofop = {"star": {}, "tois": [], "source": "unavailable"}
 
-    star = exofop.get("star", {})
+    # Copy: the backfills below mutate the star dict.
+    star = dict(exofop.get("star", {}))
     tois = exofop.get("tois", [])
 
     # ExoFOP often returns empty stellar fields, and FFI/QLP headers lack
@@ -985,29 +1225,34 @@ def _habitability_bundle(query: HabitabilityQuery) -> dict:
     }
 
 
-def _attach_hci_summary_to_plots(
+def _hci_bundle_for_result(
     result,
     *,
     dvt: Optional[dict] = None,
     n_sectors_observed: int = 1,
     n_sectors_with_detections: Optional[int] = None,
-) -> None:
-    """Compute the HCI summary PNG for ``result`` and stash it into
-    ``result.plots['hci_summary']`` so the frontend ZIP exporter picks it
-    up without a separate /api/habitability round-trip.
+    period_override: Optional[float] = None,
+    exofop: Optional[dict] = None,
+) -> Optional[dict]:
+    """HCI + observables + TLCM bundle (with its summary PNG) for a finished
+    VettingResult, or None without a TIC or on any failure.
 
-    Fails soft: any error (missing TIC, ExoFOP outage, image-render failure)
-    just leaves ``plots`` untouched.
+    ``dvt`` is the parsed DVT dict from ``dvt_fetch.fetch_dvt``. When
+    present its TCE-0 parameters (period, duration, depth, impact parameter,
+    and the SPOC-fitted a/R★) are propagated into the enriched verdict for a
+    cleaner TLCM geometry and semi-major axis. ``exofop`` is a prefetched
+    ``query_exofop`` result.
     """
     tic = getattr(result.star, "tic_id", None)
     if not tic:
-        return
+        return None
     try:
         from .dvt_fetch import best_tce as _best_tce
         tce = _best_tce(dvt)
         dvt_period = tce.get("period_d") if tce else None
-        period = (result.bls.get("period") if result.bls else None)
-        if dvt_period:
+        period = period_override or (result.bls.get("period") if result.bls else None)
+        # DVT period is more precise (multi-sector fold) — prefer it over BLS.
+        if dvt_period and period_override is None:
             period = dvt_period
 
         enriched_verdict = dict(result.verdict or {})
@@ -1019,6 +1264,7 @@ def _attach_hci_summary_to_plots(
                 "_bls_duration": result.bls.get("duration") if result.bls else None,
                 "_shape_class": result.shape.get("shape_class") if result.shape else None,
                 "_events": result.events,
+                # DVT-derived parameters (None when DVT unavailable)
                 "_dvt_period_d": dvt_period,
                 "_dvt_duration_h": tce.get("duration_h") if tce else None,
                 "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
@@ -1042,25 +1288,37 @@ def _attach_hci_summary_to_plots(
             n_sectors_observed=int(n_sectors_observed),
             vetting_verdict=enriched_verdict,
         )
-        bundle = _habitability_bundle(hq)
-        _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
-        if bundle.get("hci_image"):
-            result.plots["hci_summary"] = bundle["hci_image"]
+        bundle = _habitability_bundle(hq, exofop=exofop)
+        return _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
     except Exception as e:
-        log.warning("HCI summary attach failed for TIC %s: %s", tic, e)
+        log.warning("HCI bundle failed for TIC %s: %s", tic, e)
+        return None
+
+
+def _attach_hci_summary_to_plots(result, **kwargs) -> Optional[dict]:
+    """Compute the HCI bundle for ``result`` and stash its summary PNG into
+    ``result.plots['hci_summary']`` so the frontend ZIP exporter picks it
+    up without a separate /api/habitability round-trip. Returns the bundle
+    so the PDF can reuse it. Fails soft: leaves ``plots`` untouched.
+    """
+    bundle = _hci_bundle_for_result(result, **kwargs)
+    if bundle and bundle.get("hci_image"):
+        result.plots["hci_summary"] = bundle["hci_image"]
+    return bundle
 
 
 def _attach_hci_image(bundle: dict, title: Optional[str] = None) -> dict:
     """Render the combined HCI/observables/TLCM summary PNG into the bundle."""
     try:
         from .hci_image import make_hci_summary_image
-        bundle["hci_image"] = make_hci_summary_image(
-            bundle.get("hci"),
-            bundle.get("observables"),
-            bundle.get("tlcm"),
-            planet=bundle.get("planet"),
-            title=title,
-        )
+        with PLOT_LOCK:
+            bundle["hci_image"] = make_hci_summary_image(
+                bundle.get("hci"),
+                bundle.get("observables"),
+                bundle.get("tlcm"),
+                planet=bundle.get("planet"),
+                title=title,
+            )
     except Exception as e:  # never let image rendering break the response
         log.warning("HCI summary image failed: %s", e)
         bundle["hci_image"] = None
@@ -1074,22 +1332,25 @@ async def habitability(query: HabitabilityQuery):
     return _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
 
 
+_UNSET = object()
+
+
 def _build_report_extras(
     result,
     n_sectors_observed: int = 1,
     n_sectors_with_detections: Optional[int] = None,
     period_override: Optional[float] = None,
     dvt: Optional[dict] = None,
+    hci_bundle: Optional[dict] = None,
+    ffi_cutout=_UNSET,
 ) -> dict:
     """Server-side recompute of HCI, observables, TLCM and ExoMiner for a
     finished VettingResult, so the PDF (and the multi-sector panel) can embed
     *all current analyses* without the frontend forwarding its panel state.
 
-    ``dvt`` is the parsed DVT dict from ``dvt_fetch.fetch_dvt``.  When
-    present its TCE-0 parameters (period, duration, depth, impact parameter,
-    and the SPOC-fitted a/R★) are propagated into the enriched verdict and
-    used by ``_habitability_bundle`` for a cleaner TLCM geometry and
-    semi-major axis.
+    Pass ``hci_bundle`` / ``ffi_cutout`` when the caller already has them
+    (the vet-and-report job computes the HCI for the page and prefetches
+    the cutout) to skip the recompute / TESScut fetch.
 
     Every step fails safe: a missing TIC, an offline catalogue, or an
     ExoMiner error simply omits that block.
@@ -1099,55 +1360,20 @@ def _build_report_extras(
     tic = getattr(star, "tic_id", None)
     period = period_override or (result.bls.get("period") if result.bls else None)
 
-    # Extract the best DVT TCE parameters (None when DVT unavailable).
     from .dvt_fetch import best_tce as _best_tce
     tce = _best_tce(dvt)
     dvt_period = tce.get("period_d") if tce else None
-    # DVT period is more precise (multi-sector fold) — prefer it over BLS.
     if dvt_period and period_override is None:
         period = dvt_period
 
     # --- HCI + observables + TLCM (needs a TIC to query ExoFOP) ---------
-    if tic:
-        try:
-            enriched_verdict = dict(result.verdict or {})
-            enriched_verdict.update(
-                {
-                    "_depth": (result.events[0]["depth"] if result.events else None),
-                    "_bls_depth": result.bls.get("depth") if result.bls else None,
-                    "_t14_d": result.shape.get("t14_d") if result.shape else None,
-                    "_bls_duration": result.bls.get("duration") if result.bls else None,
-                    "_shape_class": result.shape.get("shape_class") if result.shape else None,
-                    "_events": result.events,
-                    # DVT-derived parameters (None when DVT unavailable)
-                    "_dvt_period_d": dvt_period,
-                    "_dvt_duration_h": tce.get("duration_h") if tce else None,
-                    "_dvt_depth_frac": tce.get("depth_frac") if tce else None,
-                    "_dvt_impact_b": tce.get("impact_b") if tce else None,
-                    "_dvt_a_over_rs": tce.get("a_over_rs") if tce else None,
-                    "_dvt_rprs": tce.get("rprs") if tce else None,
-                }
-            )
-            if n_sectors_with_detections is not None:
-                n_det = n_sectors_with_detections
-            else:
-                n_det = 1 if result.summary.get("n_events_detected", 0) > 0 else 0
-            hq = HabitabilityQuery(
-                tic_id=tic,
-                orbital_period_d=period,
-                stellar_teff=star.teff,
-                stellar_radius_sun=star.radius,
-                stellar_mass_sun=getattr(star, "mass", None),
-                R_companion_Rjup=(result.physics or {}).get("R_companion_Rjup"),
-                n_sectors_with_detections=n_det,
-                n_sectors_observed=n_sectors_observed,
-                vetting_verdict=enriched_verdict,
-            )
-            bundle = _habitability_bundle(hq)
-            _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
-            extras["hci_bundle"] = bundle
-        except Exception as e:
-            log.warning("Report HCI recompute failed for TIC %s: %s", tic, e)
+    extras["hci_bundle"] = hci_bundle or _hci_bundle_for_result(
+        result,
+        dvt=dvt,
+        n_sectors_observed=n_sectors_observed,
+        n_sectors_with_detections=n_sectors_with_detections,
+        period_override=period_override,
+    )
 
     # --- ExoMiner (needs the cached light curve + a period) -------------
     try:
@@ -1156,27 +1382,31 @@ def _build_report_extras(
         t0 = result.bls.get("t0") if result.bls else None
         duration = result.bls.get("duration") if result.bls else None
         if cached and period and duration:
-            extras["exominer"] = _run_exominer(
-                t=cached["t"],
-                f=cached["f"],
-                mom_x=cached.get("mom_x"),
-                mom_y=cached.get("mom_y"),
-                period=period,
-                t0=t0 if t0 is not None else 0.0,
-                duration=duration,
-                crowdsap=getattr(star, "crowdsap", None),
-            )
+            with PLOT_LOCK:
+                extras["exominer"] = _run_exominer(
+                    t=cached["t"],
+                    f=cached["f"],
+                    mom_x=cached.get("mom_x"),
+                    mom_y=cached.get("mom_y"),
+                    period=period,
+                    t0=t0 if t0 is not None else 0.0,
+                    duration=duration,
+                    crowdsap=getattr(star, "crowdsap", None),
+                )
     except Exception as e:
         log.warning("Report ExoMiner recompute failed: %s", e)
 
     # --- FFI cutout (needs coordinates; fetched/cached from TESScut) -----
-    try:
-        if getattr(star, "ra", None) is not None and getattr(star, "dec", None) is not None:
-            extras["ffi_cutout"] = _get_ffi_cutout(
-                tic, star.sector, star.ra, star.dec
-            )
-    except Exception as e:
-        log.warning("Report FFI cutout failed: %s", e)
+    if ffi_cutout is not _UNSET:
+        extras["ffi_cutout"] = ffi_cutout
+    else:
+        try:
+            if getattr(star, "ra", None) is not None and getattr(star, "dec", None) is not None:
+                extras["ffi_cutout"] = _get_ffi_cutout(
+                    tic, star.sector, star.ra, star.dec
+                )
+        except Exception as e:
+            log.warning("Report FFI cutout failed: %s", e)
 
     return extras
 

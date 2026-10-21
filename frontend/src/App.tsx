@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  analyze,
-  downloadReport,
   fetchHabitability,
   fetchObservables,
   fetchMultisector,
   fetchRadialVelocity,
   fitsDownloadUrl,
-  mastAnalyze,
-  mastAnalyzeWithProgress,
-  mastReport,
   mastSectors,
   multisectorReport,
+  reportUrl,
+  vetMastAndReport,
+  vetUploadAndReport,
   type ProgressEvent,
   type SectorInfo,
   type DetectParams,
+  type VetCallbacks,
+  type VetOutcome,
 } from "./api";
 import type { VettingResult, DvtResult } from "./types";
 import ExoMinerPanel from "./ExoMinerPanel";
@@ -25,6 +25,10 @@ import ExofopBulkPanel, { type ExofopImage } from "./ExofopBulkPanel";
 import MicrolensingPanel from "./MicrolensingPanel";
 
 type Status = "idle" | "uploading" | "analyzing" | "done" | "error";
+type ReportState =
+  | { state: "building" }
+  | { state: "ready"; url: string; filename: string }
+  | { state: "error"; message: string };
 type Mode = "upload" | "mast";
 type Section = "transit" | "microlensing";
 
@@ -112,6 +116,106 @@ function CyclingLoader({
   );
 }
 
+// Backend progress stages (progress.py STAGE_WEIGHTS) grouped into the
+// four phases of the vet + report job, in order.
+const VET_PHASES: { label: string; stages: string[] }[] = [
+  { label: "Load light curve", stages: ["starting", "queued", "mast_fetch", "parse"] },
+  {
+    label: "Vet",
+    stages: [
+      "clean", "lomb_scargle", "detrend", "bls", "events", "shape", "centroid",
+      "odd_even", "secondary", "physics", "verdict", "crossmatch", "plots",
+    ],
+  },
+  { label: "SPOC DV + habitability", stages: ["dvt_fetch", "habitability"] },
+  { label: "PDF report", stages: ["report", "done"] },
+];
+
+function vetPhaseIndex(stage: string): number {
+  const i = VET_PHASES.findIndex((p) => p.stages.includes(stage));
+  return i < 0 ? 0 : i;
+}
+
+function VetProgress({
+  progress,
+  hasResult,
+}: {
+  progress: ProgressEvent;
+  hasResult: boolean;
+}) {
+  const phase = vetPhaseIndex(progress.stage);
+  const building = phase === VET_PHASES.length - 1;
+  const pct = Math.max(2, Math.min(100, progress.percent));
+  const tone = building
+    ? { box: "bg-emerald-50 border-emerald-200 text-emerald-900", bar: "bg-emerald-600", track: "bg-emerald-100", sub: "text-emerald-700" }
+    : { box: "bg-blue-50 border-blue-200 text-blue-900", bar: "bg-blue-600", track: "bg-blue-100", sub: "text-blue-700" };
+
+  return (
+    <div className={`rounded border p-4 ${tone.box}`}>
+      <CyclingLoader messages={building ? PDF_LOADING_MSGS : VETTING_LOADING_MSGS} />
+
+      <ol className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs" aria-label="Vetting phases">
+        {VET_PHASES.map((p, i) => {
+          const state = i < phase ? "done" : i === phase ? "active" : "pending";
+          return (
+            <li
+              key={p.label}
+              aria-current={state === "active" ? "step" : undefined}
+              className={`flex items-center gap-1.5 rounded px-2 py-1 border ${
+                state === "done"
+                  ? "bg-white/70 border-slate-200 text-slate-600"
+                  : state === "active"
+                  ? `bg-white border-current font-semibold`
+                  : "border-transparent text-slate-400"
+              }`}
+            >
+              <span
+                className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+                  state === "done"
+                    ? "bg-slate-400 text-white"
+                    : state === "active"
+                    ? `${tone.bar} text-white animate-pulse`
+                    : "bg-slate-200 text-slate-500"
+                }`}
+                aria-hidden="true"
+              >
+                {state === "done" ? "✓" : i + 1}
+              </span>
+              {p.label}
+            </li>
+          );
+        })}
+      </ol>
+
+      <div className="mt-3">
+        <div className="flex items-center justify-between text-xs font-mono mb-1">
+          <span>{progress.message}</span>
+          <span>{progress.percent.toFixed(0)}%</span>
+        </div>
+        <div className={`h-2 w-full rounded overflow-hidden ${tone.track}`}>
+          <div
+            className={`h-full transition-all duration-300 ease-out ${tone.bar}`}
+            style={{ width: `${pct}%` }}
+            role="progressbar"
+            aria-valuenow={Math.round(progress.percent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Vetting progress: ${progress.message}`}
+          />
+        </div>
+      </div>
+
+      <p className={`mt-2 text-xs ${tone.sub}`}>
+        {progress.stage === "queued"
+          ? "Another vetting is running on the server — yours starts as soon as it finishes."
+          : building && hasResult
+          ? "Results are below. The PDF is being built from the same run — no second download."
+          : "The TESScut cutout, SPOC DV file, catalogue cross-match and ExoFOP load in the background while the light curve is vetted. Results appear first, then the PDF."}
+      </p>
+    </div>
+  );
+}
+
 const REPO_URL = "https://github.com/eagnespuerto/vetstar";
 const KOFI_URL = "https://ko-fi.com/eagnespuerto";
 
@@ -151,10 +255,12 @@ export default function App() {
   const [multiMaxObjects, setMultiMaxObjects] = useState<number>(2);
   const [msData, setMsData] = useState<any>(null);
   const [msTopLoading, setMsTopLoading] = useState(false);
-  const [pdfBusy, setPdfBusy] = useState(false);
-  // Live progress for the single-sector MAST run (SSE-backed).
-  // null while idle/after error; populated by mastAnalyzeWithProgress.
+  // PDF built by the same job as the on-page vetting; null before a run.
+  const [report, setReport] = useState<ReportState | null>(null);
+  // Live progress for the vet + report job (SSE-backed). Keeps updating
+  // after the result renders, while the PDF builds; null when idle.
   const [analyzeProgress, setAnalyzeProgress] = useState<ProgressEvent | null>(null);
+  const jobRunning = status === "analyzing" || report?.state === "building";
 
   const MAX_MULTI_SECTORS = 5;
   const MAX_MULTI_OBJECTS = 10; // MAX_SECTORS * EVENTS_PER_SECTOR on backend
@@ -177,6 +283,7 @@ export default function App() {
     setStatus("analyzing");
     setError(null);
     setMsData(null);
+    setReport(null);
     setMsTopLoading(true);
     try {
       const data = await fetchMultisector(tic, params, multiSectors, multiMaxObjects);
@@ -194,6 +301,7 @@ export default function App() {
     setFile(f);
     setError(null);
     setResult(null);
+    setReport(null);
     setStatus("idle");
   };
 
@@ -203,31 +311,52 @@ export default function App() {
     if (e.dataTransfer.files?.[0]) onFile(e.dataTransfer.files[0]);
   }, []);
 
-  const runAnalyze = async () => {
-    if (!file) return;
+  // One job vets, renders the result on the page, then builds the PDF from
+  // that same result. `keepResult` leaves the current result on screen
+  // while re-running (plot toggles) instead of blanking the page.
+  const runVet = async (
+    start: (cb: VetCallbacks) => Promise<VetOutcome>,
+    startMessage: string,
+    keepResult = false,
+  ) => {
     setStatus("analyzing");
     setError(null);
+    if (!keepResult) setResult(null);
+    setReport({ state: "building" });
+    setAnalyzeProgress({ stage: "starting", percent: 0, message: startMessage });
+    let gotResult = false;
     try {
-      const r = await analyze(file, params);
-      setResult(r);
-      setStatus("done");
+      const out = await start({
+        onProgress: setAnalyzeProgress,
+        onResult: (r) => {
+          gotResult = true;
+          setResult(r);
+          setStatus("done");
+        },
+      });
+      setReport(
+        out.report
+          ? { state: "ready", url: reportUrl(out.report.report_id), filename: out.report.filename }
+          : { state: "error", message: out.reportError || "PDF build failed" },
+      );
     } catch (e: any) {
-      setError(e.message || String(e));
-      setStatus("error");
+      const message = e.message || String(e);
+      if (gotResult) {
+        // Vetting is on screen; only the PDF step was lost.
+        setReport({ state: "error", message });
+      } else {
+        setReport(null);
+        setError(message);
+        setStatus("error");
+      }
+    } finally {
+      setAnalyzeProgress(null);
     }
   };
 
-  const runReport = async () => {
+  const runAnalyze = () => {
     if (!file) return;
-    setPdfBusy(true);
-    try {
-      const blob = await downloadReport(file, params);
-      triggerDownload(blob, `vetting_TIC${result?.star.tic_id || "report"}.pdf`);
-    } catch (e: any) {
-      setError(e.message || String(e));
-    } finally {
-      setPdfBusy(false);
-    }
+    void runVet((cb) => vetUploadAndReport(file, params, cb), "Uploading light curve…");
   };
 
   // -- MAST mode handlers --
@@ -257,35 +386,7 @@ export default function App() {
       setError("Enter both TIC and sector.");
       return;
     }
-    setStatus("analyzing");
-    setError(null);
-    setResult(null);
-    setAnalyzeProgress({ stage: "starting", percent: 0, message: "Starting analysis…" });
-    try {
-      const r = await mastAnalyzeWithProgress(tic, sec, params, (e) => setAnalyzeProgress(e));
-      setResult(r);
-      setStatus("done");
-    } catch (e: any) {
-      setError(e.message || String(e));
-      setStatus("error");
-    } finally {
-      setAnalyzeProgress(null);
-    }
-  };
-
-  const runMastReport = async () => {
-    const tic = parseInt(ticInput);
-    const sec = parseInt(sectorInput);
-    if (!tic || !sec) return;
-    setPdfBusy(true);
-    try {
-      const blob = await mastReport(tic, sec, params);
-      triggerDownload(blob, `vetting_TIC${tic}_S${String(sec).padStart(3, "0")}.pdf`);
-    } catch (e: any) {
-      setError(e.message || String(e));
-    } finally {
-      setPdfBusy(false);
-    }
+    await runVet((cb) => vetMastAndReport(tic, sec, params, cb), "Starting analysis…");
   };
 
   return (
@@ -404,17 +505,10 @@ export default function App() {
               <div className="flex justify-center gap-3 mt-2">
                 <button
                   onClick={runAnalyze}
-                  disabled={!file || status === "analyzing"}
+                  disabled={!file || jobRunning}
                   className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
                 >
-                  {status === "analyzing" ? "Analyzing…" : "Run vetting"}
-                </button>
-                <button
-                  onClick={runReport}
-                  disabled={!file || status === "analyzing" || pdfBusy}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
-                >
-                  {pdfBusy ? "Building PDF…" : "Download PDF report"}
+                  {jobRunning ? "Working…" : "Vet & build PDF report"}
                 </button>
               </div>
             </div>
@@ -599,26 +693,17 @@ export default function App() {
             )}
             <div className="flex justify-center gap-3 mt-5">
               {scope === "single" ? (
-                <>
-                  <button
-                    onClick={runMastAnalyze}
-                    disabled={status === "analyzing" || !ticInput || !sectorInput}
-                    className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
-                  >
-                    {status === "analyzing" ? "Analyzing…" : "Fetch & vet"}
-                  </button>
-                  <button
-                    onClick={runMastReport}
-                    disabled={status === "analyzing" || pdfBusy || !ticInput || !sectorInput}
-                    className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:bg-slate-300"
-                  >
-                    {pdfBusy ? "Building PDF…" : "Fetch & download PDF"}
-                  </button>
-                </>
+                <button
+                  onClick={runMastAnalyze}
+                  disabled={jobRunning || !ticInput || !sectorInput}
+                  className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  {jobRunning ? "Working…" : "Fetch, vet & build PDF report"}
+                </button>
               ) : (
                 <button
                   onClick={runMultisectorTop}
-                  disabled={status === "analyzing" || msTopLoading || !ticInput}
+                  disabled={jobRunning || msTopLoading || !ticInput}
                   className="px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:bg-slate-300"
                 >
                   {msTopLoading
@@ -638,44 +723,37 @@ export default function App() {
           </div>
         )}
 
-        {status === "analyzing" && (
+        {status === "analyzing" && msTopLoading && (
           <div className="rounded bg-blue-50 border border-blue-200 p-4 text-blue-900">
-            <CyclingLoader
-              messages={msTopLoading ? MULTISECTOR_LOADING_MSGS : VETTING_LOADING_MSGS}
-            />
+            <CyclingLoader messages={MULTISECTOR_LOADING_MSGS} />
             <span className="block mt-1 text-xs text-blue-700">
-              {msTopLoading
-                ? "Multi-sector runs can take a minute or two — we're crunching several sectors at once."
-                : "This can take 10–30 seconds for a 2-min cadence sector."}
+              Multi-sector runs can take a minute or two — we're crunching several sectors at once.
             </span>
-            {!msTopLoading && analyzeProgress && (
-              <div className="mt-3">
-                <div className="flex items-center justify-between text-xs font-mono text-blue-800 mb-1">
-                  <span>{analyzeProgress.message}</span>
-                  <span>{analyzeProgress.percent.toFixed(0)}%</span>
-                </div>
-                <div className="h-2 w-full rounded bg-blue-100 overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300 ease-out"
-                    style={{ width: `${Math.max(2, Math.min(100, analyzeProgress.percent))}%` }}
-                    role="progressbar"
-                    aria-valuenow={Math.round(analyzeProgress.percent)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`Analysis progress: ${analyzeProgress.message}`}
-                  />
-                </div>
-              </div>
-            )}
           </div>
         )}
 
-        {pdfBusy && status !== "analyzing" && (
-          <div className="rounded bg-emerald-50 border border-emerald-200 p-4 text-emerald-900">
-            <CyclingLoader messages={PDF_LOADING_MSGS} />
-            <span className="block mt-1 text-xs text-emerald-700">
-              Building your PDF report — typically 10–30 seconds.
+        {analyzeProgress && !msTopLoading && (
+          <VetProgress progress={analyzeProgress} hasResult={!!result} />
+        )}
+
+        {report && report.state === "ready" && (
+          <div className="rounded bg-emerald-50 border border-emerald-200 p-4 text-emerald-900 flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-sm">
+              <strong>PDF report ready.</strong> Built from the vetting shown below.
             </span>
+            <a
+              href={report.url}
+              download={report.filename}
+              className="px-4 py-2 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700"
+            >
+              Download PDF report
+            </a>
+          </div>
+        )}
+
+        {report && report.state === "error" && (
+          <div className="rounded bg-amber-50 border border-amber-300 text-amber-900 p-4 text-sm">
+            <strong>Vetting finished, but the PDF couldn't be built:</strong> {report.message}
           </div>
         )}
 
@@ -689,7 +767,7 @@ export default function App() {
                     detrend: params.plotDetrend ?? true,
                     binMinutes:
                       params.plotBinMinutes === undefined ? 30 : params.plotBinMinutes,
-                    busy: status === "analyzing",
+                    busy: jobRunning,
                     onChange: ({ detrend, binMinutes }) => {
                       const next: DetectParams = {
                         ...params,
@@ -697,25 +775,15 @@ export default function App() {
                         plotBinMinutes: binMinutes,
                       };
                       setParams(next);
-                      // Re-run the single-sector analysis with new plot params.
-                      // Uses the same progress-tracked path so the bar shows.
-                      void (async () => {
-                        const tic = result.star.tic_id!;
-                        const sec = result.star.sector!;
-                        setStatus("analyzing");
-                        setError(null);
-                        setAnalyzeProgress({ stage: "starting", percent: 0, message: "Re-rendering plot…" });
-                        try {
-                          const r = await mastAnalyzeWithProgress(tic, sec, next, (e) => setAnalyzeProgress(e));
-                          setResult(r);
-                          setStatus("done");
-                        } catch (err: any) {
-                          setError(err.message || String(err));
-                          setStatus("error");
-                        } finally {
-                          setAnalyzeProgress(null);
-                        }
-                      })();
+                      // Re-run the single-sector job with new plot params so
+                      // the PDF is rebuilt with the same plots as the page.
+                      const tic = result.star.tic_id!;
+                      const sec = result.star.sector!;
+                      void runVet(
+                        (cb) => vetMastAndReport(tic, sec, next, cb),
+                        "Re-rendering plot…",
+                        true,
+                      );
                     },
                   }
                 : undefined

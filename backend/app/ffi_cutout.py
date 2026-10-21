@@ -213,10 +213,12 @@ def make_ffi_cutout(
             except Exception:
                 pass
 
-        image = render_cutout_png(
-            flux, aperture=aperture, quality=None,
-            tic_id=tic_id, sector=sector, ra=ra, dec=dec,
-        )
+        from .prefetch import PLOT_LOCK
+        with PLOT_LOCK:
+            image = render_cutout_png(
+                flux, aperture=aperture, quality=None,
+                tic_id=tic_id, sector=sector, ra=ra, dec=dec,
+            )
         return {
             "image": image,
             "size_px": int(size_px),

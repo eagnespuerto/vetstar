@@ -28,13 +28,13 @@ from typing import Callable, Optional
 
 # Stage weights — sum to 100. Adjust if telemetry shows drift.
 STAGE_WEIGHTS: dict[str, int] = {
-    "mast_fetch":   35,
-    "dvt_fetch":     3,
+    "queued":        0,
+    "mast_fetch":   30,
     "parse":         2,
     "clean":         3,
     "lomb_scargle":  7,
     "detrend":       5,
-    "bls":          25,
+    "bls":          18,
     "events":        4,
     "shape":         3,
     "centroid":      3,
@@ -44,12 +44,15 @@ STAGE_WEIGHTS: dict[str, int] = {
     "verdict":       1,
     "crossmatch":    2,
     "plots":         6,
+    "dvt_fetch":     2,
+    "habitability":  3,
+    "report":        5,
 }
 
 # Human-readable labels shown in the UI progress bar.
 STAGE_LABELS: dict[str, str] = {
+    "queued":       "Waiting for a free worker",
     "mast_fetch":   "Fetching light curve from MAST",
-    "dvt_fetch":    "Fetching SPOC DV summary",
     "parse":        "Parsing FITS",
     "clean":        "Cleaning cadences",
     "lomb_scargle": "Lomb-Scargle periodogram",
@@ -64,6 +67,9 @@ STAGE_LABELS: dict[str, str] = {
     "verdict":      "Compiling verdict",
     "crossmatch":   "External catalog cross-match",
     "plots":        "Rendering plots",
+    "dvt_fetch":    "Fetching SPOC DV summary",
+    "habitability": "Habitability, observables and TLCM",
+    "report":       "Building PDF report",
 }
 
 
@@ -157,6 +163,12 @@ class JobRegistry:
         def sink(stage: str, pct: float, message: str) -> None:
             st.queue.put({"type": "progress", "stage": stage, "percent": pct, "message": message})
         return ProgressReporter(sink)
+
+    def push_result(self, st: JobState, result: dict) -> None:
+        """Send the vetting result while the job keeps going (PDF build).
+        The client renders it immediately; ``done`` follows later. Not kept
+        on ``st.result``: the queue holds the only copy until it streams."""
+        st.queue.put({"type": "result", "result": result})
 
     def finish_ok(self, st: JobState, result: dict) -> None:
         st.result = result
