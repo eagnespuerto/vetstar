@@ -40,6 +40,12 @@ ENV PYTHONPATH=/app/backend \
     PYTHONUNBUFFERED=1 \
     FRONTEND_DIST=/app/frontend/dist
 
+# glibc gives each allocating thread its own malloc arena and rarely returns
+# their memory, so the prefetch / cross-match thread pools inflate RSS well
+# past the Python heap. Two arenas keeps a 512 MB instance (Render free tier)
+# from being OOM-killed mid-vet.
+ENV MALLOC_ARENA_MAX=2
+
 # Render injects PORT at runtime; default to 8000 for local docker.
 ENV PORT=8000
 EXPOSE 8000

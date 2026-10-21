@@ -241,7 +241,10 @@ function streamVetJob(jobId: string, cb: VetCallbacks): Promise<VetOutcome> {
     };
     es.onerror = () => {
       es.close();
-      reject(new Error("Progress stream disconnected"));
+      reject(new Error(
+        "Lost contact with the server mid-run — it may have restarted " +
+        "(for example after running out of memory). Please try again.",
+      ));
     };
   });
 }

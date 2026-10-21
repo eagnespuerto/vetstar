@@ -68,10 +68,42 @@ class Prefetcher:
             log.warning("prefetch %s failed: %s", name, e)
         return default
 
+    def abandon(self, name: str, cleanup: Callable[[Any], None]) -> None:
+        """Run ``cleanup(result)`` once the fetch finishes (now, if it already
+        has) — for results that own disk space, like a downloaded FFI cube."""
+        fut = self._futs.get(name)
+        if fut is None:
+            return
+
+        def _done(f: Future) -> None:
+            if not f.cancelled() and f.exception() is None:
+                try:
+                    cleanup(f.result())
+                except Exception as e:
+                    log.warning("prefetch %s cleanup failed: %s", name, e)
+
+        fut.add_done_callback(_done)
+
     def close(self) -> None:
         # Don't wait: a stuck remote call must not hold the job open. Its
         # thread finishes (or times out) on its own.
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def release_memory() -> None:
+    """Collect garbage and hand freed heap back to the OS.
+
+    glibc keeps freed memory in its per-thread arenas, so without
+    ``malloc_trim`` the container's RSS only ratchets up job after job and
+    the next run starts close to the 512 MB limit. No-op off glibc.
+    """
+    import gc
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 
 class ReportStore:
