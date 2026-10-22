@@ -950,7 +950,7 @@ The cloud studio (React + FastAPI + Docker) is unchanged. `pios/` is in
 `.github/workflows/ci-deploy.yml` uses `paths-ignore: pios/**` so pushes
 that only touch the Pi port don't spin the Docker CI or the deploy jobs.
 
-To run the full cloud studio locally (needs Python ≥ 3.10 + Node ≥ 18):
+To run the full cloud studio locally (needs Python ≥ 3.10 + Node 22 or 24 LTS; 24 recommended):
 
 ```bash
 python app.py                       # http://127.0.0.1:8000

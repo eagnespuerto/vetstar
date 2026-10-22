@@ -1,7 +1,7 @@
 # =====================================================================
 # Stage 1 — build the React frontend
 # =====================================================================
-FROM node:20-alpine AS frontend-build
+FROM node:24.22.1-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # Copy package files first so npm install caches independently of source.
