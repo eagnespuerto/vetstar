@@ -1,5 +1,13 @@
 # Vetstar v1.0.0
 
+[![license](https://img.shields.io/badge/license-CC0-blue)](LICENSE)
+[![release](https://img.shields.io/github/v/release/eagnespuerto/vetstar?include_prereleases&sort=semver)](https://github.com/eagnespuerto/vetstar/releases/latest)
+[![build](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml/badge.svg)](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml)
+[![made with](https://img.shields.io/badge/made%20with-Python-3776AB?logo=python&logoColor=white)](https://github.com/eagnespuerto/vetstar)
+[![website](https://img.shields.io/badge/website-live-brightgreen)](https://vetstar.onrender.com/)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eagnespuerto)
+[![Linktree](https://img.shields.io/badge/Linktree-soitsagnes-43E55E?logo=linktree&logoColor=white)](https://linktr.ee/soitsagnes)
+
 *(TESS Vetting Studio)*
 
 A web app for TESS light-curve vetting, now split into two independent
