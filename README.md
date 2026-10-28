@@ -2,6 +2,7 @@
 
 [![license](https://img.shields.io/badge/license-CC0-blue)](LICENSE)
 [![release](https://img.shields.io/github/v/release/eagnespuerto/vetstar?include_prereleases&sort=semver)](https://github.com/eagnespuerto/vetstar/releases/latest)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23740438.svg)](https://doi.org/10.5281/zenodo.23740438)
 [![build](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml/badge.svg)](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml)
 [![made with](https://img.shields.io/badge/made%20with-Python-3776AB?logo=python&logoColor=white)](https://github.com/eagnespuerto/vetstar)
 [![website](https://img.shields.io/badge/website-live-brightgreen)](https://vetstar.onrender.com/)
