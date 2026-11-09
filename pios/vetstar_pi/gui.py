@@ -186,7 +186,7 @@ class TransitTab(ttk.Frame):
 
     def _load_from(self, path):
         try:
-            from .parsers import parse_upload
+            from vetstar_core.parsers import parse_upload
             self.parsed = parse_upload(path, os.path.basename(path))
         except Exception as exc:
             messagebox.showerror("Load failed", str(exc))
@@ -222,7 +222,7 @@ class TransitTab(ttk.Frame):
 
         def worker():
             try:
-                from .mast_fetch import fetch_spoc_lightcurve
+                from vetstar_core.mast_fetch import fetch_spoc_lightcurve
                 info = fetch_spoc_lightcurve(tic, sec)
                 path = info.get("path")
                 if not path or not os.path.exists(path):
@@ -240,7 +240,7 @@ class TransitTab(ttk.Frame):
 
         def worker():
             try:
-                from .mast_fetch import list_available_sectors
+                from vetstar_core.mast_fetch import list_available_sectors
                 sectors = list_available_sectors(tic)
                 lines = [f"TIC {tic}: {len(sectors)} sector(s)"]
                 for s in sectors:
@@ -282,7 +282,7 @@ class TransitTab(ttk.Frame):
 
         def worker():
             try:
-                from .pipeline import clean_lightcurve, run_full_vetting
+                from vetstar_core.pipeline import clean_lightcurve, run_full_vetting
                 result = run_full_vetting(
                     t=self.parsed["t"], flux=self.parsed["flux"],
                     flux_err=self.parsed["flux_err"], quality=self.parsed["quality"],
@@ -316,7 +316,7 @@ class TransitTab(ttk.Frame):
 
         if self.dvt_var.get() and tic and result.star.sector is not None:
             try:
-                from .dvt_fetch import fetch_dvt
+                from vetstar_core.dvt_fetch import fetch_dvt
                 extras["dvt"] = fetch_dvt(tic, result.star.sector)
             except Exception as e:
                 log.warning("DVT fetch failed: %s", e)
@@ -330,8 +330,8 @@ class TransitTab(ttk.Frame):
 
         if self.exominer_var.get() and tic and period:
             try:
-                from .exominer import run_exominer
-                from .pipeline import clean_lightcurve
+                from vetstar_core.exominer import run_exominer
+                from vetstar_core.pipeline import clean_lightcurve
                 t_c, f_c, _ = clean_lightcurve(
                     self.parsed["t"], self.parsed["flux"],
                     self.parsed["flux_err"], self.parsed["quality"],
@@ -349,7 +349,7 @@ class TransitTab(ttk.Frame):
 
         if self.ffi_var.get() and tic and result.star.ra is not None:
             try:
-                from .ffi_cutout import make_ffi_cutout
+                from vetstar_core.ffi_cutout import make_ffi_cutout
                 extras["ffi_cutout"] = make_ffi_cutout(
                     ra=result.star.ra, dec=result.star.dec,
                     sector=result.star.sector, tic_id=tic, size_px=15,
@@ -452,7 +452,7 @@ class TransitTab(ttk.Frame):
 
         def worker():
             try:
-                from .report import build_pdf
+                from vetstar_core.report import build_pdf
                 pdf = build_pdf(
                     self.result,
                     hci_bundle=(self.extras or {}).get("hci_bundle"),
@@ -588,7 +588,7 @@ class MicrolensClassifierTab(ttk.Frame):
 
         def worker():
             try:
-                from .gaia_photometry import fetch_alert_lightcurve
+                from vetstar_core.gaia_photometry import fetch_alert_lightcurve
                 lc = fetch_alert_lightcurve(alert)
                 import numpy as np
                 # Convert G mag → relative flux F/F_ref = 10^(-0.4·(G - G_ref))
@@ -652,7 +652,7 @@ class MicrolensClassifierTab(ttk.Frame):
 
         def worker():
             try:
-                from .microlensing import analyze_event
+                from vetstar_core.microlensing import analyze_event
                 res = analyze_event(self.lc_t, self.lc_f, fe,
                                     t_start=t_start, t_end=t_end, t0_guess=t0)
                 self.bus.submit(lambda: self._on_done(res))
@@ -736,7 +736,7 @@ class MicrolensClassifierTab(ttk.Frame):
 
         def worker():
             try:
-                from .microlensing_report import build_microlensing_pdf
+                from vetstar_core.microlensing_report import build_microlensing_pdf
                 # Grab a base64 PNG of the current plot for the PDF.
                 import io
                 buf = io.BytesIO()
@@ -822,7 +822,7 @@ class MicrolensCoverageTab(ttk.Frame):
 
         def worker():
             try:
-                from .microlensing_coverage import evaluate_catalog, parse_events_csv
+                from vetstar_core.microlensing_coverage import evaluate_catalog, parse_events_csv
                 with open(path, "rb") as fh:
                     text = fh.read().decode("utf-8", errors="replace")
                 events = parse_events_csv(text)
