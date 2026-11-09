@@ -66,16 +66,47 @@ app.add_middleware(
 )
 
 # -------------------------------------------------
-# Module-level LC cache for ExoMiner reuse
-# Keyed by (tic_id, sector) or "__last__".
-# Process-local — fine for single-worker Render deployment.
+# Module-level LC cache for ExoMiner / manual-dip reuse
+# Keyed by (tic_id, sector). Uploads with no TIC go under _ANON_LC_KEY.
+# A request that names a TIC only ever gets that TIC's curve back.
+# Process-local — fine for a single-worker deployment.
 # -------------------------------------------------
 _lc_cache: dict = {}
 _LC_CACHE_MAX = 6
+_ANON_LC_KEY = "__anon_upload__"
 
 # FFI cutout cache so the on-screen panel and the PDF don't each hit TESScut.
 # Keyed by (tic_id, sector). Process-local.
 _ffi_cache: dict = {}
+# Each entry is a base64 PNG (tens of KB). Bounded so a long-running
+# instance can't creep towards the 512 MB limit one target at a time.
+_FFI_CACHE_MAX = 32
+
+
+def _put_ffi(key, cutout) -> None:
+    """Store an FFI cutout, evicting the oldest entries past the limit."""
+    _ffi_cache.pop(key, None)
+    _ffi_cache[key] = cutout
+    for old in list(_ffi_cache)[:-_FFI_CACHE_MAX]:
+        _ffi_cache.pop(old, None)
+
+
+def _lookup_lc(tic_id, sector) -> Optional[dict]:
+    """Cached cleaned LC for exactly this target, or None.
+
+    With a TIC we never fall back to another target's curve: on a shared
+    server that would silently score someone else's light curve. With no
+    sector, the most recent entry for the TIC is used. With no TIC (an
+    upload whose header has none), the most recent TIC-less upload is used.
+    """
+    if not tic_id:
+        return _lc_cache.get(_ANON_LC_KEY)
+    if sector is not None:
+        return _lc_cache.get((tic_id, sector))
+    for key in reversed(list(_lc_cache)):
+        if isinstance(key, tuple) and key[0] == tic_id:
+            return _lc_cache[key]
+    return None
 
 
 def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float = 45.0):
@@ -109,7 +140,7 @@ def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float
     finally:
         ex.shutdown(wait=False)
 
-    _ffi_cache[key] = cutout  # cache success or a clean "no cutout" (None)
+    _put_ffi(key, cutout)  # cache success or a clean "no cutout" (None)
     return cutout
 
 
@@ -145,14 +176,12 @@ def _cache_lc(parsed: dict) -> None:
             "mom_y": mom_y,
             "star": star,
         }
-        key = (tic_id, sector)
+        key = (tic_id, sector) if tic_id else _ANON_LC_KEY
         _lc_cache.pop(key, None)
         _lc_cache[key] = entry
-        _lc_cache["__last__"] = entry
         # Bounded for the 512 MB budget: a 20-s cadence sector is several
         # MB of arrays. Dicts keep insertion order, so evict the oldest.
-        targets = [k for k in _lc_cache if k != "__last__"]
-        for old in targets[:-_LC_CACHE_MAX]:
+        for old in list(_lc_cache)[:-_LC_CACHE_MAX]:
             _lc_cache.pop(old, None)
     except Exception as exc:
         log.warning("LC cache update failed: %s", exc)
@@ -272,7 +301,7 @@ def health():
 # -------------------------------------------------
 
 @app.post("/api/analyze")
-async def analyze(
+def analyze(
     file: UploadFile = File(...),
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
@@ -321,7 +350,7 @@ async def analyze(
 
 
 @app.post("/api/report")
-async def report(
+def report(
     file: UploadFile = File(...),
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
@@ -425,7 +454,7 @@ class MastQuery(BaseModel):
 
 
 @app.get("/api/mast/sectors/{tic_id}")
-async def mast_sectors(tic_id: int):
+def mast_sectors(tic_id: int):
     try:
         sectors = list_available_sectors(tic_id)
         return {"tic_id": tic_id, "sectors": sectors}
@@ -480,7 +509,7 @@ def _ffi_cutout_from_prefetch(pf: Prefetcher, tic_id, sector, ra, dec):
         pf.abandon("ffi_cube", discard_ffi_cube)
         return None
     cutout = render_ffi_cube(cube, ra, dec, tic_id=tic_id)
-    _ffi_cache[key] = cutout
+    _put_ffi(key, cutout)
     return cutout
 
 
@@ -577,7 +606,7 @@ def _mast_meta(info: dict) -> dict:
 
 
 @app.post("/api/mast/analyze")
-async def mast_analyze(query: MastQuery):
+def mast_analyze(query: MastQuery):
     result, info = _mast_fetch_and_analyze(query)
     _attach_hci_summary_to_plots(result, dvt=info.get("dvt"))
     out = result.to_dict()
@@ -620,7 +649,7 @@ def _run_mast_job(query: MastQuery, job: JobState) -> None:
 
 
 @app.post("/api/mast/analyze_async")
-async def mast_analyze_async(query: MastQuery):
+def mast_analyze_async(query: MastQuery):
     job = JOBS.create()
     import threading as _t
     _t.Thread(target=_run_mast_job, args=(query, job), daemon=True).start()
@@ -803,12 +832,12 @@ def _start_vet_job(work) -> dict:
 
 
 @app.post("/api/vet_async")
-async def vet_async(query: MastQuery):
+def vet_async(query: MastQuery):
     return _start_vet_job(_vet_mast_work(query))
 
 
 @app.post("/api/vet_async/upload")
-async def vet_async_upload(
+def vet_async_upload(
     file: UploadFile = File(...),
     detect_threshold: float = 0.997,
     detect_min_snr: float = 4.0,
@@ -854,7 +883,7 @@ def get_report(report_id: str):
 
 
 @app.post("/api/mast/report")
-async def mast_report(query: MastQuery):
+def mast_report(query: MastQuery):
     result, info = _mast_fetch_and_analyze(query)
     try:
         dvt = info.get("dvt")
@@ -1358,7 +1387,7 @@ def _attach_hci_image(bundle: dict, title: Optional[str] = None) -> dict:
 
 
 @app.post("/api/habitability")
-async def habitability(query: HabitabilityQuery):
+def habitability(query: HabitabilityQuery):
     bundle = _habitability_bundle(query)
     tic = query.tic_id
     return _attach_hci_image(bundle, title=f"Habitability Chance Index — TIC {tic}")
@@ -1409,8 +1438,7 @@ def _build_report_extras(
 
     # --- ExoMiner (needs the cached light curve + a period) -------------
     try:
-        key = (tic, star.sector) if tic else "__last__"
-        cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+        cached = _lookup_lc(tic, star.sector)
         t0 = result.bls.get("t0") if result.bls else None
         duration = result.bls.get("duration") if result.bls else None
         if cached and period and duration:
@@ -1445,7 +1473,7 @@ def _build_report_extras(
 
 
 @app.post("/api/mast/multisector")
-async def mast_multisector(query: MultisectorQuery):
+def mast_multisector(query: MultisectorQuery):
     result, info = _run_mast_multisector(query)
     _attach_hci_summary_to_plots(
         result,
@@ -1470,7 +1498,7 @@ async def mast_multisector(query: MultisectorQuery):
 
 
 @app.post("/api/mast/multisector/report")
-async def mast_multisector_report(query: MultisectorQuery):
+def mast_multisector_report(query: MultisectorQuery):
     """Build a PDF report from the representative single-sector run, with
     the HCI section pegged to the multi-sector detection counts."""
     result, info = _run_mast_multisector(query)
@@ -1714,8 +1742,7 @@ class ExominerRequest(BaseModel):
 
 @app.post("/api/exominer")
 def api_exominer(req: ExominerRequest):
-    key = (req.tic_id, req.sector) if req.tic_id else "__last__"
-    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    cached = _lookup_lc(req.tic_id, req.sector)
     if not cached:
         raise HTTPException(
             status_code=400,
@@ -1847,7 +1874,7 @@ class ObservablesQuery(BaseModel):
 
 
 @app.post("/api/observables")
-async def observables(query: ObservablesQuery):
+def observables(query: ObservablesQuery):
     teff = query.stellar_teff
     rstar = query.stellar_radius_sun
     mstar = query.stellar_mass_sun
@@ -2052,7 +2079,7 @@ class RVQuery(BaseModel):
 
 
 @app.post("/api/rv")
-async def radial_velocity(query: RVQuery):
+def radial_velocity(query: RVQuery):
     from .tlcm_geometry import (
         reduce_rv_timeseries, planet_mass_from_rv, rv_mass_function_sun,
     )
@@ -2147,8 +2174,7 @@ def _summarize_dvt(dvt: Optional[dict]) -> Optional[dict]:
 
 def _downsample_cached_lc(tic_id, sector, max_pts: int = 4000) -> Optional[dict]:
     """Return a transport-friendly {t, f} from the cached cleaned LC."""
-    key = (tic_id, sector) if tic_id else "__last__"
-    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    cached = _lookup_lc(tic_id, sector)
     if not cached:
         return None
     t = np.asarray(cached["t"], dtype=float)
@@ -2174,8 +2200,7 @@ def api_manual_dip(req: ManualDipRequest):
     if req.t_end <= req.t_start:
         raise HTTPException(status_code=400, detail="t_end must be greater than t_start.")
 
-    key = (req.tic_id, req.sector) if req.tic_id else "__last__"
-    cached = _lc_cache.get(key) or _lc_cache.get("__last__")
+    cached = _lookup_lc(req.tic_id, req.sector)
     if not cached:
         raise HTTPException(
             status_code=400,
@@ -2497,7 +2522,7 @@ def api_microlensing_ffi_cutout(req: MicrolensingFfiCutoutRequest):
 
 
 @app.post("/api/microlensing/coverage")
-async def api_microlensing_coverage(
+def api_microlensing_coverage(
     file: UploadFile = File(...),
     margin_te: float = 1.0,
 ):
@@ -2506,7 +2531,7 @@ async def api_microlensing_coverage(
     CSV columns: event_id, ra, dec, t0 (BTJD), tE (days, optional — defaults to 20).
     """
     try:
-        contents = await file.read()
+        contents = file.file.read()
         text = contents.decode("utf-8", errors="replace")
         events = parse_events_csv(text)
     except ValueError as e:
