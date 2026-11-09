@@ -8,9 +8,10 @@ from types import SimpleNamespace
 import numpy as np
 from fastapi.testclient import TestClient
 
-from backend.app import main, pipeline
+from backend.app import main
+from vetstar_core import pipeline
 from backend.app.prefetch import Prefetcher, ReportStore
-from backend.app.progress import STAGE_LABELS, STAGE_WEIGHTS
+from vetstar_core.progress import STAGE_LABELS, STAGE_WEIGHTS
 
 from backend.tests.conftest import inject_box_transit
 
@@ -174,7 +175,7 @@ def _fake_tesscut_cube(tmp_path, n=50, size=7):
 
 
 def test_render_ffi_cube_renders_and_removes_temp_dir(tmp_path):
-    from backend.app.ffi_cutout import render_ffi_cube
+    from vetstar_core.ffi_cutout import render_ffi_cube
 
     cube = _fake_tesscut_cube(tmp_path)
     out = render_ffi_cube(cube, ra=10.0, dec=-20.0, tic_id=42, max_frames=20)

@@ -303,7 +303,7 @@ def _col(data, cols: list[str], name: str):
 # -----------------------------------------------------------------------
 
 def _plot_phase_fold(phases, lc_init, model_init, tce: dict) -> str:
-    from .prefetch import PLOT_LOCK
+    from .locks import PLOT_LOCK
     with PLOT_LOCK:
         return _plot_phase_fold_locked(phases, lc_init, model_init, tce)
 

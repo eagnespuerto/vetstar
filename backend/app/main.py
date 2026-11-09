@@ -20,29 +20,29 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
-from .progress import JOBS, JobState, ProgressReporter, make_noop_reporter
+from vetstar_core.progress import JOBS, JobState, ProgressReporter, make_noop_reporter
 from .prefetch import PLOT_LOCK, REPORTS, VET_SLOTS, Prefetcher, release_memory
 
 from pydantic import BaseModel, Field, field_validator
 
-from .mast_fetch import fetch_spoc_lightcurve, list_available_sectors
-from .microlensing import (
+from vetstar_core.mast_fetch import fetch_spoc_lightcurve, list_available_sectors
+from vetstar_core.microlensing import (
     analyze_event as microlensing_analyze_event,
     analyze_event_joint as microlensing_analyze_event_joint,
 )
-from .microlensing_report import build_microlensing_pdf
-from .microlensing_ffi import make_ffi_gaia_cutout
-from .gaia_photometry import (
+from vetstar_core.microlensing_report import build_microlensing_pdf
+from vetstar_core.microlensing_ffi import make_ffi_gaia_cutout
+from vetstar_core.gaia_photometry import (
     fetch_alert_lightcurve as gaia_fetch_alert_lightcurve,
     search_alerts_near as gaia_search_alerts_near,
 )
-from .microlensing_coverage import (
+from vetstar_core.microlensing_coverage import (
     evaluate_catalog as microlensing_evaluate_catalog,
     parse_events_csv,
     resolve_ra_dec_to_tic,
 )
-from .parsers import parse_upload
-from .pipeline import (
+from vetstar_core.parsers import parse_upload
+from vetstar_core.pipeline import (
     CROSSMATCH_TIMEOUT_S,
     run_full_vetting,
     clean_lightcurve,
@@ -50,7 +50,7 @@ from .pipeline import (
     centroid_check,
     crossmatch_known_object,
 )
-from .report import build_pdf
+from vetstar_core.report import build_pdf
 
 
 log = logging.getLogger("vetting")
@@ -115,7 +115,7 @@ def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float
     fetch is bounded by a timeout and run in a worker thread so a slow or
     stuck MAST request can never hang the request and trip a gateway 502."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-    from .ffi_cutout import make_ffi_cutout
+    from vetstar_core.ffi_cutout import make_ffi_cutout
 
     key = (tic_id, sector)
     if key in _ffi_cache:
@@ -384,7 +384,7 @@ def report(
         dvt = None
         if result.star.tic_id:
             try:
-                from .dvt_fetch import fetch_dvt
+                from vetstar_core.dvt_fetch import fetch_dvt
                 dvt = fetch_dvt(result.star.tic_id, result.star.sector)
             except Exception as _e:
                 log.warning("DVT fetch skipped for upload TIC %s: %s",
@@ -464,7 +464,7 @@ def mast_sectors(tic_id: int):
 
 def _fetch_dvt_soft(tic_id: int, sector: Optional[int]) -> Optional[dict]:
     try:
-        from .dvt_fetch import fetch_dvt
+        from vetstar_core.dvt_fetch import fetch_dvt
         return fetch_dvt(tic_id, sector)
     except Exception as e:
         log.warning("DVT fetch skipped for TIC %s S%s: %s", tic_id, sector, e)
@@ -482,7 +482,7 @@ def _start_prefetch(pf: Prefetcher, tic_id, sector, ra, dec, *, report: bool = T
     light curve and BLS arrays (512 MB budget)."""
     have_coords = ra is not None and dec is not None
     if report and have_coords and (tic_id, sector) not in _ffi_cache:
-        from .ffi_cutout import download_ffi_cube
+        from vetstar_core.ffi_cutout import download_ffi_cube
         pf.submit("ffi_cube", download_ffi_cube, ra, dec, sector=sector)
     if tic_id:
         pf.submit("dvt", _fetch_dvt_soft, tic_id, sector)
@@ -496,7 +496,7 @@ def _ffi_cutout_from_prefetch(pf: Prefetcher, tic_id, sector, ra, dec):
     """Render the prefetched FFI cube (cached like ``_get_ffi_cutout``, so
     the on-page cutout panel reuses it). ``_UNSET`` when no download was
     started, so the caller falls back to a normal fetch."""
-    from .ffi_cutout import discard_ffi_cube, render_ffi_cube
+    from vetstar_core.ffi_cutout import discard_ffi_cube, render_ffi_cube
 
     key = (tic_id, sector)
     if key in _ffi_cache:
@@ -538,7 +538,7 @@ def _mast_fetch_and_analyze(query: MastQuery, reporter: Optional[ProgressReporte
     try:
         rep("mast_fetch", 0.0)
         try:
-            from .tic_catalog import fetch_tic_stellar
+            from vetstar_core.tic_catalog import fetch_tic_stellar
             tic_star = fetch_tic_stellar(query.tic_id)  # lru-cached; reused by the HCI backfill
         except Exception as e:
             log.warning("TIC coordinate lookup failed for TIC %s: %s", query.tic_id, e)
@@ -731,7 +731,7 @@ def _run_vet_job(job: JobState, work) -> None:
         JOBS.finish_err(job, f"{type(e).__name__}: {e}")
     finally:
         # A job that failed before the PDF step still owns the cube's temp dir.
-        from .ffi_cutout import discard_ffi_cube
+        from vetstar_core.ffi_cutout import discard_ffi_cube
         pf.abandon("ffi_cube", discard_ffi_cube)
         pf.close()
         release_memory()
@@ -929,8 +929,8 @@ def mast_download_fits(tic_id: int, sector: int):
 # Habitability + multi-sector endpoints
 # -------------------------------------------------
 
-from .habitability import PlanetCandidate, compute_hci
-from .exofop import query_exofop
+from vetstar_core.habitability import PlanetCandidate, compute_hci
+from vetstar_core.exofop import query_exofop
 
 
 class HabitabilityQuery(BaseModel):
@@ -1047,13 +1047,13 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
     # so the HCI bundle (and therefore the PDF report) gets the same
     # populated stellar parameters as the standalone observables panel.
     try:
-        from .tic_catalog import backfill_star
+        from vetstar_core.tic_catalog import backfill_star
         star, _used_tic = backfill_star(star, query.tic_id)
     except Exception as e:
         log.warning("TIC v8 backfill failed for TIC %s: %s", query.tic_id, e)
     gaia_used = False
     try:
-        from .gaia_catalog import backfill_star_gaia
+        from vetstar_core.gaia_catalog import backfill_star_gaia
         star, gaia_used = backfill_star_gaia(star, star.get("ra"), star.get("dec"))
     except Exception as e:
         log.warning("Gaia DR3 backfill failed for TIC %s: %s", query.tic_id, e)
@@ -1068,7 +1068,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
     mstar_known = (query.stellar_mass_sun or star.get("mass")) is not None
     stellar_estimate_used = None
     if teff_for_est and (not rstar_known or not mstar_known):
-        from .habitability import estimate_stellar_from_teff
+        from vetstar_core.habitability import estimate_stellar_from_teff
         est = estimate_stellar_from_teff(teff_for_est)
         if est:
             if not rstar_known:
@@ -1126,8 +1126,8 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
         planet.mass_earth = query.planet_mass_earth
         planet.mass_source = "provided"
     elif query.use_archive_rv and planet.orbital_period_d and planet.stellar_mass_sun:
-        from .rv_fetch import fetch_rv_from_archive
-        from .tlcm_geometry import planet_mass_from_rv
+        from vetstar_core.rv_fetch import fetch_rv_from_archive
+        from vetstar_core.tlcm_geometry import planet_mass_from_rv
         rv = fetch_rv_from_archive(query.tic_id)
         if rv.get("available") and rv.get("k_ms"):
             period_rv = rv.get("orbital_period_d") or planet.orbital_period_d
@@ -1144,7 +1144,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
     # DV-fitted a/R★ (ARAT) and impact parameter directly, replacing the
     # b=0 central-transit assumption used in the BLS-only path.  This gives
     # a cleaner a_au_photometric and therefore a cleaner semi-major axis.
-    from .tlcm_geometry import compute_tlcm_geometry
+    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
     vv = query.vetting_verdict or {}
 
     # Duration: prefer DVT (hours → days), then shape measure, then BLS
@@ -1179,7 +1179,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
             and planet.stellar_radius_sun is None
             and planet.stellar_mass_sun is None
             and planet.stellar_teff is None):
-        from .habitability import estimate_stellar_from_density
+        from vetstar_core.habitability import estimate_stellar_from_density
         dens_est = estimate_stellar_from_density(rho_sun)
         if dens_est:
             planet.stellar_radius_sun = dens_est["radius_sun"]
@@ -1203,7 +1203,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
         a_source = "TLCM photometric (a/Rs x R*)"
     elif planet.semi_major_axis_au is None and planet.orbital_period_d and planet.stellar_mass_sun:
         # Fall back to Kepler's third law from period + stellar mass.
-        from .observables import semi_major_axis_from_period
+        from vetstar_core.observables import semi_major_axis_from_period
         planet.semi_major_axis_au = semi_major_axis_from_period(
             planet.orbital_period_d, planet.stellar_mass_sun
         )
@@ -1213,7 +1213,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
     # every M-R relation so the spread propagates into the HCI as a range.
     mass_estimates = None
     if planet.mass_earth is None and planet.radius_earth:
-        from .observables import MR_RELATIONS
+        from vetstar_core.observables import MR_RELATIONS
         mass_estimates = [
             fn(planet.radius_earth)["mp_earth"] for fn in MR_RELATIONS.values()
         ]
@@ -1231,7 +1231,7 @@ def _habitability_bundle(query: HabitabilityQuery, exofop: Optional[dict] = None
     )
 
     # POE predicted observables for this candidate (insolation, RV, etc.)
-    from .observables import compute_observables as _compute_obs
+    from vetstar_core.observables import compute_observables as _compute_obs
     poe = _compute_obs(
         teff_k=planet.stellar_teff,
         rstar_sun=planet.stellar_radius_sun,
@@ -1308,7 +1308,7 @@ def _hci_bundle_for_result(
     if not tic:
         return None
     try:
-        from .dvt_fetch import best_tce as _best_tce
+        from vetstar_core.dvt_fetch import best_tce as _best_tce
         tce = _best_tce(dvt)
         dvt_period = tce.get("period_d") if tce else None
         period = period_override or (result.bls.get("period") if result.bls else None)
@@ -1371,7 +1371,7 @@ def _attach_hci_summary_to_plots(result, **kwargs) -> Optional[dict]:
 def _attach_hci_image(bundle: dict, title: Optional[str] = None) -> dict:
     """Render the combined HCI/observables/TLCM summary PNG into the bundle."""
     try:
-        from .hci_image import make_hci_summary_image
+        from vetstar_core.hci_image import make_hci_summary_image
         with PLOT_LOCK:
             bundle["hci_image"] = make_hci_summary_image(
                 bundle.get("hci"),
@@ -1421,7 +1421,7 @@ def _build_report_extras(
     tic = getattr(star, "tic_id", None)
     period = period_override or (result.bls.get("period") if result.bls else None)
 
-    from .dvt_fetch import best_tce as _best_tce
+    from vetstar_core.dvt_fetch import best_tce as _best_tce
     tce = _best_tce(dvt)
     dvt_period = tce.get("period_d") if tce else None
     if dvt_period and period_override is None:
@@ -1586,7 +1586,7 @@ def _run_mast_multisector(query: MultisectorQuery):
 
     Returns ``(VettingResult, info_dict)``.
     """
-    from .mast_fetch import list_available_sectors, fetch_spoc_lightcurve
+    from vetstar_core.mast_fetch import list_available_sectors, fetch_spoc_lightcurve
 
     try:
         all_sectors = list_available_sectors(query.tic_id)
@@ -1596,7 +1596,7 @@ def _run_mast_multisector(query: MultisectorQuery):
     if not all_sectors:
         raise HTTPException(404, f"No TESS sectors found for TIC {query.tic_id}.")
 
-    from .pipeline import MAX_SECTORS
+    from vetstar_core.pipeline import MAX_SECTORS
 
     if query.sectors:
         wanted = set(int(s) for s in query.sectors)
@@ -1728,7 +1728,7 @@ def _run_mast_multisector(query: MultisectorQuery):
 # ExoMiner endpoint
 # -------------------------------------------------
 
-from .exominer import run_exominer as _run_exominer
+from vetstar_core.exominer import run_exominer as _run_exominer
 
 
 class ExominerRequest(BaseModel):
@@ -1841,7 +1841,7 @@ def api_ffi_cutout(req: FfiCutoutRequest):
 # -------------------------------------------------
 # Predicted Observables for Exoplanets (POE)
 # -------------------------------------------------
-from .observables import compute_observables, RSUN_TO_RJUP as _RSUN_TO_RJUP
+from vetstar_core.observables import compute_observables, RSUN_TO_RJUP as _RSUN_TO_RJUP
 
 
 class ObservablesQuery(BaseModel):
@@ -1899,12 +1899,12 @@ def observables(query: ObservablesQuery):
         except Exception as e:
             log.warning("ExoFOP lookup failed for TIC %s: %s", query.tic_id, e)
         try:
-            from .tic_catalog import backfill_star
+            from vetstar_core.tic_catalog import backfill_star
             star, _used_tic = backfill_star(star, query.tic_id)
         except Exception as e:
             log.warning("TIC v8 backfill failed for TIC %s: %s", query.tic_id, e)
         try:
-            from .gaia_catalog import backfill_star_gaia
+            from vetstar_core.gaia_catalog import backfill_star_gaia
             star, gaia_used = backfill_star_gaia(star, star.get("ra"), star.get("dec"))
         except Exception as e:
             log.warning("Gaia DR3 backfill failed for TIC %s: %s", query.tic_id, e)
@@ -1921,7 +1921,7 @@ def observables(query: ObservablesQuery):
     # estimates via a caveat in the response.
     stellar_estimate_used = None
     if teff is not None and (rstar is None or mstar is None):
-        from .habitability import estimate_stellar_from_teff
+        from vetstar_core.habitability import estimate_stellar_from_teff
         est = estimate_stellar_from_teff(teff)
         if est:
             if rstar is None:
@@ -1962,7 +1962,7 @@ def observables(query: ObservablesQuery):
     # TLCM transit geometry: radius ratio, a/Rs, model-independent stellar
     # density, photometric semi-major axis, and (with RV) absolute mass.
     # When a SPOC DV a/R* (ARAT) is available it replaces the b=0 duration route.
-    from .tlcm_geometry import compute_tlcm_geometry
+    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
     tlcm = compute_tlcm_geometry(
         period_d=period,
         t14_d=t14,
@@ -1988,7 +1988,7 @@ def observables(query: ObservablesQuery):
     density_estimate_used = None
     rho_sun = tlcm.get("stellar_density_rho_sun")
     if rho_sun and rstar is None and mstar is None and teff is None:
-        from .habitability import estimate_stellar_from_density
+        from vetstar_core.habitability import estimate_stellar_from_density
         dens_est = estimate_stellar_from_density(rho_sun)
         if dens_est:
             rstar = dens_est["radius_sun"]
@@ -2080,10 +2080,10 @@ class RVQuery(BaseModel):
 
 @app.post("/api/rv")
 def radial_velocity(query: RVQuery):
-    from .tlcm_geometry import (
+    from vetstar_core.tlcm_geometry import (
         reduce_rv_timeseries, planet_mass_from_rv, rv_mass_function_sun,
     )
-    from .rv_fetch import fetch_rv_from_archive
+    from vetstar_core.rv_fetch import fetch_rv_from_archive
 
     k_ms = query.k_ms
     period = query.orbital_period_d
@@ -2157,7 +2157,7 @@ def _summarize_dvt(dvt: Optional[dict]) -> Optional[dict]:
     """
     if not dvt or not dvt.get("tces"):
         return None
-    from .dvt_fetch import best_tce
+    from vetstar_core.dvt_fetch import best_tce
     tce = best_tce(dvt)
     if tce is None:
         return None

@@ -262,7 +262,7 @@ def render_ffi_cube(
     try:
         flux, aperture, n_frames = _read_cube(cube["path"], max_frames)
 
-        from .prefetch import PLOT_LOCK
+        from .locks import PLOT_LOCK
         with PLOT_LOCK:
             image = render_cutout_png(
                 flux, aperture=aperture, quality=None,

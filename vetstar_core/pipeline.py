@@ -1781,7 +1781,7 @@ def run_full_vetting(
     # Plots — Task 7 will extend make_plots to accept detrend_meta + f_raw.
     # For now keep the existing call signature; Task 7 adds the new kwargs.
     reporter("plots", 0.0)
-    from .prefetch import PLOT_LOCK
+    from .locks import PLOT_LOCK
     with PLOT_LOCK:
         plots = make_plots(
             t_c, f_c, fe_c, mom_x, mom_y, events, primary_event,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from backend.app.pipeline import secondary_eclipse_search
+from vetstar_core.pipeline import secondary_eclipse_search
 
 
 def _make_lc_with_secondary(sigma_target: float):

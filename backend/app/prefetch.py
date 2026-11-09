@@ -31,10 +31,9 @@ log = logging.getLogger("vetting")
 # well clear of the OOM killer. Override with VETSTAR_MAX_JOBS on bigger boxes.
 VET_SLOTS = threading.BoundedSemaphore(max(1, int(os.environ.get("VETSTAR_MAX_JOBS", "1"))))
 
-# pyplot's figure registry isn't thread-safe, and prefetch threads (DVT
-# phase fold, FFI cutout) render while the job thread draws its own plots.
-# Every matplotlib render that can overlap another takes this lock.
-PLOT_LOCK = threading.RLock()
+# Shared with vetstar_core: prefetch threads (DVT phase fold, FFI cutout)
+# render while the job thread draws its own plots.
+from vetstar_core.locks import PLOT_LOCK  # noqa: E402  (re-exported)
 
 
 class Prefetcher:

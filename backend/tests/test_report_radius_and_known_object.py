@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app import gaia_catalog, main, pipeline, tic_catalog
+from backend.app import main
+from vetstar_core import gaia_catalog, pipeline, tic_catalog
 
 
 # TIC 255910975, sector 101: DV Rp/R* 0.0224, R* 1.78 R_sun -> ~4.35 R_E.
@@ -57,7 +58,7 @@ def test_radius_uses_spoc_dv_rprs_not_discrete_dip(offline_catalogs):
 
 
 def test_exofop_rows_radius_matches_printed_ratio(offline_catalogs):
-    from backend.app.observables import exofop_param_rows
+    from vetstar_core.observables import exofop_param_rows
 
     b = _bundle(_dvt_rprs=RPRS, _dvt_depth_frac=0.00045)
     rows = {r["label"]: r["value"] for r in exofop_param_rows(
