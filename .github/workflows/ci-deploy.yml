@@ -3,7 +3,7 @@ name: CI + Deploy
 on:
   push:
     branches: [main, master]
-    # Skip Render/Fly rebuilds when only the Raspberry Pi OS port changed —
+    # Skip Render rebuilds when only the Raspberry Pi OS port changed —
     # pios/ is shipped to Pi users via pios/fetch.sh and is not in the
     # Docker build context (see .dockerignore).
     paths-ignore:
@@ -53,29 +53,6 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
           test -f dist/index.html
-
-  deploy-fly:
-    name: Deploy to Fly.io
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    concurrency: deploy-fly
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Deploy (only if FLY_API_TOKEN is configured)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::notice::FLY_API_TOKEN not set; skipping Fly deploy."
-            echo "To enable: fly tokens create deploy -x 999999h, then add as FLY_API_TOKEN secret."
-            exit 0
-          fi
-          flyctl deploy --remote-only
 
   deploy-render:
     name: Trigger Render deploy
