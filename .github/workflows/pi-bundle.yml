@@ -1,9 +1,10 @@
 name: Pi bundle
 
 # Builds the VetStar Pi release bundle (pios front end + vetstar_core) and
-# checks it imports on Python 3.9, the oldest Python on Raspberry Pi OS.
-# On a published release it attaches vetstar-pi.tar.gz to that release,
-# which is what pios/fetch.sh downloads. It never creates releases itself.
+# checks it imports on Python 3.9 on Debian Bullseye, the oldest Raspberry
+# Pi OS we support. On a published release it attaches vetstar-pi.tar.gz to
+# that release, which is what pios/fetch.sh downloads. It never creates
+# releases itself.
 
 on:
   release:
@@ -16,43 +17,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  bundle:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # upload the release asset
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-          cache: pip
-          cache-dependency-path: pios/requirements-pi.txt
+          python-version: '3.12'   # build_bundle.py is stdlib-only
 
       - name: Build bundle
         run: python pios/build_bundle.py --version "${{ github.event.release.tag_name || github.sha }}"
-
-      - name: Install the bundle's deps and import-check on Python 3.9
-        run: |
-          pip install -r pios/requirements-pi.txt
-          mkdir -p /tmp/pi && tar -xzf dist/vetstar-pi.tar.gz -C /tmp/pi
-          cd /tmp/pi/vetstar-pi
-          MPLBACKEND=Agg python -c "
-          import vetstar_pi.cli, vetstar_pi.plots
-          from vetstar_core.pipeline import run_full_vetting
-          from vetstar_core.report import build_pdf
-          from vetstar_core.microlensing import analyze_event
-          print('VetStar Pi bundle imports OK on', __import__('sys').version.split()[0])
-          "
-          python -m vetstar_pi --help > /dev/null
 
       - uses: actions/upload-artifact@v4
         with:
           name: vetstar-pi-bundle
           path: dist/vetstar-pi.tar.gz
 
+  check-py39:
+    # GitHub's hosted runners no longer ship Python 3.9, so use the
+    # official image on Bullseye (same Debian base as Pi OS Bullseye).
+    needs: build
+    runs-on: ubuntu-latest
+    container: python:3.9-slim-bullseye
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vetstar-pi-bundle
+
+      - name: Install the bundle's deps and import-check on Python 3.9
+        run: |
+          mkdir -p /tmp/pi && tar -xzf vetstar-pi.tar.gz -C /tmp/pi
+          cd /tmp/pi/vetstar-pi
+          pip install --no-cache-dir -r requirements-pi.txt
+          MPLBACKEND=Agg python -c "
+          import sys
+          import vetstar_pi.cli, vetstar_pi.plots
+          from vetstar_core.pipeline import run_full_vetting
+          from vetstar_core.report import build_pdf
+          from vetstar_core.microlensing import analyze_event
+          print('VetStar Pi bundle imports OK on', sys.version.split()[0])
+          "
+          python -m vetstar_pi --help > /dev/null
+
+  attach:
+    if: github.event_name == 'release'
+    needs: [build, check-py39]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload the release asset
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vetstar-pi-bundle
+
       - name: Attach to the release
-        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/vetstar-pi.tar.gz --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.event.release.tag_name }}" vetstar-pi.tar.gz --clobber --repo "${{ github.repository }}"
