@@ -67,7 +67,8 @@ def test_pipeline_uses_prefetched_crossmatch(monkeypatch, rng):
     def _no_network(*_a, **_k):
         raise AssertionError("pipeline queried catalogues despite a prefetched result")
 
-    monkeypatch.setattr(pipeline, "crossmatch_known_object", _no_network)
+    # Patch where run_full_vetting looks the name up.
+    monkeypatch.setattr(pipeline.vetting, "crossmatch_known_object", _no_network)
     t = np.arange(0, 20, 2 / 1440)
     f = inject_box_transit(t, 1 + 1e-4 * rng.standard_normal(t.size),
                            period=3.0, t0=1.0, depth=0.01, duration=0.1)
