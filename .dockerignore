@@ -34,6 +34,6 @@ tess-vetting-studio.exe
 .git
 .gitignore.bak
 
-# VetStar Pi — Raspberry Pi OS port. Ships to Pi users via pios/fetch.sh;
-# has no place in the Render Docker image.
+# VetStar Pi front end. Ships to Pi users as a release bundle (with
+# vetstar_core); has no place in the Render Docker image.
 pios

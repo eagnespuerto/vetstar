@@ -31,6 +31,7 @@ import os
 datas = [
     ("frontend/dist", "frontend/dist"),
     ("backend/app", "backend/app"),
+    ("vetstar_core", "vetstar_core"),
 ]
 
 # Astropy ships physical-constants tables, time scale data, etc.
@@ -114,7 +115,7 @@ block_cipher = None
 
 a = Analysis(
     ["app.py"],
-    pathex=["backend"],     # so `import app.main` resolves
+    pathex=["backend", "."],  # `import app.main` and `import vetstar_core`
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
