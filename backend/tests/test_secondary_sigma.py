@@ -63,7 +63,7 @@ def test_validate_secondary_sigma_rejects_out_of_range():
     """
     from fastapi import HTTPException
     import pytest
-    from backend.app.main import _validate_secondary_sigma
+    from backend.app.common import _validate_secondary_sigma
 
     assert _validate_secondary_sigma(3.0) == 3.0
     assert _validate_secondary_sigma(0.5) == 0.5

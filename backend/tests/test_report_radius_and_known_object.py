@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app import main
+from backend.app.routers import habitability
 from vetstar_core import gaia_catalog, pipeline, tic_catalog
 from vetstar_core.pipeline import catalogs
 
@@ -28,7 +28,7 @@ DIP_RJUP = 8.22 / 11.209
 @pytest.fixture
 def offline_catalogs(monkeypatch):
     monkeypatch.setattr(
-        main, "query_exofop",
+        habitability, "query_exofop",
         lambda tic: {"star": {}, "tois": [], "source": "exofop"},
     )
     monkeypatch.setattr(tic_catalog, "backfill_star", lambda star, tic: (star, False))
@@ -36,7 +36,7 @@ def offline_catalogs(monkeypatch):
 
 
 def _bundle(**verdict):
-    query = main.HabitabilityQuery(
+    query = habitability.HabitabilityQuery(
         tic_id=255910975,
         orbital_period_d=10.0,
         stellar_teff=6200.0,
@@ -46,7 +46,7 @@ def _bundle(**verdict):
         use_archive_rv=False,
         vetting_verdict={"_depth": 0.0018, **verdict},
     )
-    return main._habitability_bundle(query)
+    return habitability._habitability_bundle(query)
 
 
 def test_radius_uses_spoc_dv_rprs_not_discrete_dip(offline_catalogs):
@@ -74,7 +74,7 @@ def test_radius_falls_back_to_dv_depth_without_rprs(offline_catalogs):
 
 
 def test_resolve_radius_priority():
-    r = main._resolve_planet_radius
+    r = habitability._resolve_planet_radius
     # override wins
     assert r(override_earth=3.0, radius_ratio_k=RPRS, rstar_sun=RSTAR, has_dvt=True)[0] == 3.0
     # DV beats catalogue and the discrete dip
