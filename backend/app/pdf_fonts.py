@@ -8,7 +8,7 @@ and microlensing PDFs use it.
 
 DejaVu ships with matplotlib (an existing Vetstar dep) — we grab the
 TTFs from the mpl-data path rather than depending on a system install
-that may or may not be present in a Fly.io / Render container.
+that may or may not be present in a Render container.
 """
 from __future__ import annotations
 

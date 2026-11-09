@@ -8,7 +8,6 @@ astroquery>=0.4.11
 matplotlib>=3.10
 reportlab>=4.4
 pydantic>=2.10
-pytest>=8.3
 # Microlensing (Module A) — PSPL fits use the closed form; MulensModel is
 # listed so higher-order effects (parallax, finite-source, binary lens) can
 # be dropped in without a re-install. The public Model API used here is

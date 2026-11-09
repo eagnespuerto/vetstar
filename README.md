@@ -847,7 +847,7 @@ If Vetstar is useful to you, you can support its development with the
 A near-complete port of the Vetstar TESS vetting studio to Raspberry Pi OS.
 Vendors the full backend (`backend/app/*.py`) into a single Python package
 and drives it from a Tkinter GUI + `vetstar-pi` CLI. Lives in
-[`pios/`](pios/); excluded from the Render/Fly Docker image via
+[`pios/`](pios/); excluded from the Render Docker image via
 `.dockerignore`, so the cloud service is unchanged. Pi users fetch just
 the `pios/` subtree via `pios/fetch.sh`.
 
@@ -952,7 +952,7 @@ Measured on a Pi 4 (1 GB) running Raspberry Pi OS Bookworm 64-bit:
 On a 512 MB Pi (Zero W / 3A), turn off ExoMiner and FFI in the PDF-extras
 panel to keep peak under 300 MB.
 
-### Cloud service (Render / Fly)
+### Cloud service (Render)
 
 The cloud studio (React + FastAPI + Docker) is unchanged. `pios/` is in
 `.dockerignore` so it never enters the build context, and
@@ -1085,9 +1085,8 @@ vetstar/
 │   └── package.json
 ├── Dockerfile                  Multi-stage build with context validation
 ├── render.yaml                 Render Blueprint
-├── fly.toml                    Fly.io app config
 └── .github/workflows/
-    ├── ci-deploy.yml           CI + auto-deploy to Render or Fly
+    ├── ci-deploy.yml           CI + auto-deploy to Render
     └── build.yml               Cross-platform exe builder
 ```
 
@@ -1097,12 +1096,7 @@ vetstar/
 Blueprint → connect your repo. Render reads `render.yaml` and provisions
 automatically. Free tier sleeps after 15 min idle.
 
-**Fly.io** — `fly auth login` then `fly launch --no-deploy --copy-config`
-then `fly deploy`. The included `fly.toml` provisions a shared-cpu-1x
-machine with 1 GB RAM (within the free allowance). No idle sleep. Requires
-a credit card on file (no charges within the free tier).
-
-Auto-deploy on push: set the `FLY_API_TOKEN` or `RENDER_DEPLOY_HOOK` repo
+Auto-deploy on push: set the `RENDER_DEPLOY_HOOK` repo
 secret in GitHub; the CI workflow handles the rest.
 
 ### Build a standalone executable

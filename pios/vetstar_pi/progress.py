@@ -10,7 +10,7 @@ spinner frustrates users. This module provides:
 
 * ``JobRegistry`` — in-memory map ``{job_id: JobState}`` backing the
   ``/api/jobs/{id}/stream`` SSE endpoint. Process-local, fine for the
-  single-machine Render/Fly deployment.
+  single-machine Render deployment.
 
 Stage weights below sum to 100 and reflect typical wall-clock fractions
 observed on a warm MAST cache. The biggest single chunk is the MAST

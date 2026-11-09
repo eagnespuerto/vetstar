@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# MAST download cache (lightkurve/astroquery)
+mastDownload/
+
+# Frontend dependencies
+frontend/node_modules/
