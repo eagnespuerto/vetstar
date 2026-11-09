@@ -60,7 +60,7 @@ astrophysics convention: `★` = host star, `p` = planet/companion,
 ## 1. Light-curve ingestion & detrending
 
 Vetstar accepts SPOC FITS, TESS-SPOC FFI, QLP FFI, or legacy Kepler FITS.
-The parser (`backend/app/parsers.py`) extracts the time series and quality
+The parser (`vetstar_core/parsers.py`) extracts the time series and quality
 flags, then normalises the flux to a baseline of unity. For SPOC products
 the **PDCSAP_FLUX** column is preferred (planetary-friendly systematics
 removal); legacy Kepler PDCSAP_FLUX is treated identically.
@@ -524,7 +524,7 @@ $$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{6} w_{i}\,s_{i},\qquad \sum_{i=1}^{6}
 with weights `wᵢ = (0.30, 0.25, 0.15, 0.15, 0.10, 0.05)` for
 **size, habitable-zone, stellar type, TOI disposition, vetting flags,
 multi-sector**. The weighting is the contribution declared in
-`backend/app/habitability.py`. Each sub-score has a documented closed-form
+`vetstar_core/habitability.py`. Each sub-score has a documented closed-form
 mapping:
 
 | Sub-score | Inputs | Mapping |
@@ -647,7 +647,7 @@ sector**:
 $$\bigl|T_{14}^{(s)} - T_{14}^{(s')}\bigr| \;\le\; 0.05\;\mathrm{h}$$
 
 Events are grouped by duration (this ±0.05 h tolerance) and by period
-(±2 % fractional tolerance, `PERIOD_MATCH_TOL_FRAC` in `pipeline.py`).
+(±2 % fractional tolerance, `PERIOD_MATCH_TOL_FRAC` in `vetstar_core/pipeline/models.py`).
 Up to **two distinct objects** are reported per target. An object is
 flagged **confirmed** when it appears in ≥ 2 sectors with matching
 duration *and* period. This separates a genuine repeating planet from a
@@ -724,7 +724,7 @@ the PSPL fit alone) and a `planet_predictions` block (fiducial-lens
 physical scales plus a planetary-anomaly detection floor). Both are
 rendered in the on-screen results panel and included in the PDF vetting
 report at `POST /api/microlensing/report`. Backend:
-`backend/app/microlensing.py::compute_observables` and
+`vetstar_core/microlensing.py::compute_observables` and
 `compute_planet_predictions`.
 
 ### 17.1 Peak magnification, brightening, and FWHM
@@ -931,7 +931,7 @@ implementation is scipy-based and single-lens only. Binary-lens
 Given a user-flagged positive excursion in a light curve (window
 `[t_start, t_end]` with a peak guess `t0_guess`), the classifier fits three
 competing forward models on the windowed flux and returns a verdict via
-Bayesian Information Criterion. Backend: `backend/app/microlensing.py`.
+Bayesian Information Criterion. Backend: `vetstar_core/microlensing.py`.
 
 ### 15.1 Paczyński single-lens (PSPL) magnification
 
@@ -1114,7 +1114,7 @@ Given a catalog of known / candidate microlensing events (from Gaia
 alerts, OGLE, MOA, KMTNet — all publish RA/Dec/`t0`), Module B
 determines which events are actually observable in TESS data, so Module A
 can be run against a real target list rather than blind. Backend:
-`backend/app/microlensing_coverage.py`.
+`vetstar_core/microlensing_coverage.py`.
 
 ### 16.1 tess-point coordinate resolution
 
@@ -1132,7 +1132,7 @@ well-formed payload.
 
 Sector observation windows are sourced from **tess-point's bundled
 `TESS_Spacecraft_Pointing_Data.midtimes` table** in
-`backend/app/tess_sector_dates.py`. tess-point ships the per-sector
+`vetstar_core/tess_sector_dates.py`. tess-point ships the per-sector
 BJD midtimes for the full mission (currently sectors 1–121) — those
 midtimes are the authoritative TESS calendar the tess-point
 maintainers keep updated. From each midtime we form a window

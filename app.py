@@ -121,16 +121,13 @@ def main():
         if ok:
             os.environ["FRONTEND_DIST"] = str(DIST)
 
-    if not IS_FROZEN:
-        sys.path.insert(0, str(BACKEND))
+    # backend/ makes `app.main` importable; ROOT makes the shared
+    # `vetstar_core` package importable. When frozen, ROOT is the unpacked
+    # bundle (sys._MEIPASS), which holds both as data files.
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(BACKEND))
 
     import uvicorn
-    # Import the FastAPI app object directly. When frozen, the package was
-    # collected by PyInstaller and is importable from the bundled archive.
-    # When running from source, we just inserted backend/ into sys.path above.
-    if IS_FROZEN:
-        # PyInstaller put backend/app on the import path via Analysis(pathex=)
-        sys.path.insert(0, str(ROOT / "backend"))
     from app.main import app as fastapi_app
 
     url = f"http://{args.host}:{args.port}/"

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.gaia_photometry import (
+from vetstar_core.gaia_photometry import (
     GaiaAlertEntry,
     GaiaLightcurve,
     _angular_separation_arcsec,
@@ -117,7 +117,7 @@ def test_parse_lightcurve_csv_rejects_too_few_rows():
 # ---------------------------------------------------------------------------
 
 def test_fetch_alert_lightcurve_end_to_end_with_mock():
-    with patch("app.gaia_photometry._http_get", return_value=_SAMPLE_LC_CSV):
+    with patch("vetstar_core.gaia_photometry._http_get", return_value=_SAMPLE_LC_CSV):
         lc = fetch_alert_lightcurve("Gaia23bra")
     assert isinstance(lc, GaiaLightcurve)
     assert lc.alert_id == "Gaia23bra"
@@ -147,7 +147,7 @@ def test_parse_alerts_index_csv_reads_all_rows():
 
 
 def test_search_alerts_near_returns_close_hits_only():
-    with patch("app.gaia_photometry._http_get", return_value=_SAMPLE_INDEX_CSV):
+    with patch("vetstar_core.gaia_photometry._http_get", return_value=_SAMPLE_INDEX_CSV):
         # Search at Gaia23bra's coords, tight radius — should return
         # Gaia23bra and Gaia23cxy (the second is ~24" away), NOT Gaia22bul
         # (bulge, far south) or Gaia23sne (SN, filtered out anyway).
@@ -167,7 +167,7 @@ def test_search_alerts_near_returns_close_hits_only():
 
 
 def test_search_alerts_near_can_include_non_microlensing():
-    with patch("app.gaia_photometry._http_get", return_value=_SAMPLE_INDEX_CSV):
+    with patch("vetstar_core.gaia_photometry._http_get", return_value=_SAMPLE_INDEX_CSV):
         hits = search_alerts_near(
             ra=10.0, dec=45.0,
             radius_arcsec=60.0,

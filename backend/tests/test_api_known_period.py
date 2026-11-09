@@ -2,7 +2,8 @@
 import pytest
 from pydantic import ValidationError
 
-from backend.app.main import MastQuery, MultisectorQuery
+from backend.app.routers.mast import MastQuery
+from backend.app.routers.multisector import MultisectorQuery
 
 
 def test_known_period_days_accepts_positive_finite_single_sector():

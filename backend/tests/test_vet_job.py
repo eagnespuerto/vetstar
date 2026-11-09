@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import numpy as np
 from fastapi.testclient import TestClient
 
-from backend.app import main, pipeline
+from backend.app import cache, main
+from backend.app.routers import mast
+from vetstar_core import pipeline
 from backend.app.prefetch import Prefetcher, ReportStore
-from backend.app.progress import STAGE_LABELS, STAGE_WEIGHTS
+from vetstar_core.progress import STAGE_LABELS, STAGE_WEIGHTS
 
 from backend.tests.conftest import inject_box_transit
 
@@ -54,11 +56,11 @@ def test_start_prefetch_submits_heaviest_first():
             self.names.append(name)
 
     rec = Recorder()
-    main._start_prefetch(rec, 123, 5, 10.0, -20.0)
+    mast._start_prefetch(rec, 123, 5, 10.0, -20.0)
     assert rec.names == ["ffi_cube", "dvt", "crossmatch", "exofop"]
 
     rec = Recorder()
-    main._start_prefetch(rec, 123, 5, 10.0, -20.0, report=False)
+    mast._start_prefetch(rec, 123, 5, 10.0, -20.0, report=False)
     assert rec.names == ["dvt", "crossmatch"]
 
 
@@ -66,7 +68,8 @@ def test_pipeline_uses_prefetched_crossmatch(monkeypatch, rng):
     def _no_network(*_a, **_k):
         raise AssertionError("pipeline queried catalogues despite a prefetched result")
 
-    monkeypatch.setattr(pipeline, "crossmatch_known_object", _no_network)
+    # Patch where run_full_vetting looks the name up.
+    monkeypatch.setattr(pipeline.vetting, "crossmatch_known_object", _no_network)
     t = np.arange(0, 20, 2 / 1440)
     f = inject_box_transit(t, 1 + 1e-4 * rng.standard_normal(t.size),
                            period=3.0, t0=1.0, depth=0.01, duration=0.1)
@@ -97,11 +100,11 @@ def test_vet_job_streams_result_then_report(monkeypatch):
         assert pf is not None and report is True
         return fake_result, {"path": "x.fits", "dvt": None}
 
-    monkeypatch.setattr(main, "_mast_fetch_and_analyze", fake_fetch)
-    monkeypatch.setattr(main, "_attach_hci_summary_to_plots", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_build_report_extras", lambda *a, **k: {})
-    monkeypatch.setattr(main, "build_pdf", lambda *a, **k: b"%PDF-fake")
-    monkeypatch.setattr(main, "_downsample_cached_lc", lambda *a, **k: None)
+    monkeypatch.setattr(mast, "_mast_fetch_and_analyze", fake_fetch)
+    monkeypatch.setattr(mast, "_attach_hci_summary_to_plots", lambda *a, **k: None)
+    monkeypatch.setattr(mast, "_build_report_extras", lambda *a, **k: {})
+    monkeypatch.setattr(mast, "build_pdf", lambda *a, **k: b"%PDF-fake")
+    monkeypatch.setattr(mast, "_downsample_cached_lc", lambda *a, **k: None)
 
     client = TestClient(main.app)
     job_id = client.post("/api/vet_async", json={"tic_id": 42, "sector": 7}).json()["job_id"]
@@ -128,16 +131,16 @@ def test_vet_job_reports_pdf_failure_without_losing_result(monkeypatch):
         star=SimpleNamespace(tic_id=42, sector=7), plots={},
         to_dict=lambda: {"verdict": {}},
     )
-    monkeypatch.setattr(main, "_mast_fetch_and_analyze",
+    monkeypatch.setattr(mast, "_mast_fetch_and_analyze",
                         lambda *a, **k: (fake_result, {"dvt": None}))
-    monkeypatch.setattr(main, "_attach_hci_summary_to_plots", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_build_report_extras", lambda *a, **k: {})
-    monkeypatch.setattr(main, "_downsample_cached_lc", lambda *a, **k: None)
+    monkeypatch.setattr(mast, "_attach_hci_summary_to_plots", lambda *a, **k: None)
+    monkeypatch.setattr(mast, "_build_report_extras", lambda *a, **k: {})
+    monkeypatch.setattr(mast, "_downsample_cached_lc", lambda *a, **k: None)
 
     def broken_pdf(*_a, **_k):
         raise ValueError("font missing")
 
-    monkeypatch.setattr(main, "build_pdf", broken_pdf)
+    monkeypatch.setattr(mast, "build_pdf", broken_pdf)
 
     client = TestClient(main.app)
     job_id = client.post("/api/vet_async", json={"tic_id": 42, "sector": 7}).json()["job_id"]
@@ -174,7 +177,7 @@ def _fake_tesscut_cube(tmp_path, n=50, size=7):
 
 
 def test_render_ffi_cube_renders_and_removes_temp_dir(tmp_path):
-    from backend.app.ffi_cutout import render_ffi_cube
+    from vetstar_core.ffi_cutout import render_ffi_cube
 
     cube = _fake_tesscut_cube(tmp_path)
     out = render_ffi_cube(cube, ra=10.0, dec=-20.0, tic_id=42, max_frames=20)
@@ -184,19 +187,19 @@ def test_render_ffi_cube_renders_and_removes_temp_dir(tmp_path):
 
 
 def test_ffi_cutout_from_prefetch_caches_and_falls_back(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "_ffi_cache", {})
+    monkeypatch.setattr(cache, "_ffi_cache", {})
     pf = Prefetcher(max_workers=1)
     try:
         # Nothing prefetched -> caller should fetch normally.
-        assert main._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0) is main._UNSET
+        assert mast._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0) is mast._UNSET
 
         cube = _fake_tesscut_cube(tmp_path)
         pf.submit("ffi_cube", lambda: cube)
-        out = main._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0)
+        out = mast._ffi_cutout_from_prefetch(pf, 42, 7, 10.0, -20.0)
         assert out and out["image"]
-        assert main._ffi_cache[(42, 7)] is out
+        assert cache._ffi_cache[(42, 7)] is out
         # Second call is served from the cache shared with /api/ffi_cutout.
-        assert main._ffi_cutout_from_prefetch(Prefetcher(), 42, 7, 10.0, -20.0) is out
+        assert mast._ffi_cutout_from_prefetch(Prefetcher(), 42, 7, 10.0, -20.0) is out
     finally:
         pf.close()
 

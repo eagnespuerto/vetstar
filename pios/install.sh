@@ -20,12 +20,22 @@ APP_HOME="${HOME}/.local/share/vetstar-pi"
 BIN_DIR="${HOME}/.local/bin"
 DESKTOP_DIR="${HOME}/.local/share/applications"
 
-# ---- Repo detection -------------------------------------------------------
-# When run from the extracted tarball, this script is in vetstar/pios/
-# alongside vetstar_pi/. Resolve that path.
+# ---- Source detection -----------------------------------------------------
+# From a release bundle, vetstar_pi/ and vetstar_core/ both sit next to this
+# script. From a repo checkout, this script is in pios/ and vetstar_core/ is
+# one level up.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -d "${here}/vetstar_pi" ]]; then
   echo "install.sh: expected vetstar_pi/ next to this script; got ${here}" >&2
+  exit 2
+fi
+if [[ -d "${here}/vetstar_core" ]]; then
+  core="${here}/vetstar_core"
+elif [[ -d "${here}/../vetstar_core" ]]; then
+  core="$(cd "${here}/../vetstar_core" && pwd)"
+else
+  echo "install.sh: vetstar_core/ not found next to ${here} or one level up." >&2
+  echo "            Download the release bundle with fetch.sh instead." >&2
   exit 2
 fi
 
@@ -54,9 +64,12 @@ pip install \
   --extra-index-url https://pypi.org/simple \
   -r "${here}/requirements-pi.txt"
 
-echo "==> Copying vetstar_pi package into ${APP_HOME}/venv…"
-cp -r "${here}/vetstar_pi" "${APP_HOME}/venv/lib/python3"*/site-packages/ 2>/dev/null || \
-  cp -r "${here}/vetstar_pi" "${APP_HOME}/venv/lib/site-packages/"
+echo "==> Copying vetstar_pi and vetstar_core into ${APP_HOME}/venv…"
+site="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+# Clear the old copies first: installs before v1.1 put every science module
+# inside vetstar_pi/, and copying over them would leave those files behind.
+rm -rf "${site}/vetstar_pi" "${site}/vetstar_core"
+cp -r "${here}/vetstar_pi" "${core}" "${site}/"
 
 echo "==> Installing launcher script to ${BIN_DIR}/vetstar-pi…"
 mkdir -p "${BIN_DIR}"

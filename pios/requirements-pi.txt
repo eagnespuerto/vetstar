@@ -15,7 +15,11 @@ numpy>=1.26,<3
 scipy>=1.11,<2
 astropy>=6.0,<9            # FITS reader + BLS + LombScargle + WCS
 matplotlib>=3.7,<4         # Agg + TkAgg backend, no Qt/Tk pip install
-reportlab>=4.0,<6          # Single-file, pure-Python PDF
+reportlab>=4.0,<6; python_version >= "3.10"   # Single-file, pure-Python PDF
+# reportlab 5.1.0 refuses to import on Python 3.9 even though its metadata
+# still says Requires-Python >=3.9, so pip would install a broken copy on
+# Pi OS Bullseye. Cap it there.
+reportlab>=4.0,<5.1; python_version < "3.10"
 
 # ---- Remote-service integrations (recommended — optional at runtime) --
 # astroquery drives MAST/TESScut, ExoFOP/TIC v8 catalog, Gaia DR3, SIMBAD,

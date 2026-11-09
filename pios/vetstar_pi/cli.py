@@ -37,7 +37,7 @@ from . import __version__
 # --------------------------------------------------------------------------
 def _load_lc(path: str):
     """Dispatch on extension via the vendored parsers module."""
-    from .parsers import parse_upload
+    from vetstar_core.parsers import parse_upload
     return parse_upload(path, os.path.basename(path))
 
 
@@ -76,9 +76,9 @@ def _cmd_gui(args):
 
 
 def _cmd_transit(args):
-    from .pipeline import run_full_vetting
+    from vetstar_core.pipeline import run_full_vetting
     from .plots import build_transit_overview
-    from .report import build_pdf
+    from vetstar_core.report import build_pdf
     parsed = _load_lc(args.input)
     if parsed.get("metadata_only"):
         print("Error: ExoFOP metadata-only JSON has no time series. "
@@ -152,7 +152,7 @@ def _cmd_transit(args):
 
 def _clean_for_plot(parsed):
     """Same cleaning the pipeline does — used for the GUI overview plot."""
-    from .pipeline import clean_lightcurve
+    from vetstar_core.pipeline import clean_lightcurve
     return clean_lightcurve(parsed["t"], parsed["flux"], parsed["flux_err"],
                             parsed["quality"])
 
@@ -174,7 +174,7 @@ def _extras_for(result, parsed, args) -> dict:
     dvt = None
     if tic and result.star.sector is not None:
         try:
-            from .dvt_fetch import fetch_dvt
+            from vetstar_core.dvt_fetch import fetch_dvt
             dvt = fetch_dvt(tic, result.star.sector)
         except Exception as e:
             log.warning("DVT fetch failed: %s", e)
@@ -190,7 +190,7 @@ def _extras_for(result, parsed, args) -> dict:
     # ExoMiner — needs the cleaned LC arrays + a period + duration.
     if tic and period and not args.no_exominer:
         try:
-            from .exominer import run_exominer
+            from vetstar_core.exominer import run_exominer
             t_c, f_c, _ = _clean_for_plot(parsed)
             t0 = result.bls.get("t0") or 0.0
             dur = result.bls.get("duration") or 0.0
@@ -205,7 +205,7 @@ def _extras_for(result, parsed, args) -> dict:
     # FFI cutout — needs coordinates.
     if tic and result.star.ra is not None and not args.no_ffi:
         try:
-            from .ffi_cutout import make_ffi_cutout
+            from vetstar_core.ffi_cutout import make_ffi_cutout
             extras["ffi_cutout"] = make_ffi_cutout(
                 ra=result.star.ra, dec=result.star.dec, sector=result.star.sector,
                 tic_id=tic, size_px=15,
@@ -218,11 +218,11 @@ def _extras_for(result, parsed, args) -> dict:
 
 def _hci_bundle(result, dvt) -> dict:
     """Rebuild the HCI + POE + TLCM bundle for a single-sector result."""
-    from .exofop import query_exofop
-    from .habitability import PlanetCandidate, compute_hci, estimate_stellar_from_teff
-    from .observables import compute_observables as compute_poe
-    from .tlcm_geometry import compute_tlcm_geometry
-    from .hci_image import make_hci_summary_image
+    from vetstar_core.exofop import query_exofop
+    from vetstar_core.habitability import PlanetCandidate, compute_hci, estimate_stellar_from_teff
+    from vetstar_core.observables import compute_observables as compute_poe
+    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
+    from vetstar_core.hci_image import make_hci_summary_image
 
     tic = result.star.tic_id
     exofop = query_exofop(tic)
@@ -313,7 +313,7 @@ def _hci_bundle(result, dvt) -> dict:
 
 
 def _cmd_mast(args):
-    from .mast_fetch import fetch_spoc_lightcurve
+    from vetstar_core.mast_fetch import fetch_spoc_lightcurve
     info = fetch_spoc_lightcurve(args.tic, args.sector)
     src = info.get("path")
     if not src or not os.path.exists(src):
@@ -328,7 +328,7 @@ def _cmd_mast(args):
 
 
 def _cmd_sectors(args):
-    from .mast_fetch import list_available_sectors
+    from vetstar_core.mast_fetch import list_available_sectors
     sectors = list_available_sectors(args.tic)
     print(f"TIC {args.tic}: {len(sectors)} sector(s)")
     for s in sectors:
@@ -338,8 +338,8 @@ def _cmd_sectors(args):
 
 
 def _cmd_microlens(args):
-    from .microlensing import analyze_event
-    from .microlensing_report import build_microlensing_pdf
+    from vetstar_core.microlensing import analyze_event
+    from vetstar_core.microlensing_report import build_microlensing_pdf
     from .plots import build_microlens_fit
 
     parsed = _load_lc(args.input) if args.input.lower().endswith((".fits", ".fits.gz")) \
@@ -418,7 +418,7 @@ def _load_flat(path: str) -> dict:
 
 
 def _cmd_coverage(args):
-    from .microlensing_coverage import evaluate_catalog, parse_events_csv
+    from vetstar_core.microlensing_coverage import evaluate_catalog, parse_events_csv
     with open(args.input, "rb") as fh:
         raw = fh.read()
     events = parse_events_csv(raw.decode("utf-8", errors="replace"))
@@ -439,10 +439,10 @@ def _cmd_habitability(args):
 
     Runs the same pipeline as the transit sub-command's HCI extras, but
     standalone (no light curve required)."""
-    from .exofop import query_exofop
-    from .habitability import PlanetCandidate, compute_hci
-    from .observables import compute_observables as compute_poe
-    from .tlcm_geometry import compute_tlcm_geometry
+    from vetstar_core.exofop import query_exofop
+    from vetstar_core.habitability import PlanetCandidate, compute_hci
+    from vetstar_core.observables import compute_observables as compute_poe
+    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
 
     ef = query_exofop(args.tic)
     star = ef.get("star", {}) or {}
@@ -490,9 +490,9 @@ def _cmd_habitability(args):
 
 
 def _cmd_exominer(args):
-    from .exominer import run_exominer
+    from vetstar_core.exominer import run_exominer
     parsed = _load_lc(args.input)
-    from .pipeline import clean_lightcurve, run_full_vetting
+    from vetstar_core.pipeline import clean_lightcurve, run_full_vetting
     result = run_full_vetting(
         t=parsed["t"], flux=parsed["flux"], flux_err=parsed["flux_err"],
         quality=parsed["quality"], mom_x=parsed["mom_x"], mom_y=parsed["mom_y"],
@@ -520,7 +520,7 @@ def _cmd_exominer(args):
 
 
 def _cmd_ffi(args):
-    from .ffi_cutout import make_ffi_cutout
+    from vetstar_core.ffi_cutout import make_ffi_cutout
     from base64 import b64decode
     cutout = make_ffi_cutout(
         ra=args.ra, dec=args.dec, sector=args.sector,
@@ -541,7 +541,7 @@ def _cmd_ffi(args):
 
 
 def _cmd_alerts(args):
-    from .gaia_photometry import search_alerts_near
+    from vetstar_core.gaia_photometry import search_alerts_near
     hits = search_alerts_near(
         ra=args.ra, dec=args.dec, radius_arcsec=args.radius,
         microlensing_only=args.microlensing_only,

@@ -194,7 +194,7 @@ backend queries `tess-point` for `(sector, camera, ccd)` triples covering
 the coordinates, then checks whether `t0` (and optionally `t0 ± margin·tE`
 for wings) falls inside each returned sector's observation window. A
 hardcoded sector-date table lives in
-`backend/app/tess_sector_dates.py`; rows for sectors 1–26 use
+`vetstar_core/tess_sector_dates.py`; rows for sectors 1–26 use
 calendar-anchored values, later sectors use a nominal ~27.4-day cadence
 approximation flagged as `nominal: true` in the payload (drop in the
 official mission calendar for research-grade decisions).
@@ -538,7 +538,7 @@ PDF for the representative sector, with the HCI block recomputed using the
 multi-sector counts.
 
 The sector cap is the tunable constant `MAX_SECTORS` at the top of
-`pipeline.py`.
+`vetstar_core/pipeline/multisector.py`.
 
 ### MAST integration
 
@@ -801,7 +801,7 @@ agree across events to within ±0.05 h (`DURATION_MATCH_TOL_H`) reinforce a
 single real transit, while larger variation raises a `duration_inconsistent`
 caution (possible blend or multiple signals). The companion-size cap
 (`COMPANION_PLANET_CAP_RJUP`, `COMPANION_EB_HARD_RJUP`) and duration tolerance
-are tunable constants in `pipeline.py`.
+are tunable constants in `vetstar_core/pipeline/models.py`.
 
 
 ## Report bugs or contribute
@@ -845,16 +845,19 @@ If Vetstar is useful to you, you can support its development with the
 ## VetStar Pi — Raspberry Pi OS port
 
 A near-complete port of the Vetstar TESS vetting studio to Raspberry Pi OS.
-Vendors the full backend (`backend/app/*.py`) into a single Python package
-and drives it from a Tkinter GUI + `vetstar-pi` CLI. Lives in
-[`pios/`](pios/); excluded from the Render Docker image via
-`.dockerignore`, so the cloud service is unchanged. Pi users fetch just
-the `pios/` subtree via `pios/fetch.sh`.
+It runs the same science package as the cloud studio,
+[`vetstar_core/`](vetstar_core/), from a Tkinter GUI + `vetstar-pi` CLI.
+The Pi front end lives in [`pios/`](pios/) and is excluded from the
+Render Docker image via `.dockerignore`. Pi users install a release
+bundle (`vetstar-pi.tar.gz`) that holds both the front end and
+`vetstar_core`, so every fix to the site reaches the Pi with the next
+release.
 
 Two features are intentionally missing versus the cloud studio: the
 multi-sector representative-picker (per-sector state doesn't fit the Pi
 budget), and the joint TESS + Gaia PSPL fit (research-tier online-only
-workflow). Everything else — MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
+workflow). Both exist in `vetstar_core`; the Pi front end just doesn't
+expose them. Everything else — MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
 FFI cutouts, Gaia/SIMBAD/NEA cross-match, high-variability detrend,
 progress reporting, microlensing coverage, Gaia Alerts fetcher, and full
 PDFs — is here and drives the same code paths as the cloud service.
@@ -865,6 +868,20 @@ PDFs — is here and drives the same code paths as the cloud service.
 curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | bash
 ```
 
+`fetch.sh` downloads `vetstar-pi.tar.gz` from the latest GitHub release
+and runs its installer. To pin or test a version:
+
+```bash
+# a specific release
+curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | VETSTAR_VERSION=v1.1.0 bash
+# unreleased code from a branch, tag or commit (builds the bundle from source)
+curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | VETSTAR_REF=main bash
+```
+
+`VETSTAR_DIR` sets where the bundle is unpacked and `NO_INSTALL=1` stops
+after the download. If a release has no bundle yet, `fetch.sh` builds one
+from the default branch instead.
+
 The installer:
 
 - installs `python3-tk` and the BLAS/JPEG libs numpy/matplotlib link against
@@ -874,6 +891,8 @@ The installer:
 - drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
   under **Menu → Science → VetStar Pi** (menu refreshed via `lxpanelctl
   restart` so it appears without a logout)
+- copies `vetstar_pi` and `vetstar_core` into the venv, first removing the
+  copies an install from before v1.1 left behind
 
 Tested on Raspberry Pi OS Bookworm (Python 3.11) and Bullseye (Python 3.9),
 Pi Zero 2 W / 3B / 4 / 5.
@@ -954,10 +973,17 @@ panel to keep peak under 300 MB.
 
 ### Cloud service (Render)
 
-The cloud studio (React + FastAPI + Docker) is unchanged. `pios/` is in
-`.dockerignore` so it never enters the build context, and
-`.github/workflows/ci-deploy.yml` uses `paths-ignore: pios/**` so pushes
-that only touch the Pi port don't spin the Docker CI or the deploy jobs.
+The cloud studio (React + FastAPI + Docker) imports the same
+`vetstar_core` package; the image copies it and sets
+`PYTHONPATH=/app/backend:/app`. `pios/` is in `.dockerignore` so it never
+enters the build context, and `.github/workflows/ci-deploy.yml` uses
+`paths-ignore: pios/**` so pushes that only touch the Pi front end don't
+spin the Docker CI or the deploy jobs. Changes under `vetstar_core/` run
+both the site CI and the Pi bundle check (`.github/workflows/pi-bundle.yml`).
+
+The Pi bundle is built by `pios/build_bundle.py`. The `pi-bundle`
+workflow import-checks it on Python 3.9 and attaches it to each published
+GitHub release. It never creates a release itself.
 
 To run the full cloud studio locally (needs Python ≥ 3.10 + Node 22 or 24 LTS; 24 recommended):
 
@@ -978,20 +1004,16 @@ Summary:
 ```
 pios/
 ├── README.md · install.sh · fetch.sh · requirements-pi.txt · .gitattributes
-├── vetstar_pi/
-│   ├── cli.py · gui.py · plots.py            ← Pi-specific driver
-│   ├── pipeline.py · microlensing.py · parsers.py · detrend.py · progress.py
-│   ├── mast_fetch.py · dvt_fetch.py · ffi_cutout.py
-│   ├── exofop.py · tic_catalog.py · gaia_catalog.py · rv_fetch.py
-│   ├── habitability.py · observables.py · tlcm_geometry.py · hci_image.py
-│   ├── exominer.py
-│   ├── microlensing_coverage.py · microlensing_ffi.py · microlensing_report.py
-│   ├── gaia_photometry.py · tess_sector_dates.py
-│   ├── report.py · pdf_fonts.py
+├── build_bundle.py                            ← builds vetstar-pi.tar.gz
+├── vetstar_pi/                                ← Pi front end only (v0.3.0)
+│   ├── cli.py · gui.py · plots.py
 │   └── __init__.py · __main__.py
 ├── examples/microlens_example.csv
 └── systemd/vetstar-pi.desktop                 ← Science-menu entry
 ```
+
+The science modules come from [`vetstar_core/`](vetstar_core/) at the repo
+root; the release bundle puts it next to `vetstar_pi/`.
 
 ### Cloud-studio API endpoints
 
@@ -1037,33 +1059,53 @@ GET  /docs                                                                      
 ```
 vetstar/
 ├── app.py                      ← single-command launcher
-├── backend/
+├── backend/                    ← web server only
 │   ├── app/
-│   │   ├── main.py             FastAPI endpoints + SPA mount
-│   │   ├── pipeline.py         BLS, LS, adaptive detection, centroid, shape, physics; rolling-median + time-bin helpers for the plot view
-│   │   ├── detrend.py          Optional sinusoid + first-harmonic regression detrender (pre-BLS)
-│   │   ├── progress.py         ProgressReporter + JobRegistry backing the SSE progress stream
-│   │   ├── parsers.py          FITS + ExoFOP JSON readers
-│   │   ├── mast_fetch.py       Multi-strategy MAST downloader with retry
-│   │   ├── dvt_fetch.py        SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
-│   │   ├── habitability.py     STEHM-based HCI scoring engine
-│   │   ├── observables.py      POE forward-modelled observables + ExoFOP TOI parameter mapping
-│   │   ├── tlcm_geometry.py    Transit geometry + absolute masses (TLCM)
-│   │   ├── rv_fetch.py         Archive-first radial-velocity lookup
-│   │   ├── exominer.py         ExoMiner feature/view extraction
-│   │   ├── ffi_cutout.py       TESScut FFI cutout fetch + render (astrocut-style stretch)
-│   │   ├── hci_image.py        HCI summary image (metrics + weightings + observables + TLCM)
-│   │   ├── tic_catalog.py      TIC v8 catalog helper
-│   │   ├── gaia_catalog.py     Gaia DR3 stellar-parameter backfill (Vizier cone search)
-│   │   ├── exofop.py           ExoFOP-TESS + TIC catalog querier
-│   │   ├── microlensing.py             (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
-│   │   ├── microlensing_coverage.py    (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
-│   │   ├── microlensing_report.py      PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
-│   │   ├── gaia_photometry.py          Gaia Alerts CSV fetcher + cone search + Kruszyńska+2022 error inflation (powers the joint TESS+Gaia fit)
-│   │   ├── microlensing_ffi.py         TESScut FFI cutout + Gaia DR3 catalog overlay (for source-blending diagnosis in 21″ pixels)
-│   │   ├── tess_sector_dates.py        Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
-│   │   └── report.py           Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
-│   └── requirements.txt
+│   │   ├── main.py             Creates the FastAPI app, CORS, health, includes the routers, SPA mount
+│   │   ├── cache.py            Light-curve + FFI cutout caches (bounded, keyed by TIC and sector)
+│   │   ├── common.py           Request validation helpers
+│   │   ├── prefetch.py         Vet-job slots, prefetch pool, stored PDF reports
+│   │   └── routers/
+│   │       ├── transit.py      Upload analyze/report, ExoMiner, FFI cutout, manual dip
+│   │       ├── mast.py         MAST sectors/analyze, SSE progress jobs, vet + PDF jobs, reports, FITS download
+│   │       ├── habitability.py HCI, planet-radius resolution, PDF report extras
+│   │       ├── multisector.py  Multi-sector vetting + representative sector
+│   │       ├── observables.py  POE + radial-velocity mass function
+│   │       └── microlensing.py Classifier, joint TESS + Gaia fit, light-curve fetchers, coverage, PDF
+│   └── requirements.txt (+ requirements-dev.txt for tests)
+├── vetstar_core/               ← science shared by the site and the Pi (Python 3.9+)
+│   ├── pipeline/               BLS / LS vetting pipeline, split by job:
+│   │   ├── models.py          Data containers + match tolerances
+│   │   ├── catalogs.py        Gaia DR3 / SIMBAD / NASA Exoplanet Archive / exoplanets.org cross-match, known-object override
+│   │   ├── detection.py       Cleaning, Lomb-Scargle, BLS (blind + known-period), adaptive event detection
+│   │   ├── verdict.py         Centroid, odd/even, secondary eclipse, shape, physics, final verdict
+│   │   ├── plots.py           Pipeline figures as base64 PNGs; rolling-median + time-bin helpers for the plot view
+│   │   ├── vetting.py         run_full_vetting, the single-sector driver
+│   │   └── multisector.py     run_multisector_analysis
+│   ├── detrend.py                       Optional sinusoid + first-harmonic regression detrender (pre-BLS)
+│   ├── dvt_fetch.py                     SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
+│   ├── exofop.py                        ExoFOP-TESS + TIC catalog querier
+│   ├── exominer.py                      ExoMiner feature/view extraction
+│   ├── ffi_cutout.py                    TESScut FFI cutout fetch + render (astrocut-style stretch)
+│   ├── gaia_catalog.py                  Gaia DR3 stellar-parameter backfill (Vizier cone search)
+│   ├── gaia_photometry.py               Gaia Alerts CSV fetcher + cone search + Kruszyńska+2022 error inflation (powers the joint TESS+Gaia fit)
+│   ├── habitability.py                  STEHM-based HCI scoring engine
+│   ├── hci_image.py                     HCI summary image (metrics + weightings + observables + TLCM)
+│   ├── locks.py                         PLOT_LOCK, the shared matplotlib lock
+│   ├── mast_fetch.py                    Multi-strategy MAST downloader with retry
+│   ├── microlensing.py                  (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
+│   ├── microlensing_coverage.py         (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
+│   ├── microlensing_ffi.py              TESScut FFI cutout + Gaia DR3 catalog overlay (for source-blending diagnosis in 21″ pixels)
+│   ├── microlensing_report.py           PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
+│   ├── observables.py                   POE forward-modelled observables + ExoFOP TOI parameter mapping
+│   ├── parsers.py                       FITS + ExoFOP JSON readers
+│   ├── pdf_fonts.py                     DejaVu font registration for the reportlab PDFs
+│   ├── progress.py                      ProgressReporter + JobRegistry backing the SSE progress stream
+│   ├── report.py                        Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
+│   ├── rv_fetch.py                      Archive-first radial-velocity lookup
+│   ├── tess_sector_dates.py             Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
+│   ├── tic_catalog.py                   TIC v8 catalog helper
+│   └── tlcm_geometry.py                 Transit geometry + absolute masses (TLCM)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx             Top-level Transit/Microlensing tab split, tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
@@ -1083,11 +1125,13 @@ vetstar/
 │   │   └── types.ts            Shared TypeScript types
 │   ├── index.html
 │   └── package.json
+├── pios/                       Raspberry Pi front end + release-bundle tooling (see below)
 ├── Dockerfile                  Multi-stage build with context validation
 ├── render.yaml                 Render Blueprint
 └── .github/workflows/
     ├── ci-deploy.yml           CI + auto-deploy to Render
-    └── build.yml               Cross-platform exe builder
+    ├── build.yml               Cross-platform exe builder
+    └── pi-bundle.yml           Pi release bundle: build, Python 3.9 import check, attach to releases
 ```
 
 ### Deploy your own copy

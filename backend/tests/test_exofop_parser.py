@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import exofop
-from backend.app.habitability import _score_toi_disposition
+from vetstar_core import exofop
+from vetstar_core.habitability import _score_toi_disposition
 
 FIXTURE = Path(__file__).parent / "fixtures" / "exofop_tic156002449.json"
 

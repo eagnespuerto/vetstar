@@ -30,14 +30,16 @@ jobs:
         run: pip install -r backend/requirements.txt
 
       - name: Import-check backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           cd backend
           python -c "
           from app.main import app
-          from app.pipeline import run_full_vetting
-          from app.parsers import parse_upload
-          from app.report import build_pdf
-          from app.mast_fetch import fetch_spoc_lightcurve, list_available_sectors
+          from vetstar_core.pipeline import run_full_vetting
+          from vetstar_core.parsers import parse_upload
+          from vetstar_core.report import build_pdf
+          from vetstar_core.mast_fetch import fetch_spoc_lightcurve, list_available_sectors
           print('All backend modules import OK')
           "
 
