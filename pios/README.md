@@ -3,9 +3,12 @@
 *A Raspberry Pi OS port of the Vetstar TESS vetting studio — local Tkinter
 GUI + CLI, still MAST-aware.*
 
-VetStar Pi vendors the full Vetstar backend into a single Python package
-and drives it from a Tkinter GUI (matching the pinight / FeedMeSomePi
-pattern) plus a `vetstar-pi` CLI. It runs on a Pi Zero 2 W, 3B, 4/1GB
+VetStar Pi runs the same science package as the cloud studio,
+[`vetstar_core`](../vetstar_core/), from a Tkinter GUI (matching the
+pinight / FeedMeSomePi pattern) plus a `vetstar-pi` CLI. Since v1.1 it
+ships as a release bundle, `vetstar-pi.tar.gz`, that holds this front
+end and `vetstar_core` together, so site fixes reach the Pi with each
+release. It runs on a Pi Zero 2 W, 3B, 4/1GB
 or 5.
 
 Two features from the cloud studio are intentionally missing:
@@ -22,6 +25,8 @@ Two features from the cloud studio are intentionally missing:
   Gaia Alerts fetcher stays (Classifier tab loads Gaia-band curves
   directly), just no joint fit.
 
+Both exist in `vetstar_core`; this front end just doesn't expose them.
+
 Everything else is here — MAST fetching, DVT ingestion, Gaia DR3 / SIMBAD /
 NASA Exoplanet Archive cross-match, Habitability Chance Index, Predicted
 Observables, TLCM transit geometry, ExoMiner features, TESScut FFI cutouts
@@ -36,11 +41,26 @@ On a Raspberry Pi running Raspberry Pi OS (Bookworm or Bullseye):
 curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | bash
 ```
 
+`fetch.sh` downloads `vetstar-pi.tar.gz` from the latest GitHub release
+and runs `install.sh` from it. Options (environment variables):
+
+| Variable | Effect |
+|---|---|
+| `VETSTAR_VERSION=v1.1.0` | install that release instead of the latest |
+| `VETSTAR_REF=main` | build the bundle from a branch, tag or commit (unreleased code) |
+| `VETSTAR_DIR=...` | where the bundle is unpacked (default `~/.local/share/vetstar-pi/src`) |
+| `NO_INSTALL=1` | download only |
+
+If a release has no bundle attached yet, `fetch.sh` builds one from the
+default branch instead.
+
 The installer:
 
 - installs `python3-tk` and the BLAS / JPEG libs numpy / matplotlib link
   against
 - creates a venv under `~/.local/share/vetstar-pi/`
+- copies `vetstar_pi` and `vetstar_core` into it, first removing the
+  copies an install from before v1.1 left behind
 - pulls prebuilt ARM wheels from piwheels (numpy, scipy, astropy,
   matplotlib, reportlab, astroquery, tess-point)
 - drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
@@ -107,50 +127,27 @@ that need the network are skipped from the PDF with a warning in the log.
 pios/
 ├── README.md                        this file
 ├── install.sh                       apt + venv + pip + launcher install
-├── fetch.sh                         one-shot sparse-checkout fetcher
+├── fetch.sh                         downloads the release bundle (or builds it from a git ref)
+├── build_bundle.py                  packs vetstar_pi + vetstar_core into vetstar-pi.tar.gz
 ├── requirements-pi.txt              piwheels-friendly pins
 ├── .gitattributes                   force LF on shell scripts + .desktop
-├── vetstar_pi/
+├── vetstar_pi/                      front end only (v0.3.0)
 │   ├── cli.py                       argparse entry (gui / transit / mast / sectors /
 │   │                                microlens / coverage / habitability / exominer /
 │   │                                ffi / alerts)
 │   ├── gui.py                       Tkinter app; Transit + Microlensing tabs
 │   ├── plots.py                     GUI-only matplotlib Figures (LC, fit, coverage)
-│   │
-│   ├── parsers.py                   FITS / ExoFOP JSON readers
-│   ├── pipeline.py                  BLS, LS, adaptive detection, centroid, shape,
-│   │                                physics, verdict, cross-match, plot helpers
-│   ├── detrend.py                   Sinusoid + 1st-harmonic pre-BLS detrender
-│   ├── progress.py                  Stage → percent reporter (Tk progress bar hook)
-│   │
-│   ├── microlensing.py              PSPL + Davenport-2014 flare + null, BIC verdict,
-│   │                                symmetry, observables, planet predictions
-│   ├── microlensing_coverage.py     tess-point sector-overlap targeting
-│   ├── microlensing_ffi.py          TESScut FFI + Gaia DR3 catalog overlay
-│   ├── microlensing_report.py       reportlab PDF (verdict / observables / plot)
-│   ├── gaia_photometry.py           Gaia Alerts fetcher + cone search
-│   │
-│   ├── mast_fetch.py                Multi-strategy MAST SPOC LC downloader
-│   ├── dvt_fetch.py                 SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
-│   ├── ffi_cutout.py                TESScut FFI cutout fetch + render
-│   ├── exofop.py                    ExoFOP-TESS + TIC v8 querier
-│   ├── tic_catalog.py               TIC v8 backfill helper
-│   ├── gaia_catalog.py              Gaia DR3 stellar-parameter backfill
-│   ├── rv_fetch.py                  Archive-first RV lookup
-│   │
-│   ├── habitability.py              STEHM-based HCI scoring engine
-│   ├── observables.py               POE forward model + ExoFOP TOI parameter table
-│   ├── tlcm_geometry.py             Transit geometry + absolute masses (TLCM)
-│   ├── hci_image.py                 Combined HCI summary PNG (metrics + weightings)
-│   ├── exominer.py                  ExoMiner feature/view extraction
-│   ├── tess_sector_dates.py         Static TESS sector-window lookup
-│   │
-│   ├── report.py                    Full transit PDF (unified tables + all sections)
-│   ├── pdf_fonts.py                 DejaVu Sans registration for reportlab
+│   ├── __init__.py                  version
 │   └── __main__.py                  `python -m vetstar_pi`
 ├── examples/microlens_example.csv   synthetic PSPL-like excursion
 └── systemd/vetstar-pi.desktop       Science-menu launcher
 ```
+
+The science modules (pipeline, microlensing, habitability, observables,
+TLCM, MAST/DVT/TESScut fetchers, catalog cross-match, PDF reports and the
+rest) live in [`vetstar_core/`](../vetstar_core/) at the repo root; the
+main [README](../README.md#project-layout) lists them. In the release
+bundle `vetstar_core/` sits next to `vetstar_pi/`.
 
 ## Memory footprint
 
