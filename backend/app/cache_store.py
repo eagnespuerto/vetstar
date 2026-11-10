@@ -38,14 +38,18 @@ DEFAULT_MAX_MB = 300                 # of the free tier's 500 MB database
 # ---------------------------------------------------------------------------
 
 def encode_lc(entry: dict) -> bytes:
-    """Cached light-curve entry -> compressed .npz bytes (no pickle)."""
+    """Cached light-curve entry -> compressed .npz bytes (no pickle).
+
+    Times stay float64. Flux and centroid moments are stored as float32
+    (about 0.1 ppm on a normalised flux), which halves the payload.
+    """
     arrays = {
         "t": np.asarray(entry["t"], dtype=np.float64),
-        "f": np.asarray(entry["f"], dtype=np.float64),
+        "f": np.asarray(entry["f"], dtype=np.float32),
     }
     for name in ("mom_x", "mom_y"):
         if entry.get(name) is not None:
-            arrays[name] = np.asarray(entry[name], dtype=np.float64)
+            arrays[name] = np.asarray(entry[name], dtype=np.float32)
     star = entry.get("star")
     if star is not None:
         arrays["star_json"] = np.array(json.dumps(dataclasses.asdict(star)))
@@ -64,9 +68,9 @@ def decode_lc(payload: bytes) -> dict:
             star = StarInfo(**{k: v for k, v in data.items() if k in known})
         return {
             "t": z["t"],
-            "f": z["f"],
-            "mom_x": z["mom_x"] if "mom_x" in names else None,
-            "mom_y": z["mom_y"] if "mom_y" in names else None,
+            "f": z["f"].astype(np.float64),
+            "mom_x": z["mom_x"].astype(np.float64) if "mom_x" in names else None,
+            "mom_y": z["mom_y"].astype(np.float64) if "mom_y" in names else None,
             "star": star,
         }
 
@@ -87,8 +91,10 @@ def decode_json(payload: bytes):
 class PostgresStore:
     """``vetstar_cache`` rows as a key/value store of bytes.
 
-    A connection is opened per call: calls are rare (first-tier misses and
-    one write per analysis) and Supabase's pooler makes connecting cheap.
+    One connection is kept open and reused: opening one through Supabase's
+    pooler takes about 2 s, a query on an open one about 0.3 s. Calls are
+    serialised by a lock. A reused connection that has gone stale is
+    reopened once before the call counts as failed.
     ``prepare_threshold=None`` keeps psycopg compatible with the pooler's
     transaction mode.
     """
@@ -97,7 +103,9 @@ class PostgresStore:
         self._dsn = dsn
         self._max_bytes = int(max_mb) * 1024 * 1024
         self._connect_fn = connect
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()        # breaker state and put counter
+        self._conn_lock = threading.Lock()   # the shared connection
+        self._conn = None
         self._down_until = 0.0
         self._puts = 0
 
@@ -115,19 +123,40 @@ class PostgresStore:
         return ``default``."""
         if time.monotonic() < self._down_until:
             return default
-        try:
-            with self._connect() as conn:
-                return fn(conn)
-        except Exception as e:
-            with self._lock:
-                self._down_until = time.monotonic() + BREAKER_SECONDS
-            log.warning("cache store %s failed (%s: %s); skipping the store for %.0fs",
+        with self._conn_lock:
+            while True:
+                reused = self._conn is not None
+                try:
+                    if self._conn is None:
+                        self._conn = self._connect()
+                    return fn(self._conn)
+                except Exception as e:
+                    self._drop_connection()
+                    if reused:
+                        continue        # stale connection: reopen once
+                    with self._lock:
+                        self._down_until = time.monotonic() + BREAKER_SECONDS
+                    log.warning(
+                        "cache store %s failed (%s: %s); skipping the store for %.0fs",
                         what, type(e).__name__, e, BREAKER_SECONDS)
-            return default
+                    return default
+
+    def _drop_connection(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        with self._conn_lock:
+            self._drop_connection()
 
     @staticmethod
     def _one(conn, sql: str, params: tuple):
-        row = conn.execute(sql, params).fetchone()
+        # binary=True: bytea travels raw, not as hex text (twice the size).
+        row = conn.execute(sql, params, binary=True).fetchone()
         return row[0] if row else None
 
     def get(self, kind: str, key: str) -> Optional[bytes]:
@@ -161,7 +190,8 @@ class PostgresStore:
                 "tic_id = excluded.tic_id, sector = excluded.sector, "
                 "payload = excluded.payload, created_at = now(), "
                 "expires_at = excluded.expires_at",
-                (kind, key, tic_id, sector, payload, float(ttl_seconds)))
+                (kind, key, tic_id, sector, payload, float(ttl_seconds)),
+                binary=True)
             with self._lock:
                 self._puts += 1
                 prune = self._puts % PRUNE_EVERY == 0

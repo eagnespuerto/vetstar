@@ -207,7 +207,7 @@ class _Conn:
     def __exit__(self, *exc):
         return False
 
-    def execute(self, sql, params=()):
+    def execute(self, sql, params=(), binary=False):
         self.log.append((" ".join(sql.split()), params))
         return _Cursor(self.row)
 
@@ -235,3 +235,36 @@ def test_postgres_store_prunes_every_few_puts(monkeypatch):
         store.put("lc", f"k{i}", b"x", 60)
     prunes = [e for e in log if "vetstar_cache_prune" in e[0]]
     assert len(prunes) == 2 and prunes[0][1] == (10 * 1024 * 1024,)
+
+
+def test_postgres_store_reuses_one_connection():
+    opened: list = []
+
+    def connect():
+        opened.append(1)
+        return _Conn([], row=(memoryview(b"abc"),))
+
+    store = cache_store.PostgresStore("postgresql://unused", connect=connect)
+    for _ in range(3):
+        assert store.get("lc", "k") == b"abc"
+    assert store.put("lc", "k", b"x", 60) is True
+    assert len(opened) == 1
+
+
+def test_postgres_store_reopens_a_stale_connection_once():
+    opened: list = []
+
+    class Stale(_Conn):
+        def execute(self, sql, params=(), binary=False):
+            raise OSError("server closed the connection")
+
+    def connect():
+        opened.append(1)
+        # First connection works once and is then replaced by a dead one.
+        return _Conn([], row=(memoryview(b"abc"),))
+
+    store = cache_store.PostgresStore("postgresql://unused", connect=connect)
+    assert store.get("lc", "k") == b"abc"
+    store._conn = Stale([])                      # the pooler dropped it
+    assert store.get("lc", "k") == b"abc"        # reopened, call still succeeds
+    assert len(opened) == 2
