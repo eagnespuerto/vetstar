@@ -440,6 +440,8 @@ export interface ExominerRequest {
   duration: number;
   /** CROWDSAP from FITS header (dilution correction) */
   crowdsap?: number;
+  /** Access token for an upload with no TIC (from the analyze response) */
+  lc_token?: string;
 }
 
 export async function runExominer(req: ExominerRequest): Promise<ExominerResult> {
@@ -535,6 +537,8 @@ export interface ManualDipRequest {
   t_start: number;
   t_end: number;
   crowdsap?: number;
+  /** Access token for an upload with no TIC (from the analyze response) */
+  lc_token?: string;
 }
 
 export async function analyzeManualDip(req: ManualDipRequest): Promise<ManualDip> {

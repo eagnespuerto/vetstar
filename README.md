@@ -1143,6 +1143,41 @@ automatically. Free tier sleeps after 15 min idle.
 Auto-deploy on push: set the `RENDER_DEPLOY_HOOK` repo
 secret in GitHub; the CI workflow handles the rest.
 
+### Shared cache on Supabase (optional)
+
+The site keeps cleaned light curves and FFI cutouts in memory so ExoMiner,
+the manual-dip tool and the PDF do not download them again. Memory is lost
+when the free instance sleeps. Set `SUPABASE_DB_URL` and the same entries
+are also kept in a Supabase Postgres table, so they survive a restart.
+Without the variable nothing changes: the cache is memory only.
+
+Set it up once:
+
+```bash
+supabase login
+supabase init
+supabase link --project-ref <your-project-ref>
+supabase db push
+```
+
+`supabase db push` creates the `vetstar_cache` table from
+`supabase/migrations/`. Then copy the **Transaction pooler** connection
+string from the Supabase dashboard (Connect → Connection string) and set it
+as `SUPABASE_DB_URL` in the Render service's environment. It holds the
+database password, so keep it out of the repo.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUPABASE_DB_URL` | unset | Postgres connection string. Unset = memory only. |
+| `VETSTAR_CACHE_MAX_MB` | `300` | Size limit of the table; oldest entries are deleted first. |
+| `VETSTAR_PERSIST_UPLOADS` | unset | Set to `1` to also store uploads that have no TIC (for 1 day). |
+
+What is stored: MAST light curves by (TIC, sector) for 7 days, and FFI
+cutouts for 30 days. Both are public data. An uploaded file with no TIC
+stays in memory by default, and only the browser that uploaded it can reach
+it, through a random `lc_token` returned with the result. If the database
+is slow or down, the site skips it for a minute and carries on.
+
 ### Build a standalone executable
 
 ```bash

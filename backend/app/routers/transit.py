@@ -60,7 +60,7 @@ def analyze(
                     "series). Upload a FITS light curve instead."
                 ),
             )
-        _cache_lc(parsed)
+        lc_token = _cache_lc(parsed)
         result = _run_pipeline(
             parsed, detect_threshold, detect_min_snr,
             high_variability=high_variability,
@@ -69,9 +69,13 @@ def analyze(
             odd_even_sigma=odd_even_sigma,
             known_period_days=known_period_days,
         )
+        result.lc_token = lc_token
         _attach_hci_summary_to_plots(result)
         d = result.to_dict()
-        d["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+        d["lightcurve"] = _downsample_cached_lc(
+            result.star.tic_id, result.star.sector, lc_token)
+        # Uploads with no TIC: the page sends this back to reach its own curve.
+        d["lc_token"] = lc_token
         return d
     except HTTPException:
         raise
@@ -114,7 +118,7 @@ def report(
             odd_even_sigma=odd_even_sigma,
             known_period_days=known_period_days,
         )
-        _cache_lc(parsed)
+        result.lc_token = _cache_lc(parsed)
         # Opportunistic SPOC DVT fetch — adds the DV phase-fold image and
         # fitted geometry when the TIC has been processed by SPOC DV.
         dvt = None
@@ -164,11 +168,12 @@ class ExominerRequest(BaseModel):
     t0: float
     duration: float
     crowdsap: Optional[float] = None
+    lc_token: Optional[str] = None   # for an upload with no TIC
 
 
 @router.post("/api/exominer")
 def api_exominer(req: ExominerRequest):
-    cached = _lookup_lc(req.tic_id, req.sector)
+    cached = _lookup_lc(req.tic_id, req.sector, req.lc_token)
     if not cached:
         raise HTTPException(
             status_code=400,
@@ -291,9 +296,10 @@ def _summarize_dvt(dvt: Optional[dict]) -> Optional[dict]:
     }
 
 
-def _downsample_cached_lc(tic_id, sector, max_pts: int = 4000) -> Optional[dict]:
+def _downsample_cached_lc(tic_id, sector, token: Optional[str] = None,
+                          max_pts: int = 4000) -> Optional[dict]:
     """Return a transport-friendly {t, f} from the cached cleaned LC."""
-    cached = _lookup_lc(tic_id, sector)
+    cached = _lookup_lc(tic_id, sector, token)
     if not cached:
         return None
     t = np.asarray(cached["t"], dtype=float)
@@ -310,6 +316,7 @@ class ManualDipRequest(BaseModel):
     t_start: float
     t_end: float
     crowdsap: Optional[float] = None
+    lc_token: Optional[str] = None   # for an upload with no TIC
 
 
 @router.post("/api/manual_dip")
@@ -319,7 +326,7 @@ def api_manual_dip(req: ManualDipRequest):
     if req.t_end <= req.t_start:
         raise HTTPException(status_code=400, detail="t_end must be greater than t_start.")
 
-    cached = _lookup_lc(req.tic_id, req.sector)
+    cached = _lookup_lc(req.tic_id, req.sector, req.lc_token)
     if not cached:
         raise HTTPException(
             status_code=400,

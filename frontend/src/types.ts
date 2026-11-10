@@ -111,6 +111,8 @@ export interface SensitivityEcho {
 
 export interface VettingResult {
   star: StarInfo;
+  /** Access token for the cached light curve of an upload with no TIC. */
+  lc_token?: string | null;
   summary: Record<string, number>;
   bls: BlsResult & Record<string, any>;
   lomb_scargle: Record<string, any>;

@@ -17,3 +17,7 @@ services:
         value: "1"
       - key: ALLOWED_ORIGINS
         value: "*"                  # the app serves its own frontend, so this is fine
+      # Optional shared cache (see README, "Shared cache on Supabase").
+      # A secret: set the value in the Render dashboard, never here.
+      - key: SUPABASE_DB_URL
+        sync: false
