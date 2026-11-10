@@ -410,9 +410,9 @@ class TransitTab(ttk.Frame):
         # HCI headline
         hci_bundle = (self.extras or {}).get("hci_bundle") or {}
         hci = hci_bundle.get("hci") or {}
-        if hci.get("score") is not None:
+        if hci.get("hci") is not None:
             lines.append("")
-            lines.append(f"HCI: {hci['score']:.1f}/100  tier={hci.get('tier', '—')}")
+            lines.append(f"HCI: {hci['hci']:.1f}/100  tier={hci.get('tier', '—')}")
         lines.append("")
         lines.append("Reasons:")
         for r in v.get("reasons", []):

@@ -1254,8 +1254,6 @@ function ResultsView({ result, lcControls }: { result: VettingResult; lcControls
         orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         planet_mass_earth: massEarth ?? undefined,
-        n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
-        n_sectors_observed: 1,
         vetting_verdict: enrichedVerdict,
       });
       setHciData(data);
@@ -1272,35 +1270,6 @@ function ResultsView({ result, lcControls }: { result: VettingResult; lcControls
     try {
       const data = await fetchMultisector(result.star.tic_id);
       setMultisectorData(data);
-      // Re-run HCI with updated sector counts
-      if (data.n_sectors_observed > 1) {
-        const dvtTce = result.dvt?.tce;
-        const enrichedVerdict = {
-          ...result.verdict,
-          _depth: result.events?.[0]?.depth ?? null,
-          _bls_depth: result.bls?.depth ?? null,
-          _t14_d: result.shape?.t14_d ?? null,
-          _bls_duration: result.bls?.duration ?? null,
-          _shape_class: result.shape?.shape_class ?? null,
-          _events: result.events,
-          _dvt_period_d:   dvtTce?.period_d   ?? null,
-          _dvt_duration_h: dvtTce?.duration_h ?? null,
-          _dvt_depth_frac: dvtTce?.depth_frac ?? null,
-          _dvt_impact_b:   dvtTce?.impact_b   ?? null,
-          _dvt_a_over_rs:  dvtTce?.a_over_rs  ?? null,
-        };
-        const updated = await fetchHabitability(result.star.tic_id, {
-          stellar_teff: result.star.teff ?? undefined,
-          stellar_radius_sun: result.star.radius ?? undefined,
-          stellar_mass_sun: result.star.mass ?? undefined,
-          orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
-          R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
-          n_sectors_with_detections: data.n_sectors_with_detections,
-          n_sectors_observed: data.n_sectors_observed,
-          vetting_verdict: enrichedVerdict,
-        });
-        setHciData(updated);
-      }
     } catch (e: any) {
       setMsError(e.message);
     } finally {
@@ -2119,7 +2088,7 @@ function HabitabilityPanel({ data }: { data: any }) {
             <span className="ml-3 text-sm font-semibold">{hci.tier}</span>
           </div>
           <div className="text-right text-xs opacity-70">
-            <div>Habitability Chance Index</div>
+            <div>Habitability Chance Index{hci.hci_version ? ` v${hci.hci_version}` : ""}</div>
             <div>Hill et al. (2026) STEHM</div>
           </div>
         </div>
@@ -2138,6 +2107,7 @@ function HabitabilityPanel({ data }: { data: any }) {
             {data.planet.radius_earth && <span>R = {data.planet.radius_earth.toFixed(2)} R⊕ <span className="text-[10px] opacity-60">({data.planet.radius_source || "unknown source"})</span></span>}
             {data.planet.semi_major_axis_au && <span>a = {data.planet.semi_major_axis_au.toFixed(3)} AU</span>}
             {data.planet.orbital_period_d && <span>P = {data.planet.orbital_period_d.toFixed(2)} d</span>}
+            {data.planet.age_gyr != null && <span>Age ≈ {data.planet.age_gyr.toFixed(2)} Gyr <span className="text-[10px] opacity-60">({data.planet.age_source})</span></span>}
             {data.exofop_source && (
               <span className="italic">data: {data.exofop_source}</span>
             )}
@@ -2247,7 +2217,7 @@ function HabitabilityPanel({ data }: { data: any }) {
               {hci.caveats.map((c: string, i: number) => (
                 <p key={i}>• {c}</p>
               ))}
-              <p className="mt-1 italic">Ref: {hci.paper_ref}</p>
+              <p className="mt-1 italic">Ref: {[hci.paper_ref, ...(hci.references || [])].join("; ")}</p>
             </div>
           )}
         </div>
@@ -2417,11 +2387,10 @@ function MultisectorPanel({ data }: { data: any }) {
                 </>
               )}{" "}
               is kept as the representative result and its plots, HCI summary,
-              and ExoMiner views are shown below. HCI is rebuilt with the
-              real multi-sector detection counts (
-              <strong>{mast.n_sectors_with_detections ?? 0}</strong>/
-              <strong>{mast.n_sectors_observed ?? sectorsUsed.length}</strong>
-              ).
+              and ExoMiner views are shown below. Dips were found in{" "}
+              <strong>{mast.n_sectors_with_detections ?? 0}</strong> of{" "}
+              <strong>{mast.n_sectors_observed ?? sectorsUsed.length}</strong>{" "}
+              sectors; HCI v2 no longer scores the sector count.
             </p>
             {bls.period != null && (
               <p>

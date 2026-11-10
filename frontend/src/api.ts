@@ -297,8 +297,8 @@ export async function fetchHabitability(
     R_companion_Rjup: number;
     planet_mass_earth: number;
     use_archive_rv: boolean;
-    n_sectors_with_detections: number;
-    n_sectors_observed: number;
+    age_gyr: number;
+    rotation_period_d: number;
     vetting_verdict: Record<string, any>;
   }> = {}
 ) {

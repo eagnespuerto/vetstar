@@ -517,13 +517,13 @@ envelope and downgrades the score regardless of radius.
 
 ## 9. Habitability Chance Index (HCI)
 
-The HCI is a 0-100 weighted sum of six sub-scores, each in [0, 1]:
+The HCI (version 2) is a 0-100 weighted sum of seven sub-scores, each in [0, 1]:
 
-$$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{6} w_{i}\,s_{i},\qquad \sum_{i=1}^{6} w_{i} = 1$$
+$$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{7} w_{i}\,s_{i},\qquad \sum_{i=1}^{7} w_{i} = 1$$
 
-with weights `wᵢ = (0.30, 0.25, 0.15, 0.15, 0.10, 0.05)` for
-**size, habitable-zone, stellar type, TOI disposition, vetting flags,
-multi-sector**. The weighting is the contribution declared in
+with weights `wᵢ = (0.30, 0.25, 0.15, 0.10, 0.10, 0.05, 0.05)` for
+**size, habitable-zone, stellar type, vetting flags, cosmic shoreline,
+tidal locking, system age**. The weighting is the contribution declared in
 `vetstar_core/habitability.py`. Each sub-score has a documented closed-form
 mapping:
 
@@ -532,9 +532,46 @@ mapping:
 | Size      | `Rp` (and `ρp` if known) | piecewise from STEHM Fig 5: full credit ≥ 0.8 R⊕, marginal 0.7-0.8, falls to 0 by 0.5 R⊕; capped/downgraded by `ρp` band |
 | HZ        | `a` (AU) or `S/S⊕`        | distance/flux compared to Kopparapu boundaries (§7.2); 1.0 within conservative HZ, taper to 0 outside optimistic HZ |
 | Star      | `T_eff` (or density-typed) | 1.0 for FGK, taper for late-K / early-M, penalty for M-dwarfs |
-| Disp      | ExoFOP TOI flag           | CP/KP = 1.0, PC/APC = 0.75, FP = 0.05, Unknown = 0.5 |
 | Vetting   | Centroid / odd-even / secondary / companion-size pipeline outputs | each failed test deducts; passing all gives 1.0 |
-| Sectors   | Number of independent detections | 1 → 0.4, 2 → 0.7, 3 → 0.9, ≥ 4 → 1.0 |
+| Shoreline | `Mp`, `Rp`, `S/S⊕`, `L★`  | `q = I_xuv / I_shore`; 1.0 for `q ≤ 0.1`, linear in `log q` down to 0.05 at `q ≥ 10` |
+| Locking   | `a`, `M★`, age            | `x = a / r_T`; 1.0 for `x ≥ 1.5`, linear down to 0.4 at `x = 1`, 0.4 inside |
+| Age       | age, `M★`                 | 0.1 below 0.1 Gyr, log ramp to 0.7 at 1 Gyr, linear to 1.0 at 3 Gyr; falls to 0.3 over the last 20% of the main-sequence lifetime; 0.5 when unknown |
+
+**Cosmic shoreline.** Zahnle & Catling (2017) show that bodies with and
+without atmospheres are separated by a line `I ∝ v_esc⁴`. They draw the line
+by eye, so we anchor it at Mars (`v_esc = 5.03 km s⁻¹`, `I = 0.431 I⊕`):
+
+$$I_{\rm shore} = 0.431\,\left(\frac{v_{\rm esc}}{5.03\ \mathrm{km\,s^{-1}}}\right)^{4},\qquad v_{\rm esc} = 11.186\,\sqrt{M_p/R_p}\ \mathrm{km\,s^{-1}}$$
+
+The flux compared with it is their cumulative-XUV proxy (their eq. 27),
+`I_xuv = (S/S⊕)(L★/L☉)^{-0.6}`, which is harsher for low-mass stars. The mass
+is the measured one when there is one, else the median of the mass-radius
+relations (§8).
+
+**Tidal locking.** Kasting et al. (1993), after Peale (1977), give the
+distance inside which an Earth-like planet (initial spin 13.5 h, `Q = 100`)
+is locked after a time `t`:
+
+$$r_T = 0.46\ \mathrm{AU}\,\left(\frac{t}{4.5\ \mathrm{Gyr}}\right)^{1/6}\left(\frac{M_\star}{M_\odot}\right)^{1/3}$$
+
+Locked planets can still be habitable in 3-D climate models, so the term is a
+mark-down and carries only 5% of the weight. With no age estimate, `t` is
+4.5 Gyr or half the main-sequence lifetime, whichever is less.
+
+**System age.** In order of preference: a provided age; gyrochronology,
+`P_rot = 0.407\,(B{-}V - 0.495)^{0.325}\,t_{\rm Myr}^{0.566}` (Mamajek &
+Hillenbrand 2008), valid for `0.5 < B−V < 0.9`, with `B−V` from `T_eff`
+(Ballesteros 2012); else unknown. The rotation period is the one the user gave
+for the variability detrend, else the top Lomb-Scargle peak when it has
+power ≥ 0.05, FAP ≤ 10⁻³, period ≥ 0.5 d and is not within 5% of the orbital
+period, half of it or twice it. A single TESS sector only reaches periods of
+about 13 d, so in practice this finds young, fast rotators. The main-sequence
+lifetime is `10 Gyr (M★/M☉)^{-2.5}`.
+
+Version 1 also scored the ExoFOP TOI disposition (15%) and the multi-sector
+detection count (5%). Both measured confidence in the detection, not the
+planet, and were removed in v2. A false-positive disposition is reported as a
+caveat instead.
 
 After the weighted sum, a **bulk-density modifier of ±10 percentage points**
 is applied to the final HCI when `ρp` is available (§8.3):
@@ -653,8 +690,8 @@ flagged **confirmed** when it appears in ≥ 2 sectors with matching
 duration *and* period. This separates a genuine repeating planet from a
 second transit signal of different duration on the same star.
 
-For each identified object the pipeline recomputes the **HCI** using the
-real multi-sector detection counts, and re-extracts the full **ExoMiner**
+For each identified object the pipeline recomputes the **HCI** (which, from
+v2, does not use the sector counts) and re-extracts the full **ExoMiner**
 view set from the sector showing that object's deepest event.
 
 ---

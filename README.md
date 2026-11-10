@@ -138,8 +138,7 @@ pipeline is new in v1.0.0.
   underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
 - **Multi-sector PDF report**: the multi-sector panel can export the
   representative sector's single-sector report (the sector with the highest
-  BLS SDE), with the HCI section rebuilt against the real multi-sector
-  detection counts.
+  BLS SDE).
 
 ### Microlensing pipeline *(new in v1.0.0)*
 
@@ -245,16 +244,22 @@ bulge-zone flag.
 
 A 0–100 score grounded in the **STEHM** (Smaller Than Earth Habitability
 Model) framework from Hill et al. (2026), arXiv:2605.00170. The score is
-built from six weighted sub-components:
+built from seven weighted sub-components:
 
 | Component (weight) | Science basis |
 |---|---|
 | **Planet size** (30%) | STEHM's primary result: ≥0.8 R⊕ retains a long-term CO₂ atmosphere under Earth-like conditions; 0.7–0.8 R⊕ is marginal; <0.7 R⊕ loses it rapidly (Fig 5, §5). |
 | **Habitable zone** (25%) | Kopparapu et al. (2013/2014) HZ boundaries, scaled by stellar luminosity. Outer-HZ planets retain atmospheres more easily (STEHM §5.5). |
 | **Stellar type** (15%) | STEHM is calibrated for Sun-like (FGK) stars. M-dwarfs are penalised for higher XUV flux and non-thermal escape (§6). |
-| **TOI disposition** (15%) | ExoFOP-TESS vetting flag. CP/KP (confirmed) = 1.0, PC/APC (candidate) = 0.75, FP (false positive) = 0.05. |
 | **Vetting flags** (10%) | Our own pipeline's centroid / odd-even / secondary / companion-size results. |
-| **Multi-sector** (5%) | Consistent detections across multiple TESS sectors confirm periodicity. |
+| **Cosmic shoreline** (10%) | XUV instellation against escape velocity, `I_xuv ∝ v_esc⁴` (Zahnle & Catling 2017), anchored at Mars. Full score a decade below the line, near zero a decade above it. |
+| **Tidal locking** (5%) | Orbit against the tidal-locking radius at the system's age, `r_T = 0.46 AU (t / 4.5 Gyr)^(1/6) (M★/M☉)^(1/3)` (Kasting et al. 1993). A locked planet is marked down to 0.4, not vetoed. |
+| **System age** (5%) | Estimated age against the star's main-sequence lifetime. Age comes from a provided value, else gyrochronology (Mamajek & Hillenbrand 2008) on the rotation period; unknown age is neutral (0.5). |
+
+**HCI v2.** Version 1 also scored the ExoFOP TOI disposition (15%) and the
+number of TESS sectors with detections (5%). Those two measured confidence in
+the detection, not the planet, so v2 drops them. A false-positive disposition
+is still shown as a caveat, and the EB / blend cap below still applies.
 
 **Bulk-density modifier (±10 pts).** After the weighted sum, the final HCI is
 adjusted by planet bulk density when `ρp` is available: **terrestrial** density
@@ -519,10 +524,8 @@ ExoMiner) can be returned. Worst case is `MAX_SECTORS + 1` pipeline
 runs — the extra run is the price of getting the choice right when the
 streaming order would otherwise drop a real candidate.
 
-**HCI still reflects the use of multi-sector**: the Habitability Chance
-Index bundle is rebuilt with the real `(n_sectors_with_detections,
-n_sectors_observed)` counts derived from the per-sector summaries, not
-the representative sector alone.
+**HCI does not use the sector count.** Since HCI v2 the number of sectors
+with detections is shown in the banner but is not part of the score.
 
 The panel shows:
 
@@ -534,8 +537,7 @@ The panel shows:
   Lomb-Scargle, HCI summary) from the representative sector
 
 A **Download multi-sector PDF** button exports the standard single-sector
-PDF for the representative sector, with the HCI block recomputed using the
-multi-sector counts.
+PDF for the representative sector.
 
 The sector cap is the tunable constant `MAX_SECTORS` at the top of
 `vetstar_core/pipeline/multisector.py`.
@@ -756,12 +758,11 @@ integer day) → SDE, and re-runs that one sector's pipeline to surface its
 full result. The panel then displays:
 
 - A banner with the compared sectors, the representative sector, and the
-  multi-sector detection counts that drive HCI
+  multi-sector detection counts
 - A **per-sector comparison table** (verdict, event count, BLS
   period / depth / SDE) — the representative sector is marked ★
 - The standard plot set (light curve, event zoom, centroid, BLS,
-  Lomb-Scargle, HCI summary) from the representative sector — HCI is
-  rebuilt with the real multi-sector counts
+  Lomb-Scargle, HCI summary) from the representative sector
 
 A **Download multi-sector PDF** button exports the whole analysis (see Step 6).
 
@@ -776,8 +777,7 @@ parameters** table, and the ExoMiner feature set.
 
 From the multi-sector panel, **Download multi-sector PDF** produces the
 standard single-sector report for the **representative sector** (picked by
-verdict → period agreement → SDE), with the HCI block recomputed using
-the multi-sector detection counts. The filename is suffixed `_multisector`.
+verdict → period agreement → SDE). The filename is suffixed `_multisector`.
 
 
 ## Verdict logic

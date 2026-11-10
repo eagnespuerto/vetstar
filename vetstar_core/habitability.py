@@ -1,19 +1,25 @@
 """
-Habitability Chance Index (HCI) — grounded in Hill et al. (2026), STEHM.
+Habitability Chance Index (HCI) v2 — grounded in Hill et al. (2026), STEHM.
 
-The score is built from six sub-components derived directly from STEHM
-results and the paper's sensitivity analyses:
+Seven sub-components, each in [0, 1]:
 
-  1. Planet size           — STEHM's primary result: ≥0.8 R⊕ retains atmosphere
-  2. Stellar type          — Sun-like (FGK) stars are the STEHM target; M-dwarfs
-                             have different XUV histories (not modelled)
-  3. Habitable zone        — Kopparapu et al. (2013/2014) bounds from STEHM §5.5
-  4. TOI disposition       — ExoFOP vetting flag downweights known FPs/EBs
-  5. Vetting flags         — signals from our own centroid/odd-even/secondary tests
-  6. Multi-sector          — more transits = tighter period, less chance of artefact
+  1. Planet size (30%)      — STEHM's primary result: ≥0.8 R⊕ retains atmosphere
+  2. Habitable zone (25%)   — Kopparapu et al. (2013/2014) bounds from STEHM §5.5
+  3. Stellar type (15%)     — Sun-like (FGK) stars are the STEHM target; M-dwarfs
+                              have different XUV histories (not modelled)
+  4. Vetting flags (10%)    — our own centroid/odd-even/secondary tests
+  5. Cosmic shoreline (10%) — XUV instellation against escape velocity,
+                              I_xuv ∝ v_esc⁴ (Zahnle & Catling 2017)
+  6. Tidal locking (5%)     — orbit against the tidal-locking radius at the
+                              system's age (Kasting et al. 1993; Peale 1977)
+  7. System age (5%)        — estimated age against the star's main-sequence
+                              lifetime (gyrochronology: Mamajek & Hillenbrand 2008)
 
-Each sub-component returns a value in [0, 1].  Final score = weighted average
-× 100, rounded to one decimal.
+Final score = weighted average × 100, rounded to one decimal.
+
+v2 drops the two v1 terms that measured confidence in the detection rather
+than the planet: the ExoFOP TOI disposition and the number of TESS sectors.
+A false-positive disposition is still reported as a caveat.
 
 Reference: Hill, M. L., Kane, S. R., Foley, B. J., & Schaefer, L. K. (2026).
   Smaller Than Earth Habitability Model (STEHM): The Lower Size Limit for
@@ -24,6 +30,8 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Optional
+
+HCI_VERSION = "2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +213,9 @@ class PlanetCandidate:
     depth_ppm: Optional[float] = None
     duration_hr: Optional[float] = None
     source: str = "unknown"
+    age_gyr: Optional[float] = None           # known system age, if any
+    rotation_period_d: Optional[float] = None  # stellar rotation, for gyrochronology
+    rotation_source: Optional[str] = None
 
 
 @dataclass
@@ -231,7 +242,16 @@ class HabitabilityResult:
     insolation_searth: Optional[float] = None
     density_modifier: int = 0
     density_modifier_label: Optional[str] = None
+    hci_version: str = HCI_VERSION
+    system_age: Optional[dict] = None
+    cosmic_shoreline: Optional[dict] = None
+    tidal_locking: Optional[dict] = None
     paper_ref: str = "Hill et al. (2026), arXiv:2605.00170 — STEHM"
+    references: list = field(default_factory=lambda: [
+        "Zahnle & Catling (2017), ApJ 843, 122 — cosmic shoreline",
+        "Kasting, Whitmire & Reynolds (1993), Icarus 101, 108 — tidal locking",
+        "Mamajek & Hillenbrand (2008), ApJ 687, 1264 — gyrochronology",
+    ])
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -406,30 +426,6 @@ def _score_stellar_type(teff: Optional[float], source: Optional[str] = None,
     return SubScore("Stellar type", score, w, label, expl)
 
 
-def _score_toi_disposition(disposition: Optional[str], toi: Optional[str]) -> SubScore:
-    w = 0.15
-    if toi is None:
-        return SubScore("TOI disposition", 0.50, w, "No TOI",
-                        "No TOI designation on ExoFOP-TESS. Signal may be new or "
-                        "not yet ingested into the community catalog.")
-    if disposition is None:
-        return SubScore("TOI disposition", 0.55, w, "Unclassified TOI",
-                        f"TOI {toi} exists but has no disposition yet.")
-    d = disposition.strip().upper()
-    if d in ("CP", "KP"):
-        return SubScore("TOI disposition", 1.00, w, "Confirmed/Known planet",
-                        f"TOI {toi}: {d} — independently confirmed. Highest confidence.")
-    if d in ("PC", "APC"):
-        return SubScore("TOI disposition", 0.75, w, "Planet candidate",
-                        f"TOI {toi}: {d} — passed TESS pipeline vetting.")
-    if d in ("FP", "FA", "EB"):
-        return SubScore("TOI disposition", 0.05, w, "False positive/alarm",
-                        f"TOI {toi}: {d} — ExoFOP flags this as a false positive, "
-                        f"false alarm or eclipsing binary.")
-    return SubScore("TOI disposition", 0.50, w, f"Disposition: {d}",
-                    f"TOI {toi}: unrecognised disposition code '{d}'.")
-
-
 def _score_vetting_flags(verdict: Optional[dict]) -> SubScore:
     w = 0.10
     if verdict is None:
@@ -460,24 +456,242 @@ def _score_vetting_flags(verdict: Optional[dict]) -> SubScore:
                     "Vetting result is ambiguous — manual review recommended.")
 
 
-def _score_multisector(n_det: int, n_obs: int) -> SubScore:
+# ---------------------------------------------------------------------------
+# System age
+# ---------------------------------------------------------------------------
+# Gyrochronology, Mamajek & Hillenbrand (2008, ApJ 687, 1264) eqs. 12-14:
+#     P [d] = a ((B-V) - c)^b * t[Myr]^n
+# constrained for solar-type dwarfs, 0.5 < B-V < 0.9.
+GYRO_A, GYRO_B, GYRO_C, GYRO_N = 0.407, 0.325, 0.495, 0.566
+GYRO_BV_RANGE = (0.5, 0.9)
+
+# Used for the tidal-locking term when no age can be estimated.
+DEFAULT_AGE_GYR = 4.5
+
+
+def _ballesteros_teff(bv: float) -> float:
+    """Teff from B-V (Ballesteros 2012, EPL 97, 34008)."""
+    return 4600.0 * (1.0 / (0.92 * bv + 1.7) + 1.0 / (0.92 * bv + 0.62))
+
+
+def teff_to_bv(teff_k: Optional[float]) -> Optional[float]:
+    """B-V colour for a Teff, by inverting the Ballesteros (2012) formula."""
+    if not teff_k or teff_k <= 0:
+        return None
+    lo, hi = -0.3, 2.2                      # Teff falls as B-V rises
+    if not (_ballesteros_teff(hi) <= teff_k <= _ballesteros_teff(lo)):
+        return None
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if _ballesteros_teff(mid) > teff_k:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def gyro_age_gyr(rotation_period_d: Optional[float], bv: Optional[float]) -> Optional[float]:
+    """Gyrochronology age in Gyr, or None outside the calibrated colours."""
+    if not rotation_period_d or rotation_period_d <= 0 or bv is None:
+        return None
+    if not (GYRO_BV_RANGE[0] < bv < GYRO_BV_RANGE[1]):
+        return None
+    f = GYRO_A * (bv - GYRO_C) ** GYRO_B
+    return (rotation_period_d / f) ** (1.0 / GYRO_N) / 1000.0
+
+
+def main_sequence_lifetime_gyr(mstar_sun: Optional[float]) -> Optional[float]:
+    """Main-sequence lifetime, t_MS ~ 10 Gyr (M/M_sun)^-2.5."""
+    if not mstar_sun or mstar_sun <= 0:
+        return None
+    return 10.0 * mstar_sun ** -2.5
+
+
+def estimate_system_age(
+    age_gyr: Optional[float] = None,
+    teff_k: Optional[float] = None,
+    mstar_sun: Optional[float] = None,
+    rotation_period_d: Optional[float] = None,
+    rotation_source: Optional[str] = None,
+) -> dict:
+    """Best available system age and where it came from.
+
+    Priority: a provided age -> gyrochronology from the rotation period ->
+    none. With no estimate, ``age_gyr`` is None and ``assumed_age_gyr`` (a
+    mid-life guess, capped at half the main-sequence lifetime) is what the
+    tidal-locking term uses.
+    """
+    t_ms = main_sequence_lifetime_gyr(mstar_sun)
+    out = {
+        "age_gyr": None, "source": "assumed", "method": None,
+        "ms_lifetime_gyr": round(t_ms, 2) if t_ms else None,
+        "rotation_period_d": rotation_period_d, "bv": None,
+        "assumed_age_gyr": None,
+    }
+    if age_gyr and age_gyr > 0:
+        out.update(age_gyr=round(float(age_gyr), 3), source="provided",
+                   method="provided age")
+        return out
+    bv = teff_to_bv(teff_k)
+    out["bv"] = round(bv, 3) if bv is not None else None
+    age = gyro_age_gyr(rotation_period_d, bv)
+    if age is not None:
+        if t_ms:
+            age = min(age, t_ms)
+        src = f" from the {rotation_source}" if rotation_source else ""
+        out.update(
+            age_gyr=round(age, 3), source="gyrochronology",
+            method=(f"gyrochronology, P_rot={rotation_period_d:.2f} d{src}, "
+                    f"B-V={bv:.2f} (Mamajek & Hillenbrand 2008)"))
+        return out
+    out["assumed_age_gyr"] = round(min(DEFAULT_AGE_GYR, 0.5 * t_ms) if t_ms
+                                   else DEFAULT_AGE_GYR, 3)
+    return out
+
+
+def _score_system_age(age_info: dict) -> SubScore:
+    """Old enough for a settled, quieter star; not at the end of its life."""
     w = 0.05
-    if n_obs == 0:
-        return SubScore("Multi-sector", 0.50, w, "No data", "No multi-sector data.")
-    if n_obs == 1:
-        return SubScore("Multi-sector", 0.40, w, "Single sector",
-                        "Only one sector observed — period is unconstrained.")
-    if n_det == 0:
-        return SubScore("Multi-sector", 0.30, w, "No detections",
-                        f"0/{n_obs} observed sectors show a dip — "
-                        f"inconsistent with a real periodic transit.")
-    frac = n_det / n_obs
-    s = 0.40 + 0.60 * frac
-    tier = "Consistent" if frac >= 0.6 else "Partial"
-    return SubScore("Multi-sector", min(s, 1.0), w, f"{tier} ({n_det}/{n_obs} sectors)",
-                    f"Dip detected in {n_det} of {n_obs} observed sectors — "
-                    + ("consistent with a real periodic signal."
-                       if frac >= 0.6 else "more sectors needed to confirm periodicity."))
+    age = age_info.get("age_gyr")
+    t_ms = age_info.get("ms_lifetime_gyr")
+    if age is None:
+        return SubScore("System age", 0.5, w, "Unknown",
+                        "No age estimate: no provided age, and no usable rotation "
+                        "period for gyrochronology (needs 0.5 < B-V < 0.9).")
+    how = age_info.get("method") or age_info.get("source")
+    if age < 0.1:
+        s, label = 0.10, "Very young"
+        why = "under 0.1 Gyr: heavy bombardment and a very active star."
+    elif age < 1.0:
+        s, label = 0.10 + 0.60 * math.log10(age / 0.1), "Young"
+        why = "under 1 Gyr: the star is still XUV-bright and flaring."
+    elif age < 3.0:
+        s, label = 0.70 + 0.30 * (age - 1.0) / 2.0, "Maturing"
+        why = "1-3 Gyr: past the most active phase."
+    else:
+        s, label = 1.0, "Mature"
+        why = "over 3 Gyr: a quiet star and time for a stable climate."
+    if t_ms and age > 0.8 * t_ms:
+        late = 1.0 - 0.7 * min((age - 0.8 * t_ms) / (0.2 * t_ms), 1.0)
+        if late < s:
+            s, label = late, "Late main sequence"
+            why = (f"over 80% of the ~{t_ms:.1f} Gyr main-sequence lifetime: "
+                   f"the star is brightening and the HZ is moving out.")
+    return SubScore("System age", s, w, label, f"Age ≈ {age:.2f} Gyr ({how}) — {why}")
+
+
+# ---------------------------------------------------------------------------
+# Tidal locking
+# ---------------------------------------------------------------------------
+# Kasting, Whitmire & Reynolds (1993), from Peale (1977):
+#     r_T = 0.027 (P0 t / Q)^(1/6) M^(1/3)   [cgs]
+# With their P0 = 13.5 h, Q = 100 and t = 4.5 Gyr this is 0.46 AU for 1 M_sun
+# (as written in Eggl et al. 2013, eq. 2), so r_T scales as t^(1/6) M^(1/3).
+TIDAL_LOCK_AU_SOLAR = 0.46
+TIDAL_LOCK_REF_AGE_GYR = 4.5
+
+
+def tidal_lock_radius_au(mstar_sun: float, age_gyr: float) -> float:
+    """Orbital distance inside which an Earth-like planet is locked by ``age_gyr``."""
+    return (TIDAL_LOCK_AU_SOLAR
+            * (age_gyr / TIDAL_LOCK_REF_AGE_GYR) ** (1.0 / 6.0)
+            * mstar_sun ** (1.0 / 3.0))
+
+
+def _score_tidal_locking(a_au: Optional[float], mstar_sun: Optional[float],
+                         age_info: dict):
+    """(SubScore, detail dict). A locked planet is not ruled out, only marked down."""
+    w = 0.05
+    if not a_au or not mstar_sun:
+        return (SubScore("Tidal locking", 0.5, w, "Unknown",
+                         "Needs the semi-major axis and the stellar mass."), None)
+    age = age_info.get("age_gyr")
+    assumed = age is None
+    if assumed:
+        age = age_info.get("assumed_age_gyr") or DEFAULT_AGE_GYR
+    r_t = tidal_lock_radius_au(mstar_sun, age)
+    x = a_au / r_t
+    age_txt = f"{age:.1f} Gyr" + (" (assumed)" if assumed else "")
+    base = (f"a={a_au:.3f} AU against a tidal-locking radius of {r_t:.3f} AU "
+            f"at {age_txt} (Kasting et al. 1993).")
+    if x >= 1.5:
+        s, label = 1.0, "Free rotator"
+        base += " Well outside it: a day-night cycle is expected."
+    elif x >= 1.0:
+        s, label = 0.4 + 0.6 * (x - 1.0) / 0.5, "Near locking radius"
+        base += " Close to it: the spin may be slowed or locked."
+    else:
+        s, label = 0.4, "Likely tidally locked"
+        base += (" Inside it: a permanent day side is likely. Climate models "
+                 "still allow habitable locked planets, so this is a mark-down, "
+                 "not a veto.")
+    detail = {"lock_radius_au": round(r_t, 4), "a_over_lock_radius": round(x, 3),
+              "locked": x < 1.0, "age_gyr_used": round(age, 3), "age_assumed": assumed}
+    return SubScore("Tidal locking", s, w, label, base), detail
+
+
+# ---------------------------------------------------------------------------
+# Cosmic shoreline
+# ---------------------------------------------------------------------------
+# Zahnle & Catling (2017, ApJ 843, 122): bodies with and without atmospheres
+# are separated by I ∝ v_esc^4. They draw the line by eye; we anchor it at
+# Mars, which sits on it. The XUV form uses their eq. 27 scaling,
+# I_xuv = (S/S_earth) (L/L_sun)^-0.6, which is harsher for low-mass stars.
+V_ESC_EARTH_KMS = 11.186
+_MARS_V_ESC_KMS = 5.03
+_MARS_INSOLATION = 0.431
+SHORELINE_NORM = _MARS_INSOLATION / (_MARS_V_ESC_KMS / V_ESC_EARTH_KMS) ** 4
+
+
+def escape_velocity_kms(mass_earth: float, radius_earth: float) -> float:
+    return V_ESC_EARTH_KMS * math.sqrt(mass_earth / radius_earth)
+
+
+def shoreline_ratio(mass_earth: float, radius_earth: float,
+                    insolation_searth: float,
+                    luminosity_sun: Optional[float] = None) -> float:
+    """XUV instellation over the shoreline value for this escape velocity.
+
+    Below 1 is the atmosphere side, above 1 the airless side. Without a
+    luminosity the total instellation is used (the solar case).
+    """
+    i_xuv = insolation_searth
+    if luminosity_sun and luminosity_sun > 0:
+        i_xuv = insolation_searth * luminosity_sun ** -0.6
+    v_rel = math.sqrt(mass_earth / radius_earth)
+    return i_xuv / (SHORELINE_NORM * v_rel ** 4)
+
+
+def _score_cosmic_shoreline(rp: Optional[float], mp: Optional[float],
+                            mass_source: Optional[str],
+                            insolation: Optional[float],
+                            luminosity_sun: Optional[float]):
+    """(SubScore, detail dict). Full score a decade below the line, ~0 a decade above."""
+    w = 0.10
+    if not rp or not mp or not insolation:
+        missing = [n for n, v in (("radius", rp), ("mass", mp),
+                                  ("instellation", insolation)) if not v]
+        return (SubScore("Cosmic shoreline", 0.5, w, "Unknown",
+                         "Needs the planet's " + ", ".join(missing) + "."), None)
+    q = shoreline_ratio(mp, rp, insolation, luminosity_sun)
+    v_esc = escape_velocity_kms(mp, rp)
+    logq = math.log10(q)
+    s = max(0.05, min(1.0, 1.0 - 0.95 * (logq + 1.0) / 2.0))
+    if logq <= -0.5:
+        label = "Atmosphere side"
+    elif logq < 0.5:
+        label = "On the shoreline"
+    else:
+        label = "Airless side"
+    flux = "XUV" if luminosity_sun else "total"
+    src = f" ({mass_source})" if mass_source else ""
+    side = "below" if q < 1 else "above"
+    expl = (f"v_esc={v_esc:.1f} km/s from {mp:.1f} M⊕{src} and {rp:.2f} R⊕; "
+            f"{flux} instellation is {q:.2g}× the shoreline value "
+            f"(I ∝ v_esc⁴, Zahnle & Catling 2017, anchored at Mars) — {side} the line.")
+    detail = {"v_esc_kms": round(v_esc, 2), "ratio_to_shoreline": round(q, 4),
+              "flux_kind": flux}
+    return SubScore("Cosmic shoreline", s, w, label, expl), detail
 
 
 # ---------------------------------------------------------------------------
@@ -487,8 +701,6 @@ def _score_multisector(n_det: int, n_obs: int) -> SubScore:
 def compute_hci(
     planet: PlanetCandidate,
     vetting_verdict: Optional[dict] = None,
-    n_sectors_with_detections: int = 1,
-    n_sectors_observed: int = 1,
     mass_estimates_earth: Optional[list] = None,
     a_over_rs: Optional[float] = None,
     radius_ratio_k: Optional[float] = None,
@@ -545,17 +757,37 @@ def compute_hci(
         sptype=stellar_est["sptype"] if stellar_est else None,
     )
 
+    insol = (insolation_from_a_over_rs(a_over_rs, teff_eff)
+             if (a_over_rs and teff_eff) else None)
+
+    # --- v2 terms: shared inputs -------------------------------------------
+    lum = (rstar_eff ** 2 * (teff_eff / SOLAR_TEFF) ** 4
+           if (rstar_eff and teff_eff) else None)
+    a_au = planet.semi_major_axis_au
+    if not a_au and a_over_rs and rstar_eff:
+        a_au = a_over_rs * rstar_eff / A_EARTH_OVER_RSUN
+    flux = (lum / a_au ** 2) if (lum and a_au) else insol
+    masses = [m for m in (mass_estimates_earth or []) if m and m > 0]
+    mp_central = (planet.mass_earth if (planet.mass_earth and planet.mass_earth > 0)
+                  else (sorted(masses)[len(masses) // 2] if masses else None))
+
+    age_info = estimate_system_age(
+        planet.age_gyr, teff_eff, planet.stellar_mass_sun,
+        planet.rotation_period_d, planet.rotation_source)
+    shore_sub, shore_detail = _score_cosmic_shoreline(
+        rp_eff, mp_central, planet.mass_source, flux, lum)
+    lock_sub, lock_detail = _score_tidal_locking(
+        a_au, planet.stellar_mass_sun, age_info)
+
     subs = [
         size_sub,
         hz_sub,
         star_sub,
-        _score_toi_disposition(planet.disposition, planet.toi_number),
         _score_vetting_flags(vetting_verdict),
-        _score_multisector(n_sectors_with_detections, n_sectors_observed),
+        shore_sub,
+        lock_sub,
+        _score_system_age(age_info),
     ]
-
-    insol = (insolation_from_a_over_rs(a_over_rs, teff_eff)
-             if (a_over_rs and teff_eff) else None)
 
     total_w = sum(s.weight for s in subs)
     hci = sum(s.score * s.weight for s in subs) / total_w * 100
@@ -621,10 +853,28 @@ def compute_hci(
             "critically on initial carbon inventory, HPE, and core radius fraction "
             "(Hill et al. 2026 §5.1–5.4)."
         )
-    if n_sectors_observed == 1:
+    disp = (planet.disposition or "").strip().upper()
+    if disp in ("FP", "FA", "EB"):
         caveats.append(
-            "Only one TESS sector observed. Period is unconstrained — "
-            "cannot verify periodicity or consistent transit timing."
+            f"ExoFOP lists TOI {planet.toi_number} as {disp} (false positive, false "
+            "alarm or eclipsing binary). HCI v2 does not score the disposition, "
+            "so check it before trusting this number."
+        )
+    if age_info["source"] == "gyrochronology":
+        caveats.append(
+            "System age is from gyrochronology on a single rotation period. A "
+            "harmonic of the true period, a binary companion or a spot pattern "
+            "change can shift it by a factor of two or more."
+        )
+    elif age_info["source"] == "assumed":
+        caveats.append(
+            "No system age could be estimated. The age term is neutral and the "
+            f"tidal-locking term assumes {age_info['assumed_age_gyr']} Gyr."
+        )
+    if shore_detail and not (planet.mass_earth and planet.mass_earth > 0):
+        caveats.append(
+            "The cosmic-shoreline escape velocity uses a mass from mass-radius "
+            "relations, not a measured mass."
         )
     if rp_eff is None:
         caveats.append(
@@ -671,4 +921,7 @@ def compute_hci(
         insolation_searth=round(insol, 4) if insol is not None else None,
         density_modifier=density_modifier,
         density_modifier_label=density_label,
+        system_age=age_info,
+        cosmic_shoreline=shore_detail,
+        tidal_locking=lock_detail,
     )

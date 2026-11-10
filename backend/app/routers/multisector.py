@@ -62,11 +62,7 @@ class MultisectorQuery(BaseModel):
 @router.post("/api/mast/multisector")
 def mast_multisector(query: MultisectorQuery):
     result, info = _run_mast_multisector(query)
-    _attach_hci_summary_to_plots(
-        result,
-        n_sectors_observed=info.get("n_sectors_observed", 1),
-        n_sectors_with_detections=info.get("n_sectors_with_detections"),
-    )
+    _attach_hci_summary_to_plots(result)
     out = result.to_dict()
     out["mast"] = {
         "sectors_used": info.get("sectors_used", []),
@@ -86,15 +82,10 @@ def mast_multisector(query: MultisectorQuery):
 
 @router.post("/api/mast/multisector/report")
 def mast_multisector_report(query: MultisectorQuery):
-    """Build a PDF report from the representative single-sector run, with
-    the HCI section pegged to the multi-sector detection counts."""
+    """Build a PDF report from the representative single-sector run."""
     result, info = _run_mast_multisector(query)
     try:
-        extras = _build_report_extras(
-            result,
-            n_sectors_observed=info.get("n_sectors_observed", 1),
-            n_sectors_with_detections=info.get("n_sectors_with_detections"),
-        )
+        extras = _build_report_extras(result)
         pdf = build_pdf(
             result,
             hci_bundle=extras.get("hci_bundle"),
@@ -167,9 +158,6 @@ def _run_mast_multisector(query: MultisectorQuery):
     real planet candidate the moment a later sector happens to outrank
     it on raw SDE.
 
-    HCI is rebuilt downstream with the real multi-sector detection counts
-    (n_sectors_with_detections / n_sectors_observed) rather than the
-    representative sector's lone count.
 
     Returns ``(VettingResult, info_dict)``.
     """
