@@ -261,6 +261,34 @@ BLS (Kovács, Zucker & Mazeh 2002) is the matched-filter optimised for a
 **boxcar** transit shape: a baseline flux dropping briefly by `δ`, then
 returning. Vetstar uses `astropy.timeseries.BoxLeastSquares`.
 
+**Trial periods.** The blind search runs from 0.5 d to 0.7 × the baseline
+on a grid that is **even in frequency**, not in period. A BLS peak is about
+`duration / (P × baseline)` wide in frequency, the same at every period, so
+even frequency steps sample every peak equally well. The step is
+
+$$\Delta f \;=\; \dfrac{d_{\min}}{T^{2}}$$
+
+with `d_min` the shortest box (0.05 d) and `T` the baseline. This is the
+rule `BoxLeastSquares.autoperiod` uses. The grid is capped at 20,000 points.
+Up to v1.0 the grid was even in period. That grid was about 50 times too
+coarse at 0.5 d and far too fine near the long end, and the crowd of
+long-period points pulled the SDE of a long-period transit down below the
+threshold. The known-period search (`run_bls_constrained`) samples each of
+its ±2 % windows the same way.
+
+**Trial durations.** Every period is tried with boxes of 0.05, 0.1, 0.15,
+0.2 and 0.3 d (1.2 to 7.2 h). Longer boxes of 0.4, 0.5 and 0.75 d (9.6 to
+18 h) are added only where the box is at most 5 % of the period, so from
+8, 10 and 15 d. They are for long-period planets and evolved hosts, whose
+transits the 0.3 d box cut short. The 5 % limit keeps a wide box away from
+short periods, where it mostly fits stellar variability.
+
+**A caveat on variable stars.** With the new grid, strong variability that
+has not been detrended (about 0.2 % and up in our tests) scores a higher
+SDE than before, because the periodogram is no longer padded with
+long-period points. Use the *High stellar variability* detrend of §1 for
+such targets.
+
 The frequency-domain output is the **signal residue** SR; Vetstar's quoted
 **Signal Detection Efficiency (SDE)** standardises the peak against the
 periodogram's own baseline:
