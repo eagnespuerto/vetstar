@@ -168,6 +168,7 @@ export default function ExoMinerPanel({
         t0: result.bls.t0,
         duration: result.bls.duration,
         crowdsap: result.star.crowdsap ?? undefined,
+        lc_token: result.lc_token ?? undefined,
         // pass enough BLS context for the backend to re-parse the file
         // (the backend caches the last parsed file in-process)
       });

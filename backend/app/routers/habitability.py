@@ -122,7 +122,7 @@ def _build_report_extras(
 
     # --- ExoMiner (needs the cached light curve + a period) -------------
     try:
-        cached = _lookup_lc(tic, star.sector)
+        cached = _lookup_lc(tic, star.sector, getattr(result, "lc_token", None))
         t0 = result.bls.get("t0") if result.bls else None
         duration = result.bls.get("duration") if result.bls else None
         if cached and period and duration:

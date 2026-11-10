@@ -54,10 +54,12 @@ def test_lookup_without_sector_uses_latest_for_that_tic(lc_cache):
     assert cache._lookup_lc(111, None)["tag"] == "new"
 
 
-def test_ticless_upload_only_matches_ticless_requests(lc_cache):
+def test_ticless_upload_only_matches_its_token(lc_cache):
     lc_cache[(111, 5)] = _entry("tic")
-    lc_cache[cache._ANON_LC_KEY] = _entry("anon")
-    assert cache._lookup_lc(None, None)["tag"] == "anon"
+    lc_cache[(cache._UPLOAD, "tok")] = _entry("anon")
+    assert cache._lookup_lc(None, None, "tok")["tag"] == "anon"
+    # Without the token nobody gets it, TIC or not.
+    assert cache._lookup_lc(None, None) is None
     assert cache._lookup_lc(333, None) is None
 
 

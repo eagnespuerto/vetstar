@@ -103,7 +103,7 @@ def _start_prefetch(pf: Prefetcher, tic_id, sector, ra, dec, *, report: bool = T
     reads it after the pipeline so it never sits in memory alongside the
     light curve and BLS arrays (512 MB budget)."""
     have_coords = ra is not None and dec is not None
-    if report and have_coords and (tic_id, sector) not in cache._ffi_cache:
+    if report and have_coords and not cache._has_ffi(tic_id, sector):
         from vetstar_core.ffi_cutout import download_ffi_cube
         pf.submit("ffi_cube", download_ffi_cube, ra, dec, sector=sector)
     if tic_id:
@@ -121,8 +121,9 @@ def _ffi_cutout_from_prefetch(pf: Prefetcher, tic_id, sector, ra, dec):
     from vetstar_core.ffi_cutout import discard_ffi_cube, render_ffi_cube
 
     key = (tic_id, sector)
-    if key in cache._ffi_cache:
-        return cache._ffi_cache[key]
+    found, cached = cache._peek_ffi(tic_id, sector)
+    if found:
+        return cached
     if not pf.has("ffi_cube"):
         return _UNSET
     cube = pf.get("ffi_cube", timeout=60)
@@ -370,9 +371,12 @@ def _publish_and_report(job: JobState, rep: ProgressReporter, pf: Prefetcher,
     )
     rep("habitability", 1.0)
 
+    lc_token = getattr(result, "lc_token", None)
     out = result.to_dict()
     out.update(out_extra)
-    out["lightcurve"] = _downsample_cached_lc(result.star.tic_id, result.star.sector)
+    out["lightcurve"] = _downsample_cached_lc(
+        result.star.tic_id, result.star.sector, lc_token)
+    out["lc_token"] = lc_token
     out["dvt"] = _summarize_dvt(dvt)
     JOBS.push_result(job, out)
     del out
@@ -433,10 +437,11 @@ def _vet_upload_work(tmp_path: str, filename: str, pipeline_kwargs: dict):
                 pass
         star = parsed["star"]
         _start_prefetch(pf, star.tic_id, star.sector, star.ra, star.dec)
-        _cache_lc(parsed)
+        lc_token = _cache_lc(parsed)
         result = _run_pipeline(parsed, reporter=rep,
                                known_object=_prefetched_crossmatch(pf),
                                **pipeline_kwargs)
+        result.lc_token = lc_token
         del parsed
         rep("dvt_fetch", 0.0)
         dvt = pf.get("dvt", timeout=120)
