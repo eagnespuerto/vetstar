@@ -26,6 +26,7 @@ from vetstar_core.microlensing_coverage import parse_events_csv, resolve_ra_dec_
 from vetstar_core.microlensing_ffi import make_ffi_gaia_cutout
 from vetstar_core.microlensing_report import build_microlensing_pdf
 from vetstar_core.parsers import parse_upload
+from vetstar_core.timeouts import run_with_timeout
 
 from ..cache import _cache_lc
 from ..common import _handle_exception
@@ -262,28 +263,23 @@ class MicrolensingFfiCutoutRequest(BaseModel):
 @router.post("/api/microlensing/ffi_cutout")
 def api_microlensing_ffi_cutout(req: MicrolensingFfiCutoutRequest):
     """TESScut FFI cutout + Gaia DR3 overlay for source-blending diagnosis."""
-    from concurrent.futures import ThreadPoolExecutor
-    from concurrent.futures import TimeoutError as FutureTimeout
-
     # Bounded like _get_ffi_cutout so a stuck MAST/Gaia call can't hang the
     # request until the gateway gives up.
-    ex = ThreadPoolExecutor(max_workers=1)
     try:
-        result = ex.submit(
+        result = run_with_timeout(
             make_ffi_gaia_cutout,
             ra=req.ra, dec=req.dec,
             sector=req.sector, tic_id=req.tic_id,
             size_px=req.size_px,
             gaia_mag_limit=req.gaia_mag_limit,
             gaia_max_sources=req.gaia_max_sources,
-        ).result(timeout=60.0)
-    except FutureTimeout:
+            timeout_s=60.0,
+        )
+    except TimeoutError:
         raise HTTPException(
             status_code=504,
             detail="TESScut/Gaia took too long to respond. Please try again.",
         )
-    finally:
-        ex.shutdown(wait=False)
     if result is None:
         raise HTTPException(
             status_code=404,

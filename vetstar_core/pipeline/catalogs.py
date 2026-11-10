@@ -8,6 +8,8 @@ from typing import Optional
 
 import numpy as np
 
+from ..timeouts import collect_within, submit
+
 
 # ----------------------------------------------------------------------
 # External catalog cross-match (Gaia DR3 + SIMBAD + exoplanets.org)
@@ -21,7 +23,6 @@ CROSSMATCH_RADIUS_ARCSEC = 5.0
 # Hard wall-clock budget for the remote catalog queries. On expiry the
 # slow source is reported as an error and the verdict stands unchanged.
 CROSSMATCH_TIMEOUT_S = 30.0
-_CROSSMATCH_POOL = None
 
 # exoplanets.org full-catalog CSV. The site has been static since ~2018 but
 # remains the canonical machine-readable mirror of the original Exoplanet
@@ -277,38 +278,6 @@ def _query_nasa_exoplanet_archive(ra: float, dec: float, radius_arcsec: float) -
         return {"error": str(exc)}
 
 
-def _crossmatch_pool():
-    """Shared worker pool for catalog queries (created lazily)."""
-    global _CROSSMATCH_POOL
-    if _CROSSMATCH_POOL is None:
-        from concurrent.futures import ThreadPoolExecutor
-        _CROSSMATCH_POOL = ThreadPoolExecutor(
-            max_workers=8, thread_name_prefix="crossmatch"
-        )
-    return _CROSSMATCH_POOL
-
-
-def _collect_with_deadline(futs: dict, timeout_s: float) -> dict:
-    """Wait for ``futs`` up to ``timeout_s`` total; late/failed ones → error dict.
-
-    Late futures are abandoned (left running in the pool) rather than
-    awaited, so a hung remote service can't stall the pipeline.
-    """
-    import concurrent.futures as cf
-    cf.wait(list(futs.values()), timeout=timeout_s)
-    out = {}
-    for key, fut in futs.items():
-        if not fut.done():
-            fut.cancel()
-            out[key] = {"error": f"timed out after {timeout_s:.0f}s"}
-            continue
-        try:
-            out[key] = fut.result()
-        except Exception as exc:
-            out[key] = {"error": str(exc)}
-    return out
-
-
 def _query_gaia_dr3(ra: float, dec: float, radius_arcsec: float) -> Optional[dict]:
     """Nearest Gaia DR3 source with its non-single-star flag, or None."""
     from astroquery.gaia import Gaia
@@ -403,13 +372,12 @@ def crossmatch_known_object(
     # Neither astroquery's Gaia async TAP job nor its pyvo-backed SIMBAD
     # query honours a timeout, so a slow/queued service used to block the
     # job indefinitely (and the SSE stream then gave up after 10 min).
-    pool = _crossmatch_pool()
     futs = {
-        "gaia": pool.submit(_query_gaia_dr3, ra, dec, radius_arcsec),
-        "simbad": pool.submit(_query_simbad, coord, radius),
-        "nea": pool.submit(_query_nasa_exoplanet_archive, ra, dec, radius_arcsec),
+        "gaia": submit(_query_gaia_dr3, ra, dec, radius_arcsec),
+        "simbad": submit(_query_simbad, coord, radius),
+        "nea": submit(_query_nasa_exoplanet_archive, ra, dec, radius_arcsec),
     }
-    results = _collect_with_deadline(futs, CROSSMATCH_TIMEOUT_S)
+    results = collect_within(futs, CROSSMATCH_TIMEOUT_S)
     gaia_match = results["gaia"]
     simbad_match = results["simbad"]
     nea_match = results["nea"]
@@ -420,8 +388,8 @@ def crossmatch_known_object(
     # NEA is the authoritative live source, the .org mirror is frozen at 2018.
     if not (nea_match and nea_match.get("matched")):
         sources_tried.append("exoplanets.org")
-        fut = pool.submit(_query_exoplanets_org, ra, dec, radius_arcsec)
-        exoplanets_org_match = _collect_with_deadline(
+        fut = submit(_query_exoplanets_org, ra, dec, radius_arcsec)
+        exoplanets_org_match = collect_within(
             {"org": fut}, CROSSMATCH_TIMEOUT_S
         )["org"]
 
