@@ -10,9 +10,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from vetstar_core.exofop import query_exofop
+from vetstar_core.hci_bundle import resolve_planet_radius
 from vetstar_core.observables import compute_observables
 
-from .habitability import _resolve_planet_radius
 
 log = logging.getLogger("vetting")
 
@@ -135,7 +135,7 @@ def observables(query: ObservablesQuery):
         rprs_spoc = vv.get("_dvt_rprs")
         if not grazing and str(vv.get("_shape_class", "")).startswith("V"):
             grazing = True
-        # Discrete-dip radius: last resort only (see _resolve_planet_radius).
+        # Discrete-dip radius: last resort only (see resolve_planet_radius).
         r_companion_rjup = vv.get("_R_companion_Rjup")
 
     # TLCM transit geometry: radius ratio, a/Rs, model-independent stellar
@@ -191,7 +191,7 @@ def observables(query: ObservablesQuery):
     # Radius from the same Rp/R* the TLCM block reports; compute_observables
     # would otherwise fall back to sqrt(depth) and ignore a DV RPRS fit.
     if rp_rjup is None and query.rp_earth is None:
-        rp_earth_k, _ = _resolve_planet_radius(
+        rp_earth_k, _ = resolve_planet_radius(
             radius_ratio_k=tlcm.get("radius_ratio_k"),
             rstar_sun=rstar,
             r_companion_rjup=r_companion_rjup,

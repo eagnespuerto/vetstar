@@ -217,99 +217,12 @@ def _extras_for(result, parsed, args) -> dict:
 
 
 def _hci_bundle(result, dvt) -> dict:
-    """Rebuild the HCI + POE + TLCM bundle for a single-sector result."""
-    from vetstar_core.exofop import query_exofop
-    from vetstar_core.habitability import PlanetCandidate, compute_hci, estimate_stellar_from_teff
-    from vetstar_core.observables import compute_observables as compute_poe
-    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
-    from vetstar_core.hci_image import make_hci_summary_image
+    """HCI + POE + TLCM bundle for a single-sector result.
 
-    tic = result.star.tic_id
-    exofop = query_exofop(tic)
-    star_info = exofop.get("star", {}) or {}
-    tois = exofop.get("tois", []) or []
-    best_toi = None
-    for t in tois:
-        d = (t.get("disposition") or "").upper()
-        if d in ("PC", "APC", "CP", "KP") or best_toi is None:
-            best_toi = t
-            if d in ("CP", "KP"):
-                break
-
-    period = (result.bls.get("period") if result.bls else None) or (
-        best_toi.get("period_d") if best_toi else None
-    )
-    teff = star_info.get("teff") or result.star.teff
-    rstar = star_info.get("radius") or result.star.radius
-    mstar = star_info.get("mass") or getattr(result.star, "mass", None)
-
-    if teff and (not rstar or not mstar):
-        est = estimate_stellar_from_teff(teff)
-        if est:
-            rstar = rstar or est["radius_sun"]
-            mstar = mstar or est["mass_sun"]
-
-    planet = PlanetCandidate(
-        radius_earth=(best_toi or {}).get("radius_earth"),
-        semi_major_axis_au=(best_toi or {}).get("semi_major_axis_au"),
-        orbital_period_d=period,
-        toi_number=(best_toi or {}).get("toi_number"),
-        disposition=(best_toi or {}).get("disposition"),
-        stellar_teff=teff,
-        stellar_radius_sun=rstar,
-        stellar_mass_sun=mstar,
-        depth_ppm=(best_toi or {}).get("depth_ppm"),
-        duration_hr=(best_toi or {}).get("duration_hr"),
-        source=exofop.get("source", "unknown"),
-    )
-
-    tlcm = compute_tlcm_geometry(
-        period_d=period,
-        t14_d=(result.shape.get("t14_d") if result.shape.get("available") else result.bls.get("duration")),
-        depth_frac=(result.events[0]["depth"] if result.events else result.bls.get("depth")),
-        rstar_sun=rstar,
-        mstar_sun=mstar,
-    ).to_dict()
-
-    hci = compute_hci(planet=planet, vetting_verdict=result.verdict,
-                      n_sectors_with_detections=1, n_sectors_observed=1,
-                      a_over_rs=tlcm.get("a_over_rs"),
-                      radius_ratio_k=tlcm.get("radius_ratio_k"),
-                      stellar_density_rho_sun=tlcm.get("stellar_density_rho_sun"))
-
-    poe = compute_poe(
-        teff_k=teff, rstar_sun=rstar, mstar_sun=mstar,
-        distance_pc=star_info.get("distance"),
-        orbital_period_d=period,
-        semi_major_axis_au=planet.semi_major_axis_au,
-        rp_earth=planet.radius_earth,
-    ).to_dict()
-
-    bundle = {
-        "hci": hci.to_dict(),
-        "observables": poe,
-        "tlcm": tlcm,
-        "planet": {
-            "radius_earth": planet.radius_earth,
-            "mass_earth": planet.mass_earth,
-            "stellar_teff": teff,
-            "stellar_radius_sun": rstar,
-            "stellar_mass_sun": mstar,
-            "orbital_period_d": period,
-            "semi_major_axis_au": planet.semi_major_axis_au,
-            "toi_number": planet.toi_number,
-            "disposition": planet.disposition,
-        },
-    }
-    try:
-        bundle["hci_image"] = make_hci_summary_image(
-            bundle.get("hci"), bundle.get("observables"), bundle.get("tlcm"),
-            planet=bundle.get("planet"),
-            title=f"Habitability Chance Index — TIC {tic}",
-        )
-    except Exception:
-        bundle["hci_image"] = None
-    return bundle
+    Built by vetstar_core, so the Pi scores a target exactly as the site does.
+    """
+    from vetstar_core.hci_bundle import hci_bundle_for_result
+    return hci_bundle_for_result(result, dvt=dvt)
 
 
 def _cmd_mast(args):
@@ -437,55 +350,29 @@ def _cmd_coverage(args):
 def _cmd_habitability(args):
     """Compute the HCI + POE + TLCM bundle for a TIC.
 
-    Runs the same pipeline as the transit sub-command's HCI extras, but
-    standalone (no light curve required)."""
-    from vetstar_core.exofop import query_exofop
-    from vetstar_core.habitability import PlanetCandidate, compute_hci
-    from vetstar_core.observables import compute_observables as compute_poe
-    from vetstar_core.tlcm_geometry import compute_tlcm_geometry
+    Same computation as the transit sub-command's HCI extras, but standalone
+    (no light curve required)."""
+    from vetstar_core.hci_bundle import build_hci_bundle
 
-    ef = query_exofop(args.tic)
-    star = ef.get("star", {}) or {}
-    tois = ef.get("tois", []) or []
-    best = next((t for t in tois
-                 if (t.get("disposition") or "").upper() in ("CP", "KP", "PC", "APC")),
-                tois[0] if tois else None)
-    period = args.period or (best or {}).get("period_d")
-    planet = PlanetCandidate(
-        radius_earth=args.radius_earth or (best or {}).get("radius_earth"),
-        orbital_period_d=period,
-        semi_major_axis_au=(best or {}).get("semi_major_axis_au"),
-        stellar_teff=args.teff or star.get("teff"),
-        stellar_radius_sun=args.rstar or star.get("radius"),
-        stellar_mass_sun=args.mstar or star.get("mass"),
-        toi_number=(best or {}).get("toi_number"),
-        disposition=(best or {}).get("disposition"),
+    bundle = build_hci_bundle(
+        args.tic,
+        radius_earth=args.radius_earth,
+        orbital_period_d=args.period,
+        stellar_teff=args.teff,
+        stellar_radius_sun=args.rstar,
+        stellar_mass_sun=args.mstar,
+        age_gyr=getattr(args, "age", None),
+        rotation_period_d=getattr(args, "prot", None),
+        rotation_source="user rotation period" if getattr(args, "prot", None) else None,
     )
-    tlcm = compute_tlcm_geometry(
-        period_d=period, t14_d=None, depth_frac=(best or {}).get("depth_frac"),
-        rstar_sun=planet.stellar_radius_sun, mstar_sun=planet.stellar_mass_sun,
-    ).to_dict()
-    hci = compute_hci(planet=planet, vetting_verdict=None,
-                      n_sectors_with_detections=1, n_sectors_observed=1,
-                      a_over_rs=tlcm.get("a_over_rs"),
-                      radius_ratio_k=tlcm.get("radius_ratio_k"),
-                      stellar_density_rho_sun=tlcm.get("stellar_density_rho_sun"))
-    poe = compute_poe(
-        teff_k=planet.stellar_teff, rstar_sun=planet.stellar_radius_sun,
-        mstar_sun=planet.stellar_mass_sun, distance_pc=star.get("distance"),
-        orbital_period_d=period, semi_major_axis_au=planet.semi_major_axis_au,
-        rp_earth=planet.radius_earth,
-    ).to_dict()
-
-    d = hci.to_dict()
-    print(f"HCI: {d.get('score'):.1f} / 100  tier={d.get('tier')}")
-    for s in d.get("subscores", []):
-        print(f"  {s.get('name'):<22} {s.get('score'):>5.1f}  (weight {s.get('weight')})")
+    d = bundle["hci"]
+    print(f"HCI v{d.get('hci_version')}: {d.get('hci'):.1f} / 100  tier={d.get('tier')}")
+    for sc in d.get("sub_scores", []):
+        print(f"  {sc.get('name'):<22} {sc.get('score') * 100:>5.1f}  "
+              f"(weight {sc.get('weight')})  {sc.get('label')}")
     os.makedirs(args.out, exist_ok=True)
     _write_json(os.path.join(args.out, "habitability.json"),
-                {"hci": d, "observables": poe, "tlcm": tlcm,
-                 "planet": {"radius_earth": planet.radius_earth,
-                            "orbital_period_d": period}})
+                {k: bundle[k] for k in ("hci", "observables", "tlcm", "planet")})
     return 0
 
 
@@ -629,6 +516,9 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--teff", type=float, default=None)
     h.add_argument("--rstar", type=float, default=None)
     h.add_argument("--mstar", type=float, default=None)
+    h.add_argument("--age", type=float, default=None, help="system age in Gyr")
+    h.add_argument("--prot", type=float, default=None,
+                   help="stellar rotation period in days (gyrochronology age)")
     h.set_defaults(func=_cmd_habitability)
 
     e = sub.add_parser("exominer", help="ExoMiner feature/view extraction")
