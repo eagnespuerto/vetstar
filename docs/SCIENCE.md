@@ -283,11 +283,25 @@ its ±2 % windows the same way.
 transits the 0.3 d box cut short. The 5 % limit keeps a wide box away from
 short periods, where it mostly fits stellar variability.
 
-**A caveat on variable stars.** With the new grid, strong variability that
-has not been detrended (about 0.2 % and up in our tests) scores a higher
-SDE than before, because the periodogram is no longer padded with
-long-period points. Use the *High stellar variability* detrend of §1 for
-such targets.
+**Variability guard.** BLS fits a box to anything periodic, so rotation or
+pulsation that has not been detrended also gives a peak, with an SDE of
+about 8 on the new grid. (The old grid hid this: its crowd of long-period
+points pulled that SDE down to about 4.) So a high SDE alone is not taken
+as a detection. `bls_variability_check` folds the light curve at the BLS
+period and fits two models: the BLS box, and a smooth curve made of a
+sinusoid at that period plus its next two harmonics. Each model's gain is
+the drop in the sum of squared residuals against a flat line. The result
+carries their ratio as `smooth_to_box_ratio`, and `likely_variability` is
+true when the smooth curve gains more than the box (ratio above 1).
+
+A transit is narrow, so three harmonics capture little of it: injected
+transits from 0.62 to 13 d, deep or shallow, with or without 0.05 %
+variability, all score 0.5 or less. Pure sinusoids from 1.3 to 11 d and
+0.05 % to 1 % amplitude score 1.9 or more. When no discrete dip event was
+found and the peak is flagged, the verdict is "No significant
+transit/eclipse signal" with the flag `bls_peak_is_variability`, and it
+suggests the *High stellar variability* detrend of §1. The guard never
+overrides detected events.
 
 The frequency-domain output is the **signal residue** SR; Vetstar's quoted
 **Signal Detection Efficiency (SDE)** standardises the peak against the

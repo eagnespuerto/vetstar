@@ -266,6 +266,7 @@ def make_verdict(
     bls_sde: float,
     duration_consistent: Optional[bool] = None,
     duration_tol_h: float = DURATION_MATCH_TOL_H,
+    bls_variability: bool = False,
 ) -> dict:
     flags = []
     reasons = []
@@ -279,6 +280,20 @@ def make_verdict(
             "confidence": 0.8,
             "flags": [],
             "reasons": ["No discrete dip events found and BLS SDE < 7."],
+        }
+    # A high SDE alone is not a detection when the peak is stellar
+    # variability: BLS fits a box to anything periodic.
+    if n_events == 0 and bls_variability:
+        return {
+            "headline": "No significant transit/eclipse signal",
+            "category": "no_signal",
+            "confidence": 0.7,
+            "flags": ["bls_peak_is_variability"],
+            "reasons": [
+                f"No discrete dip events found. The BLS peak (SDE {bls_sde:.1f}) "
+                "follows smooth, sinusoid-like variability, not a box-shaped dip. "
+                "Try the high stellar variability detrend."
+            ],
         }
 
     # Physics-based companion size. A radius just over the planetary cap is

@@ -173,3 +173,66 @@ def test_plotted_periodogram_keeps_the_peak():
     pg = result["_periodogram"]
     assert max(pg["power"]) == pytest.approx(result["power"])
     assert pg["periods"][int(np.argmax(pg["power"]))] == pytest.approx(result["period"])
+
+
+# ----------------------------------------------------------------------
+# Variability guard: a high SDE from a smooth signal is not a detection
+# ----------------------------------------------------------------------
+from vetstar_core.pipeline.detection import bls_variability_check  # noqa: E402
+from vetstar_core.pipeline.verdict import make_verdict  # noqa: E402
+
+
+def _sinusoid_lc(rng, period_d, amp, span_d=27.0, cadence_min=2.0, noise=0.001):
+    n = int(span_d * 1440.0 / cadence_min)
+    t = np.linspace(0.0, span_d, n)
+    f = 1.0 + amp * np.sin(2 * np.pi * t / period_d) + rng.normal(0.0, noise, n)
+    return t, f, np.full_like(t, noise)
+
+
+@pytest.mark.parametrize("rot_period_d", [1.3, 3.0, 6.3, 11.0])
+@pytest.mark.parametrize("amp", [0.0005, 0.002, 0.01])
+def test_guard_flags_pure_variability(rot_period_d, amp):
+    rng = np.random.default_rng(50)
+    t, f, fe = _sinusoid_lc(rng, rot_period_d, amp)
+    bls = run_bls(t, f, fe, p_min=0.5, p_max=27.0 * 0.7)
+    check = bls_variability_check(t, f, bls["period"], bls["t0"], bls["duration"])
+    assert bls["sde"] > 7.0  # the SDE alone would call this a detection
+    assert check["likely_variability"] is True
+
+
+@pytest.mark.parametrize("period_d,duration_d", [
+    (0.62, 0.04), (3.1, 0.1), (8.2, 0.18), (12.5, 0.25), (13.0, 0.7),
+])
+@pytest.mark.parametrize("depth,var_amp", [(0.003, 0.0), (0.0004, 0.0), (0.003, 0.0005)])
+def test_guard_leaves_transits_alone(period_d, duration_d, depth, var_amp):
+    rng = np.random.default_rng(51)
+    t, f, fe = _inject_box_transit(rng, period_d=period_d, t0=1.3, depth=depth,
+                                   duration_d=duration_d, cadence_min=2.0,
+                                   noise=0.001)
+    f = f + var_amp * np.sin(2 * np.pi * t / 6.3)
+    bls = run_bls(t, f, fe, p_min=0.5, p_max=27.0 * 0.7)
+    check = bls_variability_check(t, f, bls["period"], bls["t0"], bls["duration"])
+    assert check["likely_variability"] is False
+    assert check["smooth_to_box_ratio"] < 0.7
+
+
+def test_verdict_does_not_trust_a_high_sde_from_variability():
+    kw = dict(n_events=0, physics={"available": False}, centroid={"available": False},
+              odd_even={"available": False}, secondary={"available": False},
+              bls_sde=8.5)
+    flagged = make_verdict(bls_variability=True, **kw)
+    assert flagged["category"] == "no_signal"
+    assert "bls_peak_is_variability" in flagged["flags"]
+    assert make_verdict(**kw)["category"] != "no_signal"
+
+
+def test_full_vetting_reports_the_variability_check():
+    rng = np.random.default_rng(52)
+    t, f, fe = _sinusoid_lc(rng, 6.3, 0.002)
+    star = StarInfo(tic_id=0, ra=None, dec=None, tmag=10.0,
+                    teff=5800.0, radius=1.0, mass=1.0)
+    result = run_full_vetting(t, f, fe, quality=None, mom_x=None, mom_y=None, star=star)
+    assert result.bls["likely_variability"] is True
+    assert result.bls["smooth_to_box_ratio"] > 1.0
+    if not result.events:
+        assert result.verdict["category"] == "no_signal"

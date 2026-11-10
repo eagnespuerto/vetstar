@@ -386,3 +386,69 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> 
             i += 1
 
     return events
+
+
+# The BLS peak counts as stellar variability when a smooth curve explains
+# more than this many times what the best box explains of the folded light
+# curve. In tests, transits score at most 0.5 and sinusoids at least 1.9.
+BLS_VARIABILITY_GAIN_RATIO = 1.0
+_VARIABILITY_HARMONICS = 3
+
+
+def bls_variability_check(
+    t, f, period: float, t0: float, duration: float,
+    gain_ratio: float = BLS_VARIABILITY_GAIN_RATIO,
+) -> dict:
+    """Is the BLS peak a box-shaped dip, or just smooth stellar variability?
+
+    BLS fits a box to anything periodic, so rotation or pulsation gives a
+    peak too, and a high SDE. Fold the light curve at the BLS period and fit
+    two models: the BLS box (one level in transit, one outside) and a smooth
+    curve (a sinusoid at the period plus its next two harmonics, so a peak
+    at 2x or 3x the rotation period is covered). Each model's *gain* is the
+    drop in the sum of squared residuals against a flat line.
+
+    A transit is narrow, so three harmonics capture only a small part of it
+    (about a third for a box that is 5% of the period) and the box wins. A
+    sinusoid is the reverse: the box captures half of it at most.
+    ``likely_variability`` is True when the smooth gain is more than
+    ``gain_ratio`` times the box gain. The gains are returned as fractions
+    of the flat-line residual, with their ratio in ``smooth_to_box_ratio``.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(f, dtype=float)
+    out = {"likely_variability": False, "box_gain": None, "smooth_gain": None,
+           "smooth_to_box_ratio": None}
+    ok = np.isfinite(t) & np.isfinite(y)
+    if ok.sum() < 50 or not (period and period > 0 and duration and duration > 0):
+        return out
+    t, y = t[ok], y[ok] - np.mean(y[ok])
+    rss_flat = float(np.sum(y ** 2))
+    if rss_flat <= 0:
+        return out
+
+    phase = ((t - t0 + 0.5 * period) % period) - 0.5 * period
+    in_tr = np.abs(phase) < 0.5 * duration
+    if in_tr.sum() < 3 or (~in_tr).sum() < 3:
+        return out
+    rss_box = float(
+        np.sum((y[in_tr] - y[in_tr].mean()) ** 2)
+        + np.sum((y[~in_tr] - y[~in_tr].mean()) ** 2)
+    )
+
+    ang = 2.0 * np.pi * (t - t0) / period
+    cols = [np.ones_like(t)]
+    for k in range(1, _VARIABILITY_HARMONICS + 1):
+        cols += [np.sin(k * ang), np.cos(k * ang)]
+    design = np.column_stack(cols)
+    coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+    rss_smooth = float(np.sum((y - design @ coef) ** 2))
+
+    box_gain = max(rss_flat - rss_box, 0.0)
+    smooth_gain = max(rss_flat - rss_smooth, 0.0)
+    out["box_gain"] = box_gain / rss_flat
+    out["smooth_gain"] = smooth_gain / rss_flat
+    if box_gain > 0:
+        out["smooth_to_box_ratio"] = round(smooth_gain / box_gain, 3)
+    out["likely_variability"] = bool(smooth_gain > gain_ratio * box_gain)
+    return out
