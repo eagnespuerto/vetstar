@@ -118,8 +118,6 @@ export function ResultsView({ result, lcControls }: { result: VettingResult; lcC
         orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
         R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
         planet_mass_earth: massEarth ?? undefined,
-        n_sectors_with_detections: result.summary.n_events_detected > 0 ? 1 : 0,
-        n_sectors_observed: 1,
         vetting_verdict: enrichedVerdict,
       });
       setHciData(data);
@@ -136,35 +134,6 @@ export function ResultsView({ result, lcControls }: { result: VettingResult; lcC
     try {
       const data = await fetchMultisector(result.star.tic_id);
       setMultisectorData(data);
-      // Re-run HCI with updated sector counts
-      if (data.n_sectors_observed > 1) {
-        const dvtTce = result.dvt?.tce;
-        const enrichedVerdict = {
-          ...result.verdict,
-          _depth: result.events?.[0]?.depth ?? null,
-          _bls_depth: result.bls?.depth ?? null,
-          _t14_d: result.shape?.t14_d ?? null,
-          _bls_duration: result.bls?.duration ?? null,
-          _shape_class: result.shape?.shape_class ?? null,
-          _events: result.events,
-          _dvt_period_d:   dvtTce?.period_d   ?? null,
-          _dvt_duration_h: dvtTce?.duration_h ?? null,
-          _dvt_depth_frac: dvtTce?.depth_frac ?? null,
-          _dvt_impact_b:   dvtTce?.impact_b   ?? null,
-          _dvt_a_over_rs:  dvtTce?.a_over_rs  ?? null,
-        };
-        const updated = await fetchHabitability(result.star.tic_id, {
-          stellar_teff: result.star.teff ?? undefined,
-          stellar_radius_sun: result.star.radius ?? undefined,
-          stellar_mass_sun: result.star.mass ?? undefined,
-          orbital_period_d: dvtTce?.period_d ?? result.bls?.period ?? undefined,
-          R_companion_Rjup: result.physics?.R_companion_Rjup ?? undefined,
-          n_sectors_with_detections: data.n_sectors_with_detections,
-          n_sectors_observed: data.n_sectors_observed,
-          vetting_verdict: enrichedVerdict,
-        });
-        setHciData(updated);
-      }
     } catch (e: any) {
       setMsError(e.message);
     } finally {

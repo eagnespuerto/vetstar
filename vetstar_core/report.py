@@ -660,7 +660,8 @@ def _append_hci_section(story, bundle: dict, styles):
         for cv in caveats:
             trailing.append(Paragraph(f"• {cv}", body))
     if hci.get("paper_ref"):
-        trailing.append(Paragraph(f"<i>Reference: {hci['paper_ref']}</i>", styles["caption"]))
+        refs = "; ".join([hci["paper_ref"]] + list(hci.get("references") or []))
+        trailing.append(Paragraph(f"<i>References: {refs}</i>", styles["caption"]))
 
     if trailing:
         story.append(KeepTogether(trailing))

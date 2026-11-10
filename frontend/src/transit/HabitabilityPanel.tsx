@@ -25,7 +25,7 @@ export function HabitabilityPanel({ data }: { data: any }) {
             <span className="ml-3 text-sm font-semibold">{hci.tier}</span>
           </div>
           <div className="text-right text-xs opacity-70">
-            <div>Habitability Chance Index</div>
+            <div>Habitability Chance Index{hci.hci_version ? ` v${hci.hci_version}` : ""}</div>
             <div>Hill et al. (2026) STEHM</div>
           </div>
         </div>
@@ -44,6 +44,7 @@ export function HabitabilityPanel({ data }: { data: any }) {
             {data.planet.radius_earth && <span>R = {data.planet.radius_earth.toFixed(2)} R⊕ <span className="text-[10px] opacity-60">({data.planet.radius_source || "unknown source"})</span></span>}
             {data.planet.semi_major_axis_au && <span>a = {data.planet.semi_major_axis_au.toFixed(3)} AU</span>}
             {data.planet.orbital_period_d && <span>P = {data.planet.orbital_period_d.toFixed(2)} d</span>}
+            {data.planet.age_gyr != null && <span>Age ≈ {data.planet.age_gyr.toFixed(2)} Gyr <span className="text-[10px] opacity-60">({data.planet.age_source})</span></span>}
             {data.exofop_source && (
               <span className="italic">data: {data.exofop_source}</span>
             )}
@@ -153,7 +154,7 @@ export function HabitabilityPanel({ data }: { data: any }) {
               {hci.caveats.map((c: string, i: number) => (
                 <p key={i}>• {c}</p>
               ))}
-              <p className="mt-1 italic">Ref: {hci.paper_ref}</p>
+              <p className="mt-1 italic">Ref: {[hci.paper_ref, ...(hci.references || [])].join("; ")}</p>
             </div>
           )}
         </div>

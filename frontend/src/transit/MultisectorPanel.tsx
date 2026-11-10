@@ -100,11 +100,10 @@ export function MultisectorPanel({ data }: { data: any }) {
                 </>
               )}{" "}
               is kept as the representative result and its plots, HCI summary,
-              and ExoMiner views are shown below. HCI is rebuilt with the
-              real multi-sector detection counts (
-              <strong>{mast.n_sectors_with_detections ?? 0}</strong>/
-              <strong>{mast.n_sectors_observed ?? sectorsUsed.length}</strong>
-              ).
+              and ExoMiner views are shown below. Dips were found in{" "}
+              <strong>{mast.n_sectors_with_detections ?? 0}</strong> of{" "}
+              <strong>{mast.n_sectors_observed ?? sectorsUsed.length}</strong>{" "}
+              sectors; HCI v2 no longer scores the sector count.
             </p>
             {bls.period != null && (
               <p>

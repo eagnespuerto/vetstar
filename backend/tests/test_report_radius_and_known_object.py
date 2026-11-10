@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from backend.app.routers import habitability
-from vetstar_core import gaia_catalog, pipeline, tic_catalog
+from vetstar_core import gaia_catalog, hci_bundle, pipeline, tic_catalog
 from vetstar_core.pipeline import catalogs
 
 
@@ -28,7 +28,7 @@ DIP_RJUP = 8.22 / 11.209
 @pytest.fixture
 def offline_catalogs(monkeypatch):
     monkeypatch.setattr(
-        habitability, "query_exofop",
+        hci_bundle, "query_exofop",
         lambda tic: {"star": {}, "tois": [], "source": "exofop"},
     )
     monkeypatch.setattr(tic_catalog, "backfill_star", lambda star, tic: (star, False))
@@ -74,7 +74,7 @@ def test_radius_falls_back_to_dv_depth_without_rprs(offline_catalogs):
 
 
 def test_resolve_radius_priority():
-    r = habitability._resolve_planet_radius
+    r = hci_bundle.resolve_planet_radius
     # override wins
     assert r(override_earth=3.0, radius_ratio_k=RPRS, rstar_sun=RSTAR, has_dvt=True)[0] == 3.0
     # DV beats catalogue and the discrete dip

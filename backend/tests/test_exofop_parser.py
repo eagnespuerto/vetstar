@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from vetstar_core import exofop
-from vetstar_core.habitability import _score_toi_disposition
+from vetstar_core.habitability import PlanetCandidate, compute_hci
 
 FIXTURE = Path(__file__).parent / "fixtures" / "exofop_tic156002449.json"
 
@@ -97,8 +97,11 @@ def test_toi_key_normalisation(raw):
     assert exofop._toi_key(raw) == "324.01"
 
 
-def test_eb_disposition_ranks_as_false_positive():
-    assert _score_toi_disposition("EB", "324.01").score == pytest.approx(0.05)
+def test_eb_disposition_is_flagged_not_scored():
+    # HCI v2 no longer scores the ExoFOP disposition; it adds a caveat.
+    r = compute_hci(PlanetCandidate(toi_number="324.01", disposition="EB"))
+    assert all(s["name"] != "TOI disposition" for s in r.sub_scores)
+    assert any("324.01" in c and "EB" in c for c in r.caveats)
 
 
 def test_semi_major_axis_source_tagged(toi324_json):
