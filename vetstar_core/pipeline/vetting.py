@@ -9,7 +9,7 @@ import numpy as np
 from .models import StarInfo, VettingResult
 from .catalogs import apply_known_object_override, crossmatch_known_object
 from .verdict import centroid_check, make_verdict, measure_shape, odd_even_check, physics_interpretation, secondary_eclipse_search
-from .detection import clean_lightcurve, detect_events, run_bls, run_bls_constrained, run_lomb_scargle
+from .detection import bls_variability_check, clean_lightcurve, detect_events, run_bls, run_bls_constrained, run_lomb_scargle
 from .plots import make_plots
 
 
@@ -98,6 +98,13 @@ def run_full_vetting(
             bls["constrained_fallback_reason"] = (
                 "known_period_days outside valid range"
             )
+    # Box-shaped dip, or smooth variability that BLS happened to fit?
+    # Stored as two flat values so the result tables can show them.
+    var_check = bls_variability_check(
+        t_c, f_c, bls["period"], bls["t0"], bls["duration"]
+    )
+    bls["likely_variability"] = var_check["likely_variability"]
+    bls["smooth_to_box_ratio"] = var_check["smooth_to_box_ratio"]
     reporter("bls", 1.0)
 
     # Direct event detection (user-tunable sensitivity).
@@ -162,6 +169,7 @@ def run_full_vetting(
         odd_even=odd_even,
         secondary=secondary,
         bls_sde=bls["sde"],
+        bls_variability=bls["likely_variability"],
     )
     reporter("verdict", 1.0)
 

@@ -1105,12 +1105,15 @@ vetstar/
 │   ├── rv_fetch.py                      Archive-first radial-velocity lookup
 │   ├── tess_sector_dates.py             Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
 │   ├── tic_catalog.py                   TIC v8 catalog helper
+│   ├── timeouts.py                      run_with_timeout and friends on one shared worker pool
 │   └── tlcm_geometry.py                 Transit geometry + absolute masses (TLCM)
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx             Top-level Transit/Microlensing tab split, tabs, scope toggle, sensitivity panel, results, observables/ExoFOP, HCI, multisector
+│   │   ├── App.tsx             Top-level Transit/Microlensing tab split, upload/MAST form, scope toggle, job state
+│   │   ├── transit/            Transit-tab components split out of App.tsx: ResultsView, PlotsSection, SensitivityPanel, ObservablesPanel, HabitabilityPanel, MultisectorPanel, DvtPanel, RVPanel, GlossaryPanel, VetProgress, TabButtons, ui (KV, Tip, CopyField), loadingMessages
 │   │   ├── MicrolensingPanel.tsx        Microlensing pipeline container (Classifier / Coverage sub-tabs + handoff)
-│   │   ├── MicrolensingClassifier.tsx   Module A UI — data loader, drag-select, 3-model overlay, verdict/BIC/residuals panels
+│   │   ├── MicrolensingClassifier.tsx   Module A UI — state, drag-select and the 3-model overlay plot
+│   │   ├── microlensing/                Module A parts: DataLoader, ResultsPanel, DerivedPanels, GaiaPanels, ExportToolbar, PrefillBanner, plot, lightCurve, format, types
 │   │   ├── MicrolensingCoverage.tsx     Module B UI — CSV upload, sortable/observable-only table, sector pills, Analyze handoff
 │   │   ├── microlensingExport.ts        SVG→PNG rasteriser + ExoFOP-package ZIP builder (summary CSV, LC CSV, JSON, notes.md, plot.png)
 │   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel

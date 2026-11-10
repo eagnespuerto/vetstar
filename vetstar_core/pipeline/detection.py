@@ -67,6 +67,113 @@ def run_lomb_scargle(t, f, fe, p_min=0.1, p_max=20.0) -> dict:
 # period, e.g. 0.02 means scan periods in [P*0.98, P*1.02].
 BLS_KNOWN_PERIOD_TOL_FRAC = 0.02
 
+# Box widths (days) tried at every trial period: 1.2 h to 7.2 h.
+BLS_DURATIONS_D = (0.05, 0.1, 0.15, 0.2, 0.3)
+
+# Longer boxes (9.6 h to 18 h) for long-period planets and evolved hosts.
+# Each one is only tried where it is at most BLS_LONG_DURATION_MAX_FRAC of
+# the period, so a short-period search never fits a box that covers a large
+# part of the orbit (that mostly picks up stellar variability).
+# With 5%: 0.4 d from P = 8 d, 0.5 d from 10 d, 0.75 d from 15 d.
+BLS_LONG_DURATIONS_D = (0.4, 0.5, 0.75)
+BLS_LONG_DURATION_MAX_FRAC = 0.05
+
+# Points per bin when the periodogram is thinned for the plot.
+_PERIODOGRAM_THIN = 20
+
+
+def bls_durations_for(period_d: float) -> np.ndarray:
+    """Trial box widths (days) used at ``period_d``."""
+    durs = [d for d in BLS_DURATIONS_D if d < period_d]
+    durs += [
+        d for d in BLS_LONG_DURATIONS_D
+        if d <= BLS_LONG_DURATION_MAX_FRAC * period_d
+    ]
+    return np.array(durs)
+
+
+def bls_frequency_grid(
+    p_min: float, p_max: float, span: float, max_points: int,
+    min_duration: float = BLS_DURATIONS_D[0],
+) -> np.ndarray:
+    """Trial periods (ascending) on a grid that is uniform in frequency.
+
+    A BLS peak has a fixed width in frequency, about ``duration / (P * span)``,
+    so even steps in frequency sample every peak equally well. Even steps in
+    period (the old grid) put far too few points at short periods and far
+    too many at long ones.
+
+    The step is ``min_duration / span**2``, the rule that astropy's
+    ``BoxLeastSquares.autoperiod`` uses: between two neighbouring trial
+    periods the model transit drifts by a small part of the shortest box
+    over the whole light curve. ``max_points`` caps the grid (it is the old
+    ``n_periods``), so a long multi-sector baseline costs no more than before.
+    """
+    f_lo, f_hi = 1.0 / p_max, 1.0 / p_min
+    df = min_duration / max(span, p_max) ** 2
+    n = int(np.ceil((f_hi - f_lo) / df)) + 1
+    n = max(2, min(n, int(max_points)))
+    return 1.0 / np.linspace(f_hi, f_lo, n)
+
+
+def _bls_search(t, f, fe, periods: np.ndarray) -> dict:
+    """Run BLS over ``periods`` (ascending) and return the stacked arrays.
+
+    The grid is cut where a longer box becomes allowed, and each piece is
+    searched with its own set of widths (see :func:`bls_durations_for`).
+    """
+    bls = BoxLeastSquares(t, f, fe)
+    edges = [d / BLS_LONG_DURATION_MAX_FRAC for d in BLS_LONG_DURATIONS_D]
+    cuts = np.unique(np.searchsorted(periods, edges, side="left"))
+    cuts = [0] + [int(c) for c in cuts if 0 < c < len(periods)] + [len(periods)]
+    parts = []
+    for lo, hi in zip(cuts[:-1], cuts[1:]):
+        seg = periods[lo:hi]
+        parts.append(bls.power(seg, bls_durations_for(float(seg[0]))))
+    return {
+        key: np.concatenate([np.asarray(getattr(r, key)) for r in parts])
+        for key in ("period", "power", "transit_time", "duration", "depth")
+    }
+
+
+def _thin_periodogram(periods: np.ndarray, power: np.ndarray) -> dict:
+    """Thin the periodogram for transport, keeping the peak of every bin.
+
+    Taking every 20th point (the old way) can step right over a narrow
+    peak, so the plot showed a lower peak than the reported one, or none.
+    """
+    out_p, out_w = [], []
+    for lo in range(0, len(periods), _PERIODOGRAM_THIN):
+        seg = power[lo:lo + _PERIODOGRAM_THIN]
+        k = int(np.argmax(seg))
+        out_p.append(float(periods[lo + k]))
+        out_w.append(float(seg[k]))
+    return {"periods": out_p, "power": out_w}
+
+
+def _bls_summary(t, res: dict) -> dict:
+    """The result dict shared by the blind and the known-period search."""
+    power = res["power"]
+    ib = int(np.argmax(power))
+    _std = float(np.std(power))
+    sde = float((power[ib] - np.median(power)) / _std) if _std > 0 else 0.0
+    period = float(res["period"][ib])
+    t0 = float(res["transit_time"][ib])
+    return {
+        "period": period,
+        "t0": t0,
+        "duration": float(res["duration"][ib]),
+        "depth": float(res["depth"][ib]),
+        "power": float(power[ib]),
+        "sde": sde,
+        "n_transits_in_window": int(
+            np.floor((t.max() - t0) / period)
+            - np.ceil((t.min() - t0) / period)
+            + 1
+        ),
+        "_periodogram": _thin_periodogram(res["period"], power),
+    }
+
 
 def run_bls_constrained(
     t, f, fe,
@@ -80,6 +187,9 @@ def run_bls_constrained(
     Returns the same dict shape as :func:`run_bls` plus three extra keys:
     ``constrained``, ``known_period_input_days``, and ``matched_harmonic``
     (one of ``"P"``, ``"P/2"``, ``"2P"``).
+
+    Each window is sampled evenly in frequency, and the windows are searched
+    in order of period.
     """
     span = float(t.max() - t.min())
     p_max_blind = max(0.5, span * 0.7)
@@ -90,84 +200,46 @@ def run_bls_constrained(
             sub_grids.append(("P/2", known_period_days / 2.0))
         if 2.0 * known_period_days <= p_max_blind:
             sub_grids.append(("2P", 2.0 * known_period_days))
+    sub_grids.sort(key=lambda g: g[1])
 
     per_grid = max(200, n_periods // len(sub_grids))
-    grid_periods = []
-    grid_labels = []
+    windows = []
     for label, p in sub_grids:
         lo = p * (1.0 - tol_frac)
         hi = p * (1.0 + tol_frac)
-        ps = np.linspace(lo, hi, per_grid)
-        grid_periods.append(ps)
-        grid_labels.append((label, ps))
+        # A fixed count per window, as before: the windows are narrow, and
+        # the SDE needs enough off-peak samples to mean anything.
+        windows.append((label, 1.0 / np.linspace(1.0 / lo, 1.0 / hi, per_grid)))
 
-    periods = np.concatenate(grid_periods)
-    durations = np.array([0.05, 0.1, 0.15, 0.2, 0.3])
-    bls = BoxLeastSquares(t, f, fe)
-    res = bls.power(periods, durations)
-    ib = int(np.argmax(res.power))
+    res = _bls_search(t, f, fe, np.concatenate([ps for _, ps in windows]))
+    out = _bls_summary(t, res)
 
-    best_p = float(res.period[ib])
     matched = "P"
-    for label, ps in grid_labels:
-        if ps[0] <= best_p <= ps[-1]:
+    for label, ps in windows:
+        if ps[0] <= out["period"] <= ps[-1]:
             matched = label
             break
 
-    _std = float(np.std(res.power))
-    sde = float((res.power[ib] - np.median(res.power)) / _std) if _std > 0 else 0.0
-    return {
-        "period": best_p,
-        "t0": float(res.transit_time[ib]),
-        "duration": float(res.duration[ib]),
-        "depth": float(res.depth[ib]),
-        "power": float(res.power[ib]),
-        "sde": sde,
-        "n_transits_in_window": int(
-            np.floor((t.max() - res.transit_time[ib]) / res.period[ib])
-            - np.ceil((t.min() - res.transit_time[ib]) / res.period[ib])
-            + 1
-        ),
-        "_periodogram": {
-            "periods": periods.tolist()[::20],
-            "power": res.power.tolist()[::20],
-        },
-        "constrained": True,
-        "known_period_input_days": float(known_period_days),
-        "matched_harmonic": matched,
-    }
+    out["constrained"] = True
+    out["known_period_input_days"] = float(known_period_days)
+    out["matched_harmonic"] = matched
+    return out
 
 
 def run_bls(
     t, f, fe, p_min=0.5, p_max=None, n_periods=20000
 ) -> dict:
+    """Blind BLS between ``p_min`` and ``p_max`` days.
+
+    ``n_periods`` is the largest number of trial periods. The grid is even
+    in frequency (:func:`bls_frequency_grid`) and uses fewer points when the
+    baseline is short enough not to need them all.
+    """
     span = float(t.max() - t.min())
     if p_max is None:
         p_max = max(p_min * 2, span * 0.7)
-    durations = np.array([0.05, 0.1, 0.15, 0.2, 0.3])
-    bls = BoxLeastSquares(t, f, fe)
-    periods = np.linspace(p_min, p_max, n_periods)
-    res = bls.power(periods, durations)
-    ib = int(np.argmax(res.power))
-    _std = float(np.std(res.power))
-    sde = float((res.power[ib] - np.median(res.power)) / _std) if _std > 0 else 0.0
-    return {
-        "period": float(res.period[ib]),
-        "t0": float(res.transit_time[ib]),
-        "duration": float(res.duration[ib]),
-        "depth": float(res.depth[ib]),
-        "power": float(res.power[ib]),
-        "sde": sde,
-        "n_transits_in_window": int(
-            np.floor((t.max() - res.transit_time[ib]) / res.period[ib])
-            - np.ceil((t.min() - res.transit_time[ib]) / res.period[ib])
-            + 1
-        ),
-        "_periodogram": {
-            "periods": periods.tolist()[::20],     # sub-sample for transport
-            "power": res.power.tolist()[::20],
-        },
-    }
+    periods = bls_frequency_grid(p_min, p_max, span, n_periods)
+    return _bls_summary(t, _bls_search(t, f, fe, periods))
 
 
 def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> list:
@@ -314,3 +386,69 @@ def detect_events(t, f, threshold=0.997, min_pts=10, min_snr=4.0, max_gap=5) -> 
             i += 1
 
     return events
+
+
+# The BLS peak counts as stellar variability when a smooth curve explains
+# more than this many times what the best box explains of the folded light
+# curve. In tests, transits score at most 0.5 and sinusoids at least 1.9.
+BLS_VARIABILITY_GAIN_RATIO = 1.0
+_VARIABILITY_HARMONICS = 3
+
+
+def bls_variability_check(
+    t, f, period: float, t0: float, duration: float,
+    gain_ratio: float = BLS_VARIABILITY_GAIN_RATIO,
+) -> dict:
+    """Is the BLS peak a box-shaped dip, or just smooth stellar variability?
+
+    BLS fits a box to anything periodic, so rotation or pulsation gives a
+    peak too, and a high SDE. Fold the light curve at the BLS period and fit
+    two models: the BLS box (one level in transit, one outside) and a smooth
+    curve (a sinusoid at the period plus its next two harmonics, so a peak
+    at 2x or 3x the rotation period is covered). Each model's *gain* is the
+    drop in the sum of squared residuals against a flat line.
+
+    A transit is narrow, so three harmonics capture only a small part of it
+    (about a third for a box that is 5% of the period) and the box wins. A
+    sinusoid is the reverse: the box captures half of it at most.
+    ``likely_variability`` is True when the smooth gain is more than
+    ``gain_ratio`` times the box gain. The gains are returned as fractions
+    of the flat-line residual, with their ratio in ``smooth_to_box_ratio``.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(f, dtype=float)
+    out = {"likely_variability": False, "box_gain": None, "smooth_gain": None,
+           "smooth_to_box_ratio": None}
+    ok = np.isfinite(t) & np.isfinite(y)
+    if ok.sum() < 50 or not (period and period > 0 and duration and duration > 0):
+        return out
+    t, y = t[ok], y[ok] - np.mean(y[ok])
+    rss_flat = float(np.sum(y ** 2))
+    if rss_flat <= 0:
+        return out
+
+    phase = ((t - t0 + 0.5 * period) % period) - 0.5 * period
+    in_tr = np.abs(phase) < 0.5 * duration
+    if in_tr.sum() < 3 or (~in_tr).sum() < 3:
+        return out
+    rss_box = float(
+        np.sum((y[in_tr] - y[in_tr].mean()) ** 2)
+        + np.sum((y[~in_tr] - y[~in_tr].mean()) ** 2)
+    )
+
+    ang = 2.0 * np.pi * (t - t0) / period
+    cols = [np.ones_like(t)]
+    for k in range(1, _VARIABILITY_HARMONICS + 1):
+        cols += [np.sin(k * ang), np.cos(k * ang)]
+    design = np.column_stack(cols)
+    coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+    rss_smooth = float(np.sum((y - design @ coef) ** 2))
+
+    box_gain = max(rss_flat - rss_box, 0.0)
+    smooth_gain = max(rss_flat - rss_smooth, 0.0)
+    out["box_gain"] = box_gain / rss_flat
+    out["smooth_gain"] = smooth_gain / rss_flat
+    if box_gain > 0:
+        out["smooth_to_box_ratio"] = round(smooth_gain / box_gain, 3)
+    out["likely_variability"] = bool(smooth_gain > gain_ratio * box_gain)
+    return out

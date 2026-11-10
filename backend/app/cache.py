@@ -27,6 +27,7 @@ from typing import Optional
 import numpy as np
 
 from vetstar_core.pipeline import clean_lightcurve
+from vetstar_core.timeouts import run_with_timeout
 
 from . import cache_store
 
@@ -269,32 +270,23 @@ def _get_ffi_cutout(tic_id, sector, ra, dec, size_px: int = 15, timeout_s: float
     caching by (tic_id, sector). Fails soft (returns None). The TESScut
     fetch is bounded by a timeout and run in a worker thread so a slow or
     stuck MAST request can never hang the request and trip a gateway 502."""
-    from concurrent.futures import TimeoutError as FutureTimeout
-
     from vetstar_core.ffi_cutout import make_ffi_cutout
 
     found, cached = _peek_ffi(tic_id, sector)
     if found:
         return cached
 
-    cutout = None
-    # Not a `with` block: its exit calls shutdown(wait=True), which would
-    # block until the fetch finished and make the timeout useless.
-    ex = ThreadPoolExecutor(max_workers=1)
     try:
-        fut = ex.submit(
+        cutout = run_with_timeout(
             make_ffi_cutout, ra=ra, dec=dec, sector=sector,
-            tic_id=tic_id, size_px=size_px,
+            tic_id=tic_id, size_px=size_px, timeout_s=timeout_s,
         )
-        cutout = fut.result(timeout=timeout_s)
-    except FutureTimeout:
+    except TimeoutError:
         log.warning("FFI cutout timed out after %.0fs for TIC %s S%s", timeout_s, tic_id, sector)
         return None  # don't cache a timeout — a retry may succeed
     except Exception as e:
         log.warning("FFI cutout error for TIC %s S%s: %s", tic_id, sector, e)
         cutout = None
-    finally:
-        ex.shutdown(wait=False)
 
     _put_ffi((tic_id, sector), cutout)  # cache success or a clean "no cutout" (None)
     return cutout
