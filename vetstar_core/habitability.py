@@ -365,7 +365,10 @@ def _score_habitable_zone(a_au, teff, rstar, mstar) -> SubScore:
     teff = teff or 5778.0
     rstar = rstar or 1.0
     l_ratio = (rstar ** 2) * ((teff / 5778.0) ** 4)
-    sq = math.sqrt(max(l_ratio, 0.01))
+    # Guard against a negative only. A 0.01 L_sun floor here pushed the HZ of
+    # dim hosts (Proxima ~0.0015, TRAPPIST-1 ~0.0006 L_sun) several times too
+    # far out, so their real HZ planets scored "Too hot".
+    sq = math.sqrt(max(l_ratio, 0.0))
     inner_ohz = HZ_INNER_OHZ_AU * sq
     outer_ohz = HZ_OUTER_OHZ_AU * sq
     inner_chz = HZ_INNER_CHZ_AU * sq

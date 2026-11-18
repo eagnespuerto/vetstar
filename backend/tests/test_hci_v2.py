@@ -135,6 +135,30 @@ def test_age_past_main_sequence_is_penalised():
     assert _sub(r, "System age")["score"] < 0.6
 
 
+# ---- habitable zone around dim hosts ------------------------------------
+
+@pytest.mark.parametrize("name, teff, rstar, a_au", [
+    ("TRAPPIST-1e", 2566.0, 0.119, 0.0293),
+    ("Proxima b", 2833.0, 0.162, 0.0485),
+])
+def test_dim_host_hz_planet_is_in_the_conservative_hz(name, teff, rstar, a_au):
+    # A 0.01 L_sun floor used to push these HZs outward and score them "Too hot".
+    s = hab._score_habitable_zone(a_au, teff, rstar, None)
+    assert s.label == "Conservative HZ", name
+    assert s.score >= 0.75
+
+
+def test_hz_edges_scale_with_sqrt_l_below_old_floor():
+    teff, rstar = 2566.0, 0.119
+    l_ratio = rstar ** 2 * (teff / 5778.0) ** 4
+    assert l_ratio < 0.01
+    inner = hab.HZ_INNER_CHZ_AU * l_ratio ** 0.5
+    just_inside = hab._score_habitable_zone(inner * 1.01, teff, rstar, None)
+    just_outside = hab._score_habitable_zone(inner * 0.99, teff, rstar, None)
+    assert just_inside.label == "Conservative HZ"
+    assert just_outside.label == "Warm edge (OHZ)"
+
+
 # ---- bundle (vetstar_core.hci_bundle) -------------------------------------
 
 @pytest.fixture
