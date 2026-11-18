@@ -87,7 +87,19 @@ async function j<T>(r: Response): Promise<T> {
 
 export const nemesisStatus = () => fetch(`${API_BASE}/api/nemesis/status`).then((r) => j<NemesisStatus>(r));
 
-export const submitNemesis = (req: NemesisJobRequest) =>
+export interface NemesisSectors {
+  tic: number;
+  sectors: { sector: number; cadence: NemesisJobRequest["cadence"] }[];
+  unsupported: number[];
+  max_supported: number;
+}
+
+/** Sectors NEMESIS can actually run for this star (full-frame-image coverage
+ *  that is also in NEMESIS's sector table). */
+export const nemesisSectors = (tic: number) =>
+  fetch(`${API_BASE}/api/nemesis/sectors/${tic}`).then((r) => j<NemesisSectors>(r));
+
+export const submitNemesis =(req: NemesisJobRequest) =>
   fetch(`${API_BASE}/api/nemesis/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

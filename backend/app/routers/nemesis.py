@@ -94,6 +94,14 @@ def nemesis_submit(job: NemesisJob):
     return _call("POST", "/jobs", job.model_dump(exclude_none=True))
 
 
+@router.get("/api/nemesis/sectors/{tic}")
+def nemesis_sectors(tic: int):
+    """Sectors NEMESIS can run for this star (checked before a job is queued)."""
+    if tic <= 0:
+        raise HTTPException(422, "TIC must be positive")
+    return _call("GET", f"/sectors/{tic}")
+
+
 @router.get("/api/nemesis/jobs/{job_id}")
 def nemesis_job(job_id: str):
     return _call("GET", f"/jobs/{_job_id(job_id)}")

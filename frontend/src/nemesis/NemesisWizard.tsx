@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { mastSectors, type SectorInfo } from "../api";
 import {
-  nemesisFileUrl, nemesisFiles, nemesisHci, nemesisJob, nemesisResult, nemesisStatus,
+  nemesisFileUrl, nemesisFiles, nemesisHci, nemesisJob, nemesisResult, nemesisSectors, nemesisStatus,
   submitNemesis, type LeoTest, type NemesisJobRequest, type NemesisJobStatus,
   type NemesisResult, type NemesisStatus,
 } from "./api";
@@ -247,6 +247,7 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
   const [sectors, setSectors] = useState<SectorInfo[] | null>(null);
   const [sector, setSector] = useState<number | null>(null);
   const [lookup, setLookup] = useState<"idle" | "busy" | "error">("idle");
+  const [skipped, setSkipped] = useState<number[]>([]);
   const [opts, setOpts] = useState<Omit<NemesisJobRequest, "tic" | "sector">>({
     cadence: "30 minute", minP: 0.5, N_transits: 3, do_TLS_Search: true,
   });
@@ -270,7 +271,16 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
     if (!Number.isInteger(id) || id <= 0) { setError("Enter a TIC number, for example 103633434."); return; }
     setError(null); setLookup("busy"); setSectors(null); setSector(null);
     try {
-      const s = await mastSectors(id);
+      let s: SectorInfo[];
+      try {
+        // Ask the worker which sectors NEMESIS can run; others make NEMESIS fail.
+        const ns = await nemesisSectors(id);
+        s = ns.sectors.map((x) => ({ sector: x.sector, providers: [] }));
+        setSkipped(ns.unsupported);
+      } catch {
+        s = await mastSectors(id);  // older worker without /sectors
+        setSkipped([]);
+      }
       setSectors(s); setSector(s.length ? s[0].sector : null); setLookup("idle");
     } catch (e: any) {
       setLookup("error"); setError(e.message);
@@ -381,6 +391,12 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
                       </button>
                     ))}
                   </div>
+                  {skipped.length > 0 && (
+                    <p className="text-xs text-muted mt-2">
+                      Not listed: sector{skipped.length > 1 ? "s" : ""} {skipped.join(", ")}. TESS observed this
+                      star there, but this NEMESIS version cannot process those sectors yet. Use Quick check for them.
+                    </p>
+                  )}
                 </div>
               )
           )}
