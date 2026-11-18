@@ -11,8 +11,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY worker ./worker
 
+# One BLAS/OpenMP thread and fewer malloc arenas: same results, much less
+# memory on small instances (each BLAS thread keeps its own buffers).
 ENV MPLBACKEND=Agg \
     PYTHONUNBUFFERED=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMBA_NUM_THREADS=1 \
+    MALLOC_ARENA_MAX=2 \
     NEMESIS_JOBS_DIR=/data/jobs \
     NEMESIS_CACHE_DIR=/data/cache
 RUN mkdir -p /data/jobs /data/cache

@@ -436,6 +436,12 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
                   <div className="space-y-1">
                     <div className="text-xs text-muted font-mono">
                       TIC {result.meta.tic} · Sector {result.meta.sector} · {primary.params.method} · NEMESIS {result.meta.nemesis_version}
+                      {result.meta.lite && (
+                        <span className="chip ml-2 bg-lagoon-100 text-lagoon-800 font-sans"
+                              title="This server runs NEMESIS with a coarser period grid (oversampling 3 instead of 9) to fit in a small amount of memory. Very shallow signals may be missed.">
+                          Light mode
+                        </span>
+                      )}
                     </div>
                     <h3 className="text-2xl font-bold">{verdict?.title ?? "LEO-Vetter did not run"}</h3>
                     <p className="text-sm max-w-3xl">{verdict?.text ?? primary.leo.reason}</p>

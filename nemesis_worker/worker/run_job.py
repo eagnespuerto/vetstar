@@ -40,10 +40,41 @@ def build_settings(req: dict, out_dir: Path) -> dict:
     s["N_TLS_threads"] = int(os.environ.get("NEMESIS_TLS_THREADS", "1"))
     # NEMESIS defaults to the Primary Mission (sectors 1-26). Allow later sectors.
     s["last_updated_sector"] = int(os.environ.get("NEMESIS_LAST_SECTOR", "120"))
+    if lite_mode():
+        s.update(LITE_SETTINGS)
     for key, cast in ALLOWED_OVERRIDES.items():
         if req.get(key) is not None:
             s[key] = cast(req[key])
     return s
+
+
+# Light mode for small instances (e.g. Render free, 512 MB). Everything here
+# skips work the vetstar UI does not show, except the TLS grid, which is
+# coarser than NEMESIS II's default (oversampling 9): a little less sensitive
+# to very shallow signals, much less memory and CPU. Recorded in result meta.
+LITE_SETTINGS = {
+    "do_DSS_plot": False,            # no DSS sky image download
+    "keep_FITS": False,
+    "keep_imagedata": False,
+    "keep_raw_and_preclip": False,
+    "keep_extra_files": False,
+    "oversampling_factor": 3,        # TLS/BLS period grid (default 9)
+    "duration_grid_step": 1.1,       # TLS duration grid (default 1.05)
+    "N_TLS_threads": 1,
+}
+
+
+def lite_mode() -> bool:
+    return os.environ.get("NEMESIS_LITE", "0").lower() in ("1", "true", "yes")
+
+
+def peak_rss_mb():
+    """Peak memory of this job process, so we can size the instance."""
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)  # KiB on Linux
+    except Exception:
+        return None
 
 
 def star_info(tic: int) -> dict:
@@ -90,6 +121,10 @@ def main(job_dir: str) -> int:
         _hdu, lc_df, transit_results, _used = full_pipeline(
             ID=tic, path=str(out_dir) + "/", cadence=cadence, Sector=sector, settings=settings,
         )
+        # Free the pixel data before summarising and drawing figures.
+        del _hdu, _used
+        import gc
+        gc.collect()
         if lc_df is None or len(lc_df) == 0:
             raise RuntimeError("NEMESIS produced no usable light curve for this star and sector.")
         print("[vetstar] summarising", flush=True)
@@ -103,6 +138,8 @@ def main(job_dir: str) -> int:
             "tic": tic, "sector": sector, "cadence": cadence,
             "nemesis_version": nemesis_tess.__version__,
             "runtime_s": round(time.time() - started, 1),
+            "lite": lite_mode(),
+            "peak_rss_mb": peak_rss_mb(),
         }
         (job / "result.json").write_text(json.dumps(result))
         print("[vetstar] done", flush=True)

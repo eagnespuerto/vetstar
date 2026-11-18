@@ -72,7 +72,8 @@ export interface NemesisResult {
   figures?: { fold?: string | null; periodogram?: string | null; light_curve?: string | null; odd_even?: string | null };
   star?: { tic_id: number; ra?: number | null; dec?: number | null; tmag?: number | null;
            teff?: number | null; radius?: number | null; mass?: number | null; logg?: number | null };
-  meta: { tic: number; sector: number; cadence: string; nemesis_version: string; runtime_s: number };
+  meta: { tic: number; sector: number; cadence: string; nemesis_version: string; runtime_s: number;
+          lite?: boolean; peak_rss_mb?: number | null };
 }
 
 async function j<T>(r: Response): Promise<T> {
