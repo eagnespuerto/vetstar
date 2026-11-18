@@ -13,7 +13,7 @@
 Search a TESS star with the same methods professional surveys use, without
 installing anything or writing code.
 
-Professional pipelines are powerful but hard to start with: pinned Python
+Professional pipelines are hard to start with: pinned Python
 environments, long notebooks, dozens of settings, and outputs written for
 experts. Vetstar v2 puts two of them behind a guided web interface and
 explains every result in plain words.
@@ -61,7 +61,7 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 
 > **In-depth scientific documentation:** see
 > [docs/SCIENCE.md](docs/SCIENCE.md) for a full mathematical / algorithmic
-> walkthrough of the pipeline — detection, periodograms, transit geometry
+> walkthrough of the pipeline: detection, periodograms, transit geometry
 > (TLCM), POE forward model, RV mass function, HCI scoring, ExoMiner views,
 > and FFI rendering, with every governing equation rendered as a LaTeX
 > image.
@@ -81,7 +81,7 @@ Microlensing** tabs in the header.
 
 ### Transit Quick check (Vetstar's own pipeline)
 
-- **Period searches** — Box Least Squares (BLS) + Lomb-Scargle periodograms
+- **Period searches**: Box Least Squares (BLS) + Lomb-Scargle periodograms
 - **Adaptive dip event detection** with adjustable sensitivity (see below)
 - **Optional sinusoidal-regression detrend** before BLS (toggle: *High stellar
   variability*). Fits a sine + first harmonic at the Lomb-Scargle peak (or a
@@ -89,17 +89,17 @@ Microlensing** tabs in the header.
   only the residual. Helps surface shallow planetary dips on spotted rotators
   and other wave-like variables; skipped automatically if the fitted amplitude
   falls below the per-cadence noise floor.
-- **Centroid offset test** — distinguishes on-target events from background blends
-- **Odd / even transit depth comparison** — eclipsing-binary indicator
+- **Centroid offset test**: distinguishes on-target events from background blends
+- **Odd / even transit depth comparison**: eclipsing-binary indicator
 - **Secondary eclipse search** at phase 0.5, with a user-tunable σ threshold
   (1.0σ–7.0σ, default 3σ)
 - **Transit shape analysis** (U vs V, ingress / egress / flat-bottom durations)
 - **Physics-based companion sizing** with CROWDSAP dilution correction
-- **Target field — FFI cutout**: a Full-Frame-Image thumbnail of the patch
+- **Target field (FFI cutout)**: a Full-Frame-Image thumbnail of the patch
   of sky the light curve came from, fetched from MAST's **TESScut** service
   and rendered with an asinh / percentile stretch (the same scaling
   `astrocut` uses). The target is marked with a red **+** and the photometric
-  aperture is outlined in yellow — a quick eyeball check for a bright
+  aperture is outlined in yellow. It is a quick eyeball check for a bright
   neighbour or background eclipsing binary blended into the aperture (see
   [Example output](#example-output)). Auto-loads in its own panel below the
   results and is embedded in the PDF.
@@ -109,15 +109,15 @@ Microlensing** tabs in the header.
   shows the candidate's own epoch converted.
 - **ExoFOP-TESS TOI parameters**: a standalone observables section (separate
   from HCI) lays out the full ExoFOP
-  TOI submission parameter set — the four required fields (period, epoch in
+  TOI submission parameter set: the four required fields (period, epoch in
   BJD, depth in ppm, duration in hours) plus inclination, impact parameter,
   Rp/R★, a/R★, radius, mass, equilibrium temperature, insolation, stellar
-  density, semi-major axis, eccentricity, and RV semi-amplitude — mapped from
+  density, semi-major axis, eccentricity, and RV semi-amplitude, mapped from
   the measured and derived quantities and ready to copy into ExoFOP. The same
   table is included in the PDF.
 - **Multi-event diagnostic plots**: full light curve with all events shaded
   and numbered (with the y-axis sized to keep every detected event's trough
-  visible — earlier versions used a fixed 0.3 percentile floor that clipped
+  visible. Earlier versions used a fixed 0.3 percentile floor that clipped
   the deepest dips on EB-like targets), multi-panel zoom grid showing depth
   + duration + SNR per event, centroid behaviour, BLS and Lomb-Scargle
   periodograms. When the
@@ -125,7 +125,7 @@ Microlensing** tabs in the header.
   variability detrend** panel is added (raw flux + fitted sin/harmonic
   overlay + residual fed to BLS) and is shareable to ImgBB like the other
   plots
-- **LC plot view controls** (presentation only — detection logic is
+- **LC plot view controls** (presentation only; detection logic is
   unaffected). The full-LC plot defaults to a **1-day rolling-median flatten
   + 30-min binned overlay**, so shallow dips don't drown in long-period
   variability on noisy targets. Toggles above the plot let you turn the
@@ -154,19 +154,19 @@ Microlensing** tabs in the header.
   phase and stays up under the results until the PDF is ready. The older
   endpoints (`POST /api/mast/analyze_async`, `POST /api/mast/analyze`,
   `POST /api/mast/report`, `POST /api/report`) still work for other clients.
-- **PDF report** for archiving — a clean, consistent multi-page layout: every
+- **PDF report** for archiving: a clean, consistent multi-page layout: every
   page carries the same header band and a footer with page numbers, tables
   share one zebra-striped style, section headings stay attached to their
   content (no orphaned headings across page breaks), and embedded plots keep
   their true aspect ratio. The report is self-contained: alongside the vetting
   tables and diagnostic plots it embeds the **FFI cutout**, the **Habitability
-  Chance Index** (with the combined HCI summary image — see below), the
+  Chance Index** (with the combined HCI summary image; see below), the
   **predicted observables (POE)**, the **TLCM** transit-geometry values, the
   **ExoFOP TOI parameters** table, and the full **ExoMiner** feature set
   (scalars + diagnostic views). These extra analyses are recomputed
   server-side at report time, so a single click yields a report covering every
   analysis the studio offers (each block is skipped gracefully if the
-  underlying data — e.g. a TIC ID for ExoFOP — is unavailable).
+  underlying data, e.g. a TIC ID for ExoFOP, is unavailable).
 - **Multi-sector PDF report**: the multi-sector panel can export the
   representative sector's single-sector report (the sector with the highest
   BLS SDE).
@@ -187,9 +187,9 @@ classifier below.
 
 A second top-level pipeline sitting alongside Transit, for
 detecting/characterising **single-lens microlensing events** in TESS
-photometry. Positioned as a recovery / characterisation tool — best
+photometry. Positioned as a recovery / characterisation tool, best
 demonstrated by feeding it known events from ground surveys or Gaia
-alerts that happen to fall in TESS sectors — not blind discovery.
+alerts that happen to fall in TESS sectors. It is not for blind discovery.
 
 Two independent sub-tools, both under the **Microlensing** header tab:
 
@@ -203,35 +203,35 @@ corresponding planet mass in Earth/Jupiter units under standard bulge
 priors: M_L = 0.3 M☉, D_L = 6 kpc, D_S = 8 kpc). Both are surfaced in
 the classifier UI and included in the PDF report.
 
-**Module A — Model-comparison classifier.** Drag a window across a positive
+**Module A: model-comparison classifier.** Drag a window across a positive
 excursion in an uploaded light curve (JSON or CSV, or a built-in PSPL/flare
 synthetic demo). The backend fits three competing models on the windowed,
 baseline-normalised flux:
 
-- **PSPL (Paczyński single-lens)** — closed-form point-source point-lens
+- **PSPL (Paczyński single-lens)**: closed-form point-source point-lens
   magnification `A(u) = (u²+2) / (u·√(u²+4))` with blending
   `F = f_s·A(t) + f_b`. 5 free params: `t0, tE, u0, f_s, f_b`.
-- **Flare (Davenport 2014 empirical template)** — the key astrophysical
+- **Flare (Davenport 2014 empirical template)**: the key astrophysical
   impostor. Polynomial rise, double-exponential decay. 3 free params:
   `t_peak, amplitude, fwhm`.
-- **Null** — flat baseline (1 free param, closed-form weighted mean).
+- **Null**: flat baseline (1 free param, closed-form weighted mean).
 
 Model selection uses **BIC** (Bayesian Information Criterion). The verdict
-follows the spec's decision rules — PSPL wins strongly if
+follows the spec's decision rules: PSPL wins strongly if
 `ΔBIC(null − PSPL) > 10` and `|ΔBIC(flare − PSPL)| > 6`; anything closer
 returns `ambiguous`. Frontend renders a verdict badge with confidence, a
 BIC bar chart (with per-model overlay toggles on the light curve), the
 fitted PSPL parameters with linearised 1σ errors, a **symmetry score**
 (correlation of the PSPL residual's left wing with the mirrored right
-wing — PSPL residuals should look uncorrelated, flare residuals
+wing; PSPL residuals should look uncorrelated, flare residuals
 asymmetric), and a **residuals sub-plot** with per-model switcher.
 Achromaticity is flagged as *untestable from single-band TESS data* in
 the notes; the response leaves a hook for an optional second-band array
 to be added later.
 
-**Module B — TESS sector-overlap targeting.** Upload a CSV of known /
+**Module B: TESS sector-overlap targeting.** Upload a CSV of known /
 candidate events with columns `event_id, ra, dec, t0, tE` (Gaia alerts,
-OGLE / MOA / KMTNet event lists — all publish these). For each event the
+OGLE / MOA / KMTNet event lists all publish these). For each event the
 backend queries `tess-point` for `(sector, camera, ccd)` triples covering
 the coordinates, then checks whether `t0` (and optionally `t0 ± margin·tE`
 for wings) falls inside each returned sector's observation window. A
@@ -251,7 +251,7 @@ PDF with the verdict banner, target block, observables table, predicted
 planet parameters table, PSPL best-fit table, model-comparison BIC
 table, and the embedded plot; and a **Download ExoFOP package** button
 that assembles a store-only ZIP with a headline `summary.csv` (one row
-per fit — verdict, confidence, PSPL params + errors, all three BICs,
+per fit: verdict, confidence, PSPL params + errors, all three BICs,
 ΔBIC, symmetry score), `lightcurve_windowed.csv` (the data fed to the
 fit plus each model's curve on the same grid), a human-readable
 `notes.md` suitable for pasting into ExoFOP follow-up notes, a
@@ -265,21 +265,20 @@ Module A. In the classifier the prefill banner offers a **Fetch TESS
 light curve** button that resolves the event's RA/Dec to the nearest TIC
 via MAST, walks available sectors newest-first (preferring SPOC / TESS-SPOC
 / QLP over DVT-only sectors), and loads the raw arrays directly into the
-classifier — no manual FITS upload needed. Selection window auto-sets
+classifier, with no manual FITS upload. Selection window auto-sets
 around `t0 ± 2·tE` on arrival; a MAST portal link is offered as fallback.
 
-**A critical caveat is surfaced in the UI**: the Galactic bulge — where
-microlensing rates peak — sits at ecliptic latitude ≈ −5.5°, right in
-TESS's *thinnest* coverage zone (cameras start ~6° off the ecliptic).
-Most classic bulge events will come back **not observable**. This is
-expected, not a bug — realistic yield is events at mid/high ecliptic
-latitudes or bulge-adjacent fields.
+The UI warns about one limit. The Galactic bulge, where microlensing
+rates peak, sits at ecliptic latitude ≈ −5.5°, right in TESS's *thinnest*
+coverage zone (cameras start ~6° off the ecliptic). So most classic bulge
+events come back **not observable**, as expected. Realistic yield is events
+at mid/high ecliptic latitudes or bulge-adjacent fields.
 
 Endpoints: `POST /api/microlensing/fit` (JSON body) and
 `POST /api/microlensing/coverage` (multipart CSV upload,
 `?margin_te=<float>` query knob for the wing margin).
 Tests: `backend/tests/test_microlensing.py` and
-`test_microlensing_coverage.py` — 22 tests exercising synthetic PSPL /
+`test_microlensing_coverage.py`: 22 tests exercising synthetic PSPL /
 flare / null recovery, symmetry, CSV parsing, sector lookup, and the
 bulge-zone flag.
 
@@ -320,25 +319,25 @@ required clicking *Compute HCI*) and queries **ExoFOP-TESS** for TOI data
 (planet radius, period, semi-major axis, disposition) and stellar parameters.
 If ExoFOP is unavailable it falls back to the TIC v8 catalog via astroquery.
 All ExoFOP-derived values can be overridden from the request body. Toggling
-the LC view (detrend / bin) does not re-trigger HCI — it's keyed on
+the LC view (detrend / bin) does not re-trigger HCI. It's keyed on
 `(tic_id, sector)` and cached for the lifetime of the result panel.
 
 **Light-curve-driven inputs.** Three sub-scores now fall back to direct
 transit observables when catalogue values are missing, so the HCI can be
 computed from the light curve alone:
 
-- **Stellar type** — with no spectroscopic Teff, the host is typed from the
+- **Stellar type**: with no spectroscopic Teff, the host is typed from the
   transit-derived mean stellar density (Seager & Mallén-Ornelas 2003),
   inverted against the Pecaut & Mamajek (2013) main-sequence sequence to an
   approximate spectral type / Teff / radius (assumes a dwarf and a central
   transit; flagged in the caveats).
-- **Habitable zone** — scored from the semi-major axis in AU when available
+- **Habitable zone**: scored from the semi-major axis in AU when available
   (catalogue, override, or the TLCM photometric *a/R★ × R★*). When no AU value
   can be formed, it falls back to the instellation computed directly from the
   scaled semi-major axis, *S/S⊕ = (Teff/Teff☉)⁴ (215.03 / (a/R★))²*, scored
-  against the Kopparapu et al. (2013/2014) flux boundaries — needing no
+  against the Kopparapu et al. (2013/2014) flux boundaries, needing no
   catalogue luminosity or distance.
-- **Planet size** — with no catalogue radius, *Rp = k × R★* from the radius
+- **Planet size**: with no catalogue radius, *Rp = k × R★* from the radius
   ratio *k = √depth* and the (catalogue or density-estimated) stellar radius.
 
 **HCI summary image (shareable).** Each HCI run also returns a single
@@ -346,7 +345,7 @@ Python-generated PNG (`hci_image`) that gathers, in one figure, the headline
 score and tier, a top-down **planet-system diagram** (host star colored by
 Teff, habitable-zone band with dashed inner/outer guides, orbit ring, planet
 on its orbit, plus a star-type / Teff / semi-major-axis / planet-radius
-overlay — the same visual language as the ExoWorld tuner stage), the six
+overlay (the same visual language as the ExoWorld tuner stage), the six
 sub-score **metrics with their weightings**, and side-by-side tables of the
 **predicted observables (POE)** and the **TLCM** geometry values. The system
 diagram is laid out inside the existing header band via a sub-gridspec, so
@@ -374,7 +373,7 @@ objects:
 - **Predicted transit depth**
 
 Results appear in their own **Observables, parameters & TLCM** section
-(directly below the diagnostic tests, independent of the HCI panel — it
+(directly below the diagnostic tests, independent of the HCI panel; it
 auto-computes with the results, so you can read off the transit parameters
 without ever running the habitability score). They are also folded into the
 HCI (semi-major axis derived from period feeds the habitable-zone sub-score)
@@ -390,7 +389,7 @@ so the panel stays useful:
    targets whose data live in a follow-up row, like TIC 330014070, are
    parsed correctly).
 2. **TIC v8** via `astroquery.mast.Catalogs`.
-3. **Gaia DR3** via Vizier (`I/355/gaiadr3`) — a 3 ″ cone around the TIC
+3. **Gaia DR3** via Vizier (`I/355/gaiadr3`): a 3 ″ cone around the TIC
    sky position picks up Teff/logg/distance from GSP-Phot (and FLAME radius
    when present), with parallax inversion as a distance fallback. This is
    typically what unlocks the angular quantities (HZ in mas, astrometric Δθ,
@@ -408,10 +407,10 @@ TOI parameter set**, in submission order, mapping the studio's measured and
 derived quantities to the fields ExoFOP expects. The four **required** fields
 are flagged with `***`:
 
-- **Orbital Period** (days) — BLS period
-- **Transit Epoch** (BJD) — pipeline `t0`, converted **BTJD → BJD** (+2,457,000)
-- **Transit Depth** (ppm) — observed (dilution-corrected where available) depth
-- **Transit Duration** (hrs) — fitted T14
+- **Orbital Period** (days): BLS period
+- **Transit Epoch** (BJD): pipeline `t0`, converted **BTJD → BJD** (+2,457,000)
+- **Transit Depth** (ppm): observed (dilution-corrected where available) depth
+- **Transit Duration** (hrs): fitted T14
 
 …followed by inclination, impact parameter *b*, Rp/R★, a/R★, radius (R⊕),
 mass (M⊕), **equilibrium temperature** (Teq = 278.3·S^¼ K), insolation,
@@ -447,7 +446,7 @@ K by the min/max method) feeds the predicted observables and HCI. RV lookup is a
 
 When an absolute companion mass is available (RV semi-amplitude from the archive, an uploaded RV series, or an explicit override), the HCI **planet-size sub-score** is refined by bulk density (mass/radius): a rocky-consistent density (>~3.3 g/cm^3) confirms a solid surface, while a low density (<~2.2 g/cm^3) flags a volatile/H-He envelope and downgrades the score regardless of radius. Mass is resolved automatically from the archive on each HCI run (fails safe to radius-only) and can be set explicitly via `planet_mass_earth`.
 
-Planet mass from radius is computed with two relations for comparison — Chen & Kipping (2017, default) and a simple piecewise power-law — and both estimates plus their spread are reported (the mass-radius relation is the dominant error in the radius->mass->K chain). Select via `mr_relation` ("chen_kipping" | "powerlaw") on `/api/observables`.
+Planet mass from radius is computed with two relations for comparison, Chen & Kipping (2017, default) and a simple piecewise power-law, and both estimates plus their spread are reported (the mass-radius relation is the dominant error in the radius->mass->K chain). Select via `mr_relation` ("chen_kipping" | "powerlaw") on `/api/observables`.
 
 The mass-radius spread is propagated into the HCI itself: when only an estimated mass is available, both relations are run, the density check is evaluated for each, and the resulting size-score spread is carried into a reported **HCI range** (e.g. 78.5 with a 69.5-78.5 band). A measured mass (RV) collapses the range to a single value.
 
@@ -457,9 +456,9 @@ The scaled semi-major axis a/Rs is computed two independent ways and cross-check
 
 Replicates the full ExoMiner TFRecord feature set (Valizadegan et al. 2022,
 ApJ 926 120) from the parsed light curve, surfaced in an auto-expanding panel
-below the standard vetting output. Produces seven phase-folded views —
+below the standard vetting output. Produces seven phase-folded views:
 global (2001-bin), local (201-bin), secondary (phase 0.5), odd-transit,
-even-transit, and global / local centroid-motion views — plus scalar
+even-transit, and global / local centroid-motion views, plus scalar
 diagnostics (period, duration, depth in ppm, transit count, odd/even σ,
 secondary-depth σ, centroid-shift σ, scatter MAD, CROWDSAP, SG-detrend
 window) with σ badges. The panel auto-runs once vetting finishes and can be
@@ -470,17 +469,17 @@ parsed light-curve arrays from a process-level cache keyed by (TIC, sector).
 
 When the automatic detector skips a dip you can see by eye, drag across the
 interactive light-curve plot to mark a candidate event. The backend
-characterises its depth, duration, U/V shape, and — when centroid moments are
-cached — an on-target test, via `POST /api/manual_dip`.
+characterises its depth, duration, U/V shape, and (when centroid moments are
+cached) an on-target test, via `POST /api/manual_dip`.
 
 ### Plot sharing (ImgBB)
 
-Every generated image — the diagnostic and phase-folded plots, the HCI
-summary image, and the ExoMiner views — has a share button that uploads the PNG to
+Every generated image (the diagnostic and phase-folded plots, the HCI
+summary image, and the ExoMiner views) has a share button that uploads the PNG to
 ImgBB and returns a public link (with Markdown and BBCode embeds); an "upload
 all plots" action bundles the full set into a single shareable album for
-pasting into issues or collaboration threads. Single-image exports — including
-the **SPOC DV phase-fold** — are uploaded with TIC-aware filenames (e.g.
+pasting into issues or collaboration threads. Single-image exports, including
+the **SPOC DV phase-fold**: are uploaded with TIC-aware filenames (e.g.
 `TIC_12345678_S20_SPOC_DV_phase_fold`) so the target stays attached to the
 image when it lands in an issue, thread, or wiki.
 
@@ -492,20 +491,20 @@ ZIP** section that packages every plot into a single archive matching the
 [ExoFOP-TESS bulk file upload
 spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
 
-- **Three small inputs** — your **initials** (`xx`), a per-day **counter**
+- **Three small inputs**: your **initials** (`xx`), a per-day **counter**
   (`nnn`, 001–999), and your **data tag** (column 2 of the descriptor,
   must be valid on your ExoFOP account). Initials and tag are remembered
   in `localStorage`, and the counter auto-bumps after each build so
   successive runs on the same day don't collide.
 - **Archive + descriptor** are named `xxYYYYMMDD-nnn.zip` and
   `xxYYYYMMDD-nnn.txt` (matching base names, as the spec requires).
-- **Single-sector contents** — full light curve, event-zoom grid, centroid
+- **Single-sector contents**: full light curve, event-zoom grid, centroid
   behaviour, BLS and Lomb-Scargle periodograms, the SPOC DV phase-fold (when
   a DVT is available), and the **Habitability Chance Index summary image**
   with its metrics, weightings, predicted observables, and TLCM geometry
   (HCI auto-runs with the result, so the summary image is ready by the time
   you build the archive).
-- **Multi-sector contents** — identical to single-sector, because the
+- **Multi-sector contents**: identical to single-sector, because the
   multi-sector pipeline produces a single stitched-LC verdict with the same
   plot set.
 - **Each plot** is renamed to the
@@ -517,7 +516,7 @@ spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
   Filenames stay under the 100-character cap and are suffixed `a`, `b`, …
   if a sibling would collide.
 - **Descriptor rows** have the five pipe-delimited columns ExoFOP expects
-  — `filename | data tag | group | proprietary period | description` —
+  (`filename | data tag | group | proprietary period | description`),
   with group blank and proprietary period set to `0` (the spec mandates
   `0` whenever no group is assigned).
 - **Single flat directory** inside the zip (no nested folders), built
@@ -525,7 +524,7 @@ spec](https://exofop.ipac.caltech.edu/tess/script_upload_help.php) exactly:
   since PNGs are already compressed).
 
 A TIC ID is required (run vetting via the MAST tab, or upload a SPOC FITS
-that carries a `TICID` header) — without one, or with missing initials /
+that carries a `TICID` header). Without one, or with missing initials /
 counter / tag, the button explains what's missing and stops before
 producing anything ExoFOP would reject.
 
@@ -534,8 +533,8 @@ producing anything ExoFOP would reject.
 
 Chosen up front (a **Single sector / Multi-sector** toggle on the MAST card,
 no need to run a single sector first). Fetches up to **`MAX_SECTORS = 3`**
-TESS sectors for a TIC from MAST — your selected sectors, capped to 3, or
-the newest 3 by default — then runs the **standard single-sector pipeline
+TESS sectors for a TIC from MAST (your selected sectors, capped to 3, or
+the newest 3 by default), then runs the **standard single-sector pipeline
 back-to-back** on each one and compares the final results.
 
 Running sectors consecutively (rather than stitching them into one long
@@ -547,13 +546,13 @@ pipeline run's worth of arrays, BLS periodogram, and plots is alive.
 
 After all sectors run, the **representative sector** is picked by:
 
-1. **Verdict** — `planet_candidate` and `known_object` outrank
+1. **Verdict**: `planet_candidate` and `known_object` outrank
    `eclipsing_binary_candidate`, which outranks `ambiguous` / `no_signal`,
    which outrank `false_positive_blend`. A single planet-candidate sector
    always wins over a false-positive sector even if the FP has a higher
-   SDE — without this rule a noise-driven blend can shove a real
+   SDE. Without this rule a noise-driven blend can shove a real
    candidate out of the headline result.
-2. **Period agreement** — among sectors of the same verdict, the one
+2. **Period agreement**: among sectors of the same verdict, the one
    whose BLS period rounds to the same integer day as at least one other
    sector wins (a period that recurs across sectors is more trustworthy
    than a lone outlier).
@@ -564,7 +563,7 @@ each sector, captures the short summary, and frees every per-sector
 object before the next iteration; pass 2 re-runs only the chosen
 representative so its full result (plots, events, BLS periodogram, HCI,
 ExoMiner) can be returned. Worst case is `MAX_SECTORS + 1` pipeline
-runs — the extra run is the price of getting the choice right when the
+runs. The extra run is the price of getting the choice right when the
 streaming order would otherwise drop a real candidate.
 
 **HCI does not use the sector count.** Since HCI v2 the number of sectors
@@ -574,8 +573,8 @@ The panel shows:
 
 - A banner listing which sectors were compared (and any that failed) plus
   the representative sector and multi-sector detection counts
-- A **per-sector comparison table** — verdict, event count, BLS period /
-  depth / SDE — with the representative sector marked ★
+- A **per-sector comparison table**: verdict, event count, BLS period /
+  depth / SDE, with the representative sector marked ★
 - The standard plot set (light curve, event zoom, centroid, BLS,
   Lomb-Scargle, HCI summary) from the representative sector
 
@@ -589,15 +588,15 @@ The sector cap is the tunable constant `MAX_SECTORS` at the top of
 
 Two input modes in the web UI:
 
-- **Upload file** — drag and drop a `.fits`, `.fits.gz`, `.json`, or
+- **Upload file**: drag and drop a `.fits`, `.fits.gz`, `.json`, or
   `.customization` file
-- **Fetch from MAST** — enter a TIC ID and sector. Click "List sectors"
+- **Fetch from MAST**: enter a TIC ID and sector. Click "List sectors"
   to see all TESS sectors with data for that TIC, with provider info
   (SPOC, TESS-SPOC, QLP) shown as clickable coloured chips.
 
 The MAST fetcher tries data providers in preference order:
 
-1. **SPOC 2-min** (best — includes quality flags, centroid columns, CROWDSAP)
+1. **SPOC 2-min** (best: includes quality flags, centroid columns, CROWDSAP)
 2. **SPOC 20-s**
 3. **TESS-SPOC FFI** (10-min from full-frame images; near-complete coverage)
 4. **QLP** (Quick Look Pipeline FFI light curves)
@@ -611,7 +610,7 @@ TIC catalog coordinate cone search → MAST object resolver) with
 retry-and-exponential-backoff on transient MAST errors. Because MAST's
 name/coordinate searches actually return a small cone around the target,
 results are **filtered to the exact requested TIC** (by `target_name`) before
-a product is chosen — otherwise a close neighbour in the same crowded TESS
+a product is chosen. Otherwise a close neighbour in the same crowded TESS
 field could be downloaded instead of the intended star.
 
 If a very recent sector has observation metadata in MAST's catalog but the
@@ -631,7 +630,7 @@ peak:
 
 - **Period** (`TPERIOD`), **duration** (`TDUR`), **depth** (`TDEPTH`), and
   **transit epoch** (`TEPOCH`)
-- **Fitted a/R★** (`ARAT`) and **impact parameter** (`IMPACT`) — these feed the
+- **Fitted a/R★** (`ARAT`) and **impact parameter** (`IMPACT`). These feed the
   TLCM geometry directly, replacing the b = 0 central-transit assumption and
   producing a **cleaner semi-major axis** and stellar density
 - A **phase-folded plot** of the data (`LC_INIT`) with the SPOC transit model
@@ -641,30 +640,30 @@ peak:
 These SPOC DV-fitted values are preferred (where present) for the **Observables,
 parameters & TLCM** section, the **ExoFOP TOI parameter** table, the **HCI**, and
 both PDF reports; the panel and tables annotate the a/R★ source so you can see
-when the SPOC fit is in use. DVT fetching fails soft — if no DVT product exists
+when the SPOC fit is in use. DVT fetching fails soft: if no DVT product exists
 yet (FFI-only target, or a very recent sector), the studio silently falls back
 to the BLS-derived geometry.
 
 
 ## Example output
 
-A few representative outputs (illustrative — generated from a TESS-like
+A few representative outputs (illustrative, generated from a TESS-like
 target):
 
 **FFI cutout of the target field.** The target sits at the centre (red +),
 with the photometric aperture outlined in yellow. Here a fainter neighbour is
-visible to the upper-left — exactly the kind of nearby source that can dilute
+visible to the upper-left. That is the kind of nearby source that can dilute
 a transit or, if it's the real variable, masquerade as one on the target.
 
 ![TESS FFI cutout of the target, target marked with a red plus and aperture outlined in yellow](docs/images/ffi_cutout_example.png)
 
-**PDF report — cover page.** Verdict banner, stellar parameters, and the
+**PDF report: cover page.** Verdict banner, stellar parameters, and the
 light-curve summary, with the running header band and page footer that repeat
 on every page.
 
 ![PDF report cover page showing the verdict, stellar parameters and light curve summary tables](docs/images/pdf_report_cover.png)
 
-**PDF report — target field page.** The FFI cutout and the detrended light
+**PDF report: target field page.** The FFI cutout and the detrended light
 curve, each kept at its true aspect ratio.
 
 ![PDF report page showing the embedded FFI cutout above the detrended light curve](docs/images/pdf_report_field.png)
@@ -685,7 +684,7 @@ curve, each kept at its true aspect ratio.
 
 The steps that follow are for **Quick check**.
 
-### Step 1 — load a light curve
+### Step 1: load a light curve
 
 Use the **Upload file** or **Fetch from MAST** tab. For MAST, enter a TIC
 ID and click "List sectors" first to see which sectors have downloadable
@@ -693,23 +692,23 @@ data. Sectors shown with an amber background are FFI-only (no SPOC 2-min).
 On the MAST tab a **Single sector / Multi-sector (≤5)** toggle lets you
 choose the analysis scope up front (see Step 5 for multi-sector).
 
-### Step 2 — adjust detection sensitivity (optional)
+### Step 2: adjust detection sensitivity (optional)
 
 Below the tabs is a collapsed **⚙️ Detection sensitivity** panel. Three
 sliders:
 
-- **Depth threshold** (default `0.997`, range `0.95`–`0.999`) — the
+- **Depth threshold** (default `0.997`, range `0.95`–`0.999`): the
   absolute floor for flagging dips. The label updates to show the
   equivalent percent depth ("flag dips deeper than 0.30%").
 
-- **Minimum SNR** (default `4σ`, range `1σ`–`10σ`) — the *integrated*
+- **Minimum SNR** (default `4σ`, range `1σ`–`10σ`): the *integrated*
   significance a dip must reach. Significance is measured over the whole
   event, not a single point: `mean depth × √(in-transit points) / scatter`.
-  The √N factor is what lets a shallow transit on a noisy star qualify —
+  The √N factor is what lets a shallow transit on a noisy star qualify:
   e.g. an 0.8%-deep, ~5 h transit on a star with 0.5% point scatter has a
   per-point SNR near 1 but an integrated SNR around 10.
 
-- **Secondary eclipse σ** (default `3σ`, range `1σ`–`7σ`) — the threshold
+- **Secondary eclipse σ** (default `3σ`, range `1σ`–`7σ`): the threshold
   the phase-0.5 secondary search must exceed to flag an eclipsing-binary
   signature. Lower values surface more EB candidates (and more false
   positives on noisy stars); higher values are stricter. Out-of-range
@@ -735,15 +734,15 @@ This means:
   (0.997) does the work, same as always.
 - **Shallow dips on quiet stars** (like a 0.06% transit on a star with
   0.02% scatter): the adaptive threshold (e.g. `1.0 − 3×0.0002 = 0.9994`)
-  catches them — the old fixed threshold couldn't.
+  catches them; the old fixed threshold couldn't.
 - **Pure noise**: the integrated per-event SNR check rejects spurious
-  crossings — a one- or two-point dip can't accumulate enough significance.
+  crossings, so a one- or two-point dip can't accumulate enough significance.
   Contiguous in-dip stretches split only by a few noisy points are bridged,
   so one transit is reported as one event rather than several fragments.
 - **Real data gaps**: the detector is gap-aware. Sample-to-sample jumps
   larger than ~5× the median cadence (e.g. the mid-sector downlink outage)
   are flagged, points within the median-filter half-window of either edge
-  are excluded from `in_dip`, and event runs cannot span a gap — so a
+  are excluded from `in_dip`, and event runs cannot span a gap, so a
   multi-day outage no longer registers as a single very wide "dip".
 
 **Rule of thumb:**
@@ -751,9 +750,9 @@ This means:
 - Missing a real shallow transit you can see by eye? → lower SNR to 3σ
 - Lots of fake "events" on a noisy star? → raise SNR to 5–6σ
 - Need to flag a dip ≲0.2% deep? → lower SNR *and* push threshold toward
-  0.999 — the two filters work together
+  0.999; the two filters work together
 
-### Step 3 — run vetting
+### Step 3: run vetting
 
 Click **Vet & build PDF report** (Upload tab) or **Fetch, vet & build PDF
 report** (MAST tab). Vetting takes 10–30 seconds plus however long MAST takes
@@ -782,12 +781,12 @@ finishes and the PDF keeps building underneath (see Step 6). You'll see:
   target and aperture on the sky
 - An **Observables, parameters & TLCM** section (auto-loads) with the POE
   forward model, the TLCM transit geometry, and the ExoFOP-TESS TOI parameter
-  table — all independent of the habitability score below
+  table, all independent of the habitability score below
 
-### Step 4 — habitability score (auto)
+### Step 4: habitability score (auto)
 
 The **Habitability Chance Index** panel at the bottom of the results runs
-automatically once vetting finishes — no extra button to click. The app
+automatically once vetting finishes, with no extra button to click. The app
 queries ExoFOP-TESS for the target's TOI data and stellar parameters, then
 computes the score. If the query fails, the panel surfaces the error with
 a **retry** link rather than blocking the rest of the page. The score
@@ -802,10 +801,10 @@ panel shows:
 - A **TOI table** if the star has multiple TOIs on ExoFOP
 - **Caveats** listing model limitations and the paper reference
 
-### Step 5 — multi-sector analysis
+### Step 5: multi-sector analysis
 
 Pick **Multi-sector (≤3)** in the scope toggle on the MAST card (you can do
-this from the start — no single-sector run required). Optionally click up to
+this from the start; no single-sector run is required). Optionally click up to
 3 sectors to include, or leave blank for the newest 3. Click **Run
 multi-sector**. The app runs the **standard single-sector pipeline on each
 sector back-to-back** (freeing each result before the next), picks the
@@ -816,13 +815,13 @@ full result. The panel then displays:
 - A banner with the compared sectors, the representative sector, and the
   multi-sector detection counts
 - A **per-sector comparison table** (verdict, event count, BLS
-  period / depth / SDE) — the representative sector is marked ★
+  period / depth / SDE); the representative sector is marked ★
 - The standard plot set (light curve, event zoom, centroid, BLS,
   Lomb-Scargle, HCI summary) from the representative sector
 
 A **Download multi-sector PDF** button exports the whole analysis (see Step 6).
 
-### Step 6 — download PDF
+### Step 6: download PDF
 
 The PDF is built by the same job as the on-page vetting. When the bar
 finishes, click **Download PDF report** for a clean
@@ -847,7 +846,7 @@ Evaluated in order:
 4. Implied radius **between the ~2.2 R_Jup planetary cap and 4.0 R_Jup** with
    *no* corroborating eclipse signature → **large planet candidate (RV needed
    to exclude a brown dwarf)**. A borderline-large radius is no longer treated
-   as proof of an EB on its own — matching the behaviour of more mature vetting
+   as proof of an EB on its own, matching the behaviour of more mature vetting
    pipelines. An eclipse signature or an RV mass is required to confirm an EB.
 5. Planet-sized companion implied (< 2.2 R_Jup) → **planet candidate**.
 6. Else → **ambiguous** or **no signal** based on BLS SDE.
@@ -892,13 +891,13 @@ If Vetstar is useful to you, you can support its development with the
   cold-start takes ~30 seconds. Analysis itself is fast once warm.
 - **Recent sectors.** TESS data typically become available at MAST 1–2
   months after the sector ends. Very recent sectors may show observation
-  metadata in the sector list but return a "no products yet" error — this
+  metadata in the sector list but return a "no products yet" error. This
   is expected and the error message explains the timeline.
 
 
 ---
 
-## VetStar Pi — Raspberry Pi OS port
+## VetStar Pi: Raspberry Pi OS port
 
 A near-complete port of the Vetstar TESS vetting studio to Raspberry Pi OS.
 It runs the same science package as the cloud studio,
@@ -913,10 +912,10 @@ Two features are intentionally missing versus the cloud studio: the
 multi-sector representative-picker (per-sector state doesn't fit the Pi
 budget), and the joint TESS + Gaia PSPL fit (research-tier online-only
 workflow). Both exist in `vetstar_core`; the Pi front end just doesn't
-expose them. Everything else — MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
+expose them. Everything else (MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
 FFI cutouts, Gaia/SIMBAD/NEA cross-match, high-variability detrend,
 progress reporting, microlensing coverage, Gaia Alerts fetcher, and full
-PDFs — is here and drives the same code paths as the cloud service.
+PDFs) is here and drives the same code paths as the cloud service.
 
 ### Install on a Pi
 
@@ -943,7 +942,7 @@ The installer:
 - installs `python3-tk` and the BLAS/JPEG libs numpy/matplotlib link against
 - creates a venv under `~/.local/share/vetstar-pi/`
 - pulls **prebuilt ARM wheels from piwheels** (numpy, scipy, astropy,
-  matplotlib, reportlab, astroquery, tess-point) — no compilation on the Pi
+  matplotlib, reportlab, astroquery, tess-point), with no compilation on the Pi
 - drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
   under **Menu → Science → VetStar Pi** (menu refreshed via `lxpanelctl
   restart` so it appears without a logout)
@@ -955,9 +954,9 @@ Pi Zero 2 W / 3B / 4 / 5.
 
 ### Use
 
-GUI — from **Menu → Science → VetStar Pi** or `vetstar-pi`.
+GUI: from **Menu → Science → VetStar Pi** or `vetstar-pi`.
 
-CLI — every capability, headless:
+CLI, with every capability, headless:
 
 ```bash
 vetstar-pi transit      TIC12345_S12.fits                                # local FITS → LC + PDF + JSON
@@ -1091,7 +1090,7 @@ root; the release bundle puts it next to `vetstar_pi/`.
 
 ### Cloud-studio API endpoints
 
-Kept here for reference — the cloud service and its build/deploy paths
+Kept here for reference. The cloud service and its build/deploy paths
 are unchanged. None of the endpoints below exist in the Pi port; use the
 CLI or GUI instead.
 
@@ -1213,7 +1212,7 @@ vetstar/
 
 ### Deploy your own copy
 
-**Render** — push to GitHub, sign up at <https://render.com>, New →
+**Render**: push to GitHub, sign up at <https://render.com>, New →
 Blueprint → connect your repo. Render reads `render.yaml` and provisions
 automatically. Free tier sleeps after 15 min idle.
 
@@ -1266,10 +1265,10 @@ to launch; a browser opens to the app automatically.
 
 ### References
 
-For a full mathematical walkthrough of each stage of the pipeline —
+For a full mathematical walkthrough of each stage of the pipeline,
 adaptive detection, BLS / Lomb-Scargle, transit geometry (TLCM),
 predicted observables (POE), RV mass function, HCI scoring, ExoMiner
-features, and FFI rendering — with every equation rendered as a LaTeX
+features, and FFI rendering, with every equation rendered as a LaTeX
 image, see [docs/SCIENCE.md](docs/SCIENCE.md).
 
 Pipelines behind the v2 guided modes:
