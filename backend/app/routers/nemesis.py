@@ -125,6 +125,32 @@ def nemesis_file(job_id: str, name: str):
                     headers={"Content-Disposition": f'inline; filename="{name}"'})
 
 
+class NemesisReportQuery(BaseModel):
+    hci_image: Optional[str] = None   # base64 PNG from /api/nemesis/hci, if the user scored it
+    include_ffi: bool = True
+
+
+@router.post("/api/nemesis/jobs/{job_id}/report")
+def nemesis_report(job_id: str, q: NemesisReportQuery):
+    """Vetstar PDF report for a finished NEMESIS run."""
+    from vetstar_core.nemesis_report import build_nemesis_pdf
+
+    result = _call("GET", f"/jobs/{_job_id(job_id)}/result")
+    meta, star = result.get("meta") or {}, result.get("star") or {}
+    ffi_b64 = None
+    if q.include_ffi and star.get("ra") is not None and star.get("dec") is not None:
+        try:
+            from ..cache import _get_ffi_cutout
+            cut = _get_ffi_cutout(meta.get("tic"), meta.get("sector"), star["ra"], star["dec"])
+            ffi_b64 = (cut or {}).get("image")
+        except Exception as exc:  # the report still builds without the cutout
+            log.warning("NEMESIS report: FFI cutout failed: %s", exc)
+    pdf = build_nemesis_pdf(result, hci_image_b64=q.hci_image, ffi_image_b64=ffi_b64)
+    name = f"vetstar_nemesis_TIC{int(meta.get('tic') or 0)}_S{int(meta.get('sector') or 0):03d}.pdf"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # LEO-Vetter test key -> vetstar verdict flag that HCI's vetting term knows.
 LEO_TO_VETSTAR_FLAG = {
     "odd_even": "odd_even_mismatch",
