@@ -172,6 +172,26 @@ export function makeDataTag(username: string, description: string, n: number | s
   return `${utDateStamp(now)}_${username.trim()}_${desc}_${String(n).trim() || "1"}`;
 }
 
+const LS_COUNTER = "vetstar.exofop.counter";
+
+/** Last archive counter used today (UT) by these initials, or 0. ExoFOP names
+ *  archives xxYYYYMMDD-nnn, so the counter must carry over between page loads:
+ *  starting again at 001 tempts people to rename the ZIP, and a renamed ZIP no
+ *  longer matches the .txt descriptor inside it. */
+export function lastCounter(initials: string, day = utDateStamp()): number {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_COUNTER) || "{}");
+    return v.day === day && v.ini === initials.trim().toLowerCase() ? Number(v.n) || 0 : 0;
+  } catch { return 0; }
+}
+function saveCounter(initials: string, n: number, day = utDateStamp()) {
+  try {
+    const prev = lastCounter(initials, day);
+    localStorage.setItem(LS_COUNTER, JSON.stringify({ day, ini: initials.trim().toLowerCase(), n: Math.max(prev, n) }));
+  } catch { /* private mode: not remembered */ }
+}
+const pad3 = (n: number) => String(Math.min(Math.max(n, 1), 999)).padStart(3, "0");
+
 const LS_NAME = "vetstar.exofop.name";
 const LS_INITIALS = "vetstar.exofop.initials";
 
@@ -303,7 +323,10 @@ export default function ExofopBulkPanel({
   const ownIdentity = useExofopIdentity();
   const identity = sharedIdentity ?? ownIdentity;
   const initials = identity.initials;
-  const [counter, setCounter] = useState<string>(defaultCounter);
+  // Next free counter today: after the last one used, offset for a second ZIP
+  // on the same page (defaultCounter "002" -> one after the first panel's).
+  const offset = Math.max(parseInt(defaultCounter, 10) || 1, 1);
+  const [counter, setCounter] = useState<string>(() => pad3(lastCounter(initials) + offset));
   const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
   const [tagUser, setTagUser] = useState<string>(() => lsGet("vetstar.exofop.username"));
   const [tagDesc, setTagDesc] = useState<string>("Vetstar-NEMESIS");
@@ -351,9 +374,9 @@ export default function ExofopBulkPanel({
         return;
       }
       triggerDownload(archive.zip, archive.zipName);
-
-      const nextN = Math.min(parseInt(cnt, 10) + 1, 999);
-      setCounter(String(nextN).padStart(3, "0"));
+      saveCounter(ini, parseInt(cnt, 10));
+      // Skip numbers another panel on this page may have used since.
+      setCounter(pad3(Math.max(parseInt(cnt, 10), lastCounter(ini)) + 1));
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -450,6 +473,11 @@ export default function ExofopBulkPanel({
           </button>
         </div>
       </div>
+      <p className="mt-2 text-slate-600">
+        <b>Don't rename the ZIP.</b> ExoFOP looks for the <code>.txt</code> with the same name inside it, so
+        a renamed file (or a browser copy like <code>…-001 (1).zip</code>) has no descriptor. To change the
+        number, change Counter and build again. The counter carries on through the UT day.
+      </p>
       {tagProblem && !error && <p className="mt-2 text-red-700">{tagProblem}</p>}
       {error && <p className="mt-2 text-red-700">{error}</p>}
       {images.length === 0 && !error && (
