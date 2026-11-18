@@ -307,15 +307,18 @@ def fetch_spoc_lightcurve(
         raise RuntimeError(f"No FITS light-curve products available. Tried: {tried}")
 
     # 5. Download.
-    def download():
-        with MAST_DOWNLOAD_LOCK:
-            return Observations.download_products(lc_products[:1])
+    # Prefer STScI's public AWS mirror; fall back to MAST.
+    from .aws_mirror import download as aws_download
+    file_path = aws_download(str(safe_get(lc_products[0], "dataURI", "") or ""))
+    if file_path is None:
+        def download():
+            with MAST_DOWNLOAD_LOCK:
+                return Observations.download_products(lc_products[:1])
 
-    manifest = retry(download, name="download")
-    if len(manifest) == 0 or "Local Path" not in manifest.colnames:
-        raise RuntimeError("Download returned empty manifest")
-
-    file_path = str(manifest["Local Path"][0])
+        manifest = retry(download, name="download")
+        if len(manifest) == 0 or "Local Path" not in manifest.colnames:
+            raise RuntimeError("Download returned empty manifest")
+        file_path = str(manifest["Local Path"][0])
     log.info(f"Downloaded: {file_path}")
 
     fallback = chosen_author != "SPOC" or (chosen_exptime and chosen_exptime != 120)
