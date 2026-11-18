@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { OglePanel } from "./microlensing/OglePanel";
 import { fetchLightcurveByCoords, fetchLightcurveByTic, fitMicrolensing, type LcByCoordsResponse, type MicrolensingFitResponse } from "./api";
 import { fetchGaiaAlertLightcurve, fetchMicrolensingFfi, fitMicrolensingJoint, searchGaiaAlertsNear, type FfiCutoutResponse, type GaiaAlertEntry, type GaiaLightcurve, type JointFitResponse } from "./api";
 import { CyclingLoader, MICROLENSING_FIT_MSGS, MICROLENSING_JOINT_MSGS } from "./Loaders";
@@ -286,6 +287,8 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
         lcLabel={lc?.label}
         lcPoints={lc?.time.length ?? 0}
       />
+
+      {lc && <OglePanel lc={lc} onUseWindow={(a, b) => { setResult(null); setSel({ a, b }); }} />}
 
       {(ffiData || ffiBusy || ffiErr) && (
         <FfiCutoutSection ffiData={ffiData} busy={ffiBusy} err={ffiErr} />

@@ -46,6 +46,25 @@ def build_settings(req: dict, out_dir: Path) -> dict:
     return s
 
 
+def star_info(tic: int) -> dict:
+    """TIC v8.2 basics for the site's FFI cutout and ExoFOP panels. Fails soft."""
+    try:
+        from astroquery.mast import Catalogs
+        row = Catalogs.query_criteria(catalog="TIC", ID=tic)[0]
+
+        def g(k):
+            try:
+                v = float(row[k])
+                return v if v == v else None  # drop NaN
+            except Exception:
+                return None
+        return {"tic_id": tic, "ra": g("ra"), "dec": g("dec"), "tmag": g("Tmag"),
+                "teff": g("Teff"), "radius": g("rad"), "mass": g("mass"), "logg": g("logg")}
+    except Exception as exc:
+        print(f"[vetstar] TIC lookup failed: {exc}", flush=True)
+        return {"tic_id": tic}
+
+
 def main(job_dir: str) -> int:
     job = Path(job_dir)
     req = json.loads((job / "request.json").read_text())
@@ -75,6 +94,11 @@ def main(job_dir: str) -> int:
             raise RuntimeError("NEMESIS produced no usable light curve for this star and sector.")
         print("[vetstar] summarising", flush=True)
         result = summarize(lc_df, transit_results, check_ALL_thresholds)
+        primary = result.get("primary")
+        params = result["search"][primary]["params"] if primary else {}
+        from .figures import all_figures
+        result["figures"] = all_figures(lc_df, transit_results, primary, params, tic, sector, cadence)
+        result["star"] = star_info(tic)
         result["meta"] = {
             "tic": tic, "sector": sector, "cadence": cadence,
             "nemesis_version": nemesis_tess.__version__,
