@@ -47,3 +47,8 @@ def test_bad_period_range(client):
     r = client.post("/jobs", json={"tic": 1, "sector": 1, "minP": 5, "maxP": 2},
                     headers={"X-Worker-Token": "t0k"})
     assert r.status_code == 422
+
+
+def test_index_page_is_friendly(client):
+    r = client.get("/")
+    assert r.status_code == 200 and "vetstar NEMESIS worker" in r.text

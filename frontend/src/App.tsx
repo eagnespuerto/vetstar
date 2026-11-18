@@ -4,6 +4,8 @@ import type { VettingResult } from "./types";
 import ExoMinerPanel from "./ExoMinerPanel";
 import FfiCutoutPanel from "./FfiCutoutPanel";
 import MicrolensingPanel from "./MicrolensingPanel";
+import NemesisWizard from "./nemesis/NemesisWizard";
+import { ThemeToggle } from "./ThemeToggle";
 import { CyclingLoader } from "./Loaders";
 import { MULTISECTOR_LOADING_MSGS } from "./transit/loadingMessages";
 import { VetProgress } from "./transit/VetProgress";
@@ -19,7 +21,7 @@ type ReportState =
   | { state: "ready"; url: string; filename: string }
   | { state: "error"; message: string };
 
-type Mode = "upload" | "mast";
+type Mode = "nemesis" | "upload" | "mast";
 
 type Section = "transit" | "microlensing";
 
@@ -29,7 +31,7 @@ const KOFI_URL = "https://ko-fi.com/eagnespuerto";
 
 export default function App() {
   const [section, setSection] = useState<Section>("transit");
-  const [mode, setMode] = useState<Mode>("upload");
+  const [mode, setMode] = useState<Mode>("nemesis");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -199,19 +201,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <header className="bg-slate-900 text-white py-4 px-6 shadow">
+      <header className="bg-dusk-900 text-cream-50 py-4 px-6 shadow-card">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-6 flex-wrap">
             <div>
-              <h1 className="text-xl font-bold">Vetstar v1.0.0</h1>
-              <p className="text-sm text-slate-300">
+              <h1 className="text-2xl font-bold font-display tracking-tight text-cream-50">
+                Vet<span className="text-ember">star</span>{" "}
+                <span className="text-sm font-semibold text-lagoon align-middle">v2</span>
+              </h1>
+              <p className="text-sm text-dusk-200">
                 {section === "transit"
-                  ? "Upload a SPOC light curve (FITS) or pull one from MAST by TIC + sector"
+                  ? "Search a TESS star for planets with NEMESIS, or Quick check a light curve"
                   : "Fit PSPL / flare / null to a positive excursion, or check TESS coverage of known events"}
               </p>
             </div>
             <nav
-              className="flex items-center gap-1 bg-slate-800 rounded-lg p-1 border border-slate-700"
+              className="flex items-center gap-1 bg-dusk-800 rounded-lg p-1 border border-dusk-700"
               aria-label="Vetstar section"
             >
               <SectionTabButton active={section === "transit"} onClick={() => setSection("transit")}>
@@ -222,12 +227,13 @@ export default function App() {
               </SectionTabButton>
             </nav>
           </div>
-          <div className="shrink-0 flex items-center gap-2">
+          <div className="shrink-0 flex items-center gap-2 flex-wrap">
+            <ThemeToggle />
             <a
               href={REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-sm font-medium transition"
+              className="inline-flex items-center gap-2 px-3 py-2 bg-dusk-800 hover:bg-dusk-700 border border-dusk-700 rounded-lg text-sm font-medium text-cream-100 transition"
               title="View on GitHub, report a bug, or contribute"
             >
               <svg
@@ -267,17 +273,22 @@ export default function App() {
         <>
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         {/* Mode tabs */}
-        <div className="flex gap-2 border-b">
+        <div className="flex gap-2 border-b border-line flex-wrap">
+          <TabButton active={mode === "nemesis"} onClick={() => setMode("nemesis")}>
+            NEMESIS (guided)
+          </TabButton>
           <TabButton active={mode === "upload"} onClick={() => setMode("upload")}>
-            Upload file
+            Quick check: upload
           </TabButton>
           <TabButton active={mode === "mast"} onClick={() => setMode("mast")}>
-            Fetch from MAST
+            Quick check: MAST
           </TabButton>
         </div>
 
+        {mode === "nemesis" && <NemesisWizard onUseQuickCheck={() => setMode("mast")} />}
+
         {/* Detection sensitivity (collapsed by default) */}
-        <SensitivityPanel params={params} setParams={setParams} />
+        {mode !== "nemesis" && <SensitivityPanel params={params} setParams={setParams} />}
 
         {/* Upload mode */}
         {mode === "upload" && (
@@ -615,8 +626,8 @@ export default function App() {
 
       <footer className="text-center text-xs text-slate-400 py-6">
         {section === "transit"
-          ? <>Pipeline: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy median filtering, centroid + odd/even + secondary tests, physics-based companion sizing.</>
-          : <>Microlensing pipeline: PSPL vs flare vs null model comparison via MulensModel + scipy; TESS sector coverage via tess-point.</>}
+          ? <>Guided search: NEMESIS (Feliz et al. 2021, 2026) with LEO-Vetter (Kunimoto et al. 2025). Quick check: astropy <code>BoxLeastSquares</code> + <code>LombScargle</code>, scipy median filtering, centroid + odd/even + secondary tests, physics-based companion sizing.</>
+          : <>Microlensing: OGLE-IV event selection (Mróz et al. 2019, ApJS 244, 29), then PSPL vs flare vs null model comparison; TESS sector coverage via tess-point.</>}
       </footer>
     </div>
   );

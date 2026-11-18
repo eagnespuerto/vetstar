@@ -3,11 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vetstar v1.0.0</title>
-    <script type="module" crossorigin src="/assets/index-CD9cX_gX.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-UFAKEsx_.css">
+    <title>Vetstar v2</title>
+    <meta name="theme-color" content="#453C67" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      // Apply the saved or system theme before first paint (no flash).
+      try {
+        var t = localStorage.getItem("vetstar-theme");
+        if (t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches))
+          document.documentElement.classList.add("dark");
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/assets/index-DF1-dNdU.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Bk5KhWMf.css">
   </head>
-  <body class="bg-slate-50">
+  <body class="bg-bg text-body font-sans antialiased">
     <div id="root"></div>
   </body>
 </html>

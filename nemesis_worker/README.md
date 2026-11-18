@@ -35,6 +35,20 @@ One job runs at a time; others wait in a queue (`NEMESIS_MAX_QUEUE`, default 10)
 | `NEMESIS_JOB_TTL_HOURS` | 24 | delete finished jobs after this long |
 | `NEMESIS_TLS_THREADS` | 1 | TLS threads per run |
 | `NEMESIS_LAST_SECTOR` | 120 | newest sector NEMESIS may use |
+| `NEMESIS_LITE` | 0 | light mode for small instances (see below) |
+
+### Light mode (`NEMESIS_LITE=1`)
+
+For instances with 512 MB-1 GB. It skips the DSS sky image and kept FITS or
+raw arrays (the vetstar UI does not show them), and uses a coarser TLS grid
+(oversampling 3 instead of NEMESIS II's 9; duration step 1.1 instead of 1.05).
+The coarser grid can miss very shallow signals, so results carry
+`meta.lite = true` and the UI shows a "Light mode" tag. Every run also
+records `meta.peak_rss_mb`, the job's peak memory, to help size the instance.
+
+The image always runs with one BLAS/OpenMP thread and `MALLOC_ARENA_MAX=2`,
+which lowers memory without changing results. Each job runs in its own
+process, so an out-of-memory kill stops that job, not the server.
 
 ## Citation
 

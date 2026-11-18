@@ -1,5 +1,39 @@
+@import "./theme.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+@layer base {
+  html { color-scheme: light; }
+  html.dark { color-scheme: dark; }
+  h1, h2, h3, h4 { font-family: theme("fontFamily.display"); color: rgb(var(--role-heading)); letter-spacing: -0.01em; }
+  a { color: rgb(var(--role-link)); }
+  :focus-visible { outline: 2px solid rgb(var(--role-focus)); outline-offset: 2px; }
+  /* Numbers line up in tables and parameter lists. */
+  td, .tabular { font-variant-numeric: tabular-nums; }
+}
+
+/* v1 components use bg-white for cards; give them the dark surface. */
+.dark .bg-white { background-color: rgb(var(--role-surface)); }
+.dark .text-black { color: rgb(var(--role-text)); }
+
+@layer components {
+  .card { @apply bg-surface rounded-card shadow-card border border-line; }
+  .btn-primary { @apply bg-primary text-on-primary font-semibold rounded-lg px-4 py-2 hover:opacity-90 disabled:opacity-50; }
+  .btn-accent { @apply bg-accent text-on-accent font-semibold rounded-lg px-4 py-2 hover:opacity-90 disabled:opacity-50; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+}
+
+/* NEMESIS progress bar: a soft moving highlight, and fading tips. */
+@keyframes vs-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.progress-shimmer {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  animation: vs-shimmer 1.8s linear infinite;
+}
+@keyframes vs-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.animate-fade-in { animation: vs-fade-in 400ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
