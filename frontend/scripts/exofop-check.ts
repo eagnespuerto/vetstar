@@ -4,7 +4,16 @@
  * Usage: node exofop-check.mjs <result.json> <out.zip>
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { buildExofopArchive, type ExofopImage } from "../src/ExofopBulkPanel";
+import { buildExofopArchive, checkDataTag, type ExofopImage } from "../src/ExofopBulkPanel";
+
+// ExoFOP data tag format (help.php): number, or YYYYMMDD_username_description_n.
+for (const ok of ["22", "20171207_ciardi_PalomarAO_1", "20261118_puerto_vetstar_001"]) {
+  if (checkDataTag(ok)) throw new Error(`valid tag rejected: ${ok}`);
+}
+// Rejected by ExoFOP on 2026-11-19 ("Tag is not associated with the user"): only 3 parts.
+for (const bad of ["20261118_eap_000000000000", "20261118_x_bad.desc_1", "20261332_x_d_1"]) {
+  if (!checkDataTag(bad)) throw new Error(`invalid tag accepted: ${bad}`);
+}
 
 const [, , resultPath, outPath] = process.argv;
 const r = JSON.parse(readFileSync(resultPath, "utf8"));

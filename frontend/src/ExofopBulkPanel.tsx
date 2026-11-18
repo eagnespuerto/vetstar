@@ -135,6 +135,43 @@ export async function buildExofopArchive(opts: {
   return { zipName: `${archiveBase}.zip`, zip: buildZip(entries), entries };
 }
 
+/**
+ * ExoFOP data tag rules (help.php, "Data Tags"): either the short-hand tag
+ * number ExoFOP gave an existing tag, or a full tag of at most 100 characters
+ * in four underscore-separated parts, YYYYMMDD_username_description_n, where
+ * username is your ExoFOP login, description has only letters, numbers and
+ * hyphens, and n is 0-99999999999999. Returns a problem to show, or null.
+ */
+export function checkDataTag(tag: string): string | null {
+  const t = tag.trim();
+  if (!t) return "Data tag is required (column 2 of the descriptor).";
+  if (/^\d+$/.test(t)) return null; // short-hand tag number
+  if (t.length > 100) return "Data tag must be 100 characters or fewer.";
+  const parts = t.split("_");
+  if (parts.length !== 4) {
+    return `Data tag needs 4 parts joined by "_": YYYYMMDD_username_description_number (this one has ${parts.length}).`;
+  }
+  const [date, user, desc, num] = parts;
+  const m = /^(\d{4})(\d{2})(\d{2})$/.exec(date);
+  const d = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (!m || !d || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) {
+    return "Data tag part 1 must be a real date, YYYYMMDD.";
+  }
+  if (!user || /\s/.test(user)) return "Data tag part 2 must be your ExoFOP login username.";
+  if (!/^[A-Za-z0-9-]+$/.test(desc)) {
+    return "Data tag part 3 (description) may use only letters, numbers and hyphens.";
+  }
+  if (!/^\d{1,14}$/.test(num)) return "Data tag part 4 must be a number from 0 to 99999999999999.";
+  return null;
+}
+
+/** Build a new-style tag: UT date + username + description (cleaned) + number. */
+export function makeDataTag(username: string, description: string, n: number | string, now = new Date()): string {
+  const desc = description.normalize("NFKD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return `${utDateStamp(now)}_${username.trim()}_${desc}_${String(n).trim() || "1"}`;
+}
+
 const LS_NAME = "vetstar.exofop.name";
 const LS_INITIALS = "vetstar.exofop.initials";
 
@@ -268,6 +305,9 @@ export default function ExofopBulkPanel({
   const initials = identity.initials;
   const [counter, setCounter] = useState<string>(defaultCounter);
   const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
+  const [tagUser, setTagUser] = useState<string>(() => lsGet("vetstar.exofop.username"));
+  const [tagDesc, setTagDesc] = useState<string>("Vetstar-NEMESIS");
+  const tagProblem = tag.trim() ? checkDataTag(tag) : null;
 
   const run = async () => {
     setError(null);
@@ -288,10 +328,9 @@ export default function ExofopBulkPanel({
       return;
     }
     const tg = tag.trim();
-    if (!tg) {
-      setError(
-        "Data tag is required (column 2 of the descriptor). Must be valid for your ExoFOP account.",
-      );
+    const tagProblem = checkDataTag(tg);
+    if (tagProblem) {
+      setError(tagProblem);
       return;
     }
     if (images.length === 0) {
@@ -372,8 +411,10 @@ export default function ExofopBulkPanel({
             type="text"
             value={tag}
             onChange={(e) => setTag(e.target.value)}
-            placeholder="YYYYMMDD_initials_NNN"
-            className="min-w-[14rem] px-2 py-1 border border-slate-300 rounded font-mono"
+            placeholder="tag number, or YYYYMMDD_username_description_1"
+            maxLength={100}
+            aria-invalid={!!tagProblem}
+            className={`min-w-[18rem] px-2 py-1 border rounded font-mono ${tagProblem ? "border-red-400" : "border-slate-300"}`}
           />
         </label>
         <button
@@ -384,6 +425,32 @@ export default function ExofopBulkPanel({
           {busy ? "Building…" : `Download ZIP (${images.length})`}
         </button>
       </div>
+      <div className="mt-2 rounded border border-slate-200 bg-white p-2 space-y-1.5">
+        <p className="text-slate-600">
+          No tag yet? Make one here. ExoFOP tags are <code>YYYYMMDD_username_description_number</code>,
+          where <b>username is your ExoFOP login</b> (not your initials) and the description uses only
+          letters, numbers and hyphens. After ExoFOP accepts a tag it also gives it a short number you can
+          use instead.
+        </p>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="flex flex-col gap-0.5">
+            <span className="text-slate-600">ExoFOP username</span>
+            <input type="text" value={tagUser} onChange={(e) => { setTagUser(e.target.value); lsSet("vetstar.exofop.username", e.target.value.trim()); }}
+              autoComplete="username" className="w-36 px-2 py-1 border border-slate-300 rounded font-mono" />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-slate-600">Description</span>
+            <input type="text" value={tagDesc} onChange={(e) => setTagDesc(e.target.value)}
+              className="w-44 px-2 py-1 border border-slate-300 rounded font-mono" />
+          </label>
+          <button type="button" disabled={!tagUser.trim()}
+            onClick={() => setTag(makeDataTag(tagUser, tagDesc || "Vetstar", 1))}
+            className="px-3 py-1.5 border border-slate-300 rounded hover:border-emerald-500 disabled:opacity-50">
+            Use as data tag
+          </button>
+        </div>
+      </div>
+      {tagProblem && !error && <p className="mt-2 text-red-700">{tagProblem}</p>}
       {error && <p className="mt-2 text-red-700">{error}</p>}
       {images.length === 0 && !error && (
         <p className="mt-2 text-slate-500 italic">
