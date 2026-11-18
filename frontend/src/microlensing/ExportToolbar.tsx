@@ -1,9 +1,9 @@
 import { useState } from "react";
 import type { MicrolensingFitResponse } from "../api";
 import { ShareToImgbbButton } from "../ShareButton";
-import ExofopBulkPanel, { type ExofopImage } from "../ExofopBulkPanel";
+import ExofopBulkPanel, { IdentityFields, useExofopIdentity, type ExofopImage } from "../ExofopBulkPanel";
 import { buildExofopPackage, svgToPng } from "../microlensingExport";
-import { fetchMicrolensingReport } from "../api";
+import { fetchMicrolensingReport, fitsDownloadUrl } from "../api";
 import { CyclingLoader, PDF_MSGS } from "../Loaders";
 
 export function ExportToolbar({
@@ -28,6 +28,8 @@ export function ExportToolbar({
   const [zipErr, setZipErr] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfErr, setPdfErr] = useState<string | null>(null);
+  // One name + initials for both ZIPs (remembered in this browser).
+  const identity = useExofopIdentity();
 
   // Rasterise the current SVG on demand (lazily — first click of Share).
   const renderPng = async (): Promise<string | null> => {
@@ -158,8 +160,12 @@ export function ExportToolbar({
       {/* Real ExoFOP-TESS bulk-upload panel — same convention as the transit
           tab uses. Requires a TIC ID for the filename scheme. */}
       {exportMetadata.tic_id != null && (
-        <div className="w-full mt-2">
+        <div className="w-full mt-2 space-y-2">
+          <div className="flex flex-wrap gap-2 items-end text-xs">
+            <IdentityFields identity={identity} />
+          </div>
           <ExofopBulkPanel
+            identity={identity}
             ticId={exportMetadata.tic_id}
             sector={exportMetadata.sector ?? undefined}
             images={_buildExofopImages(pngB64, ffiPng)}
@@ -182,6 +188,21 @@ export function ExportToolbar({
               </p>
             }
           />
+          {exportMetadata.sector != null && (
+            <ExofopBulkPanel
+              identity={identity}
+              defaultCounter="002"
+              ticId={exportMetadata.tic_id}
+              sector={exportMetadata.sector}
+              images={_buildRawFitsImages(exportMetadata.tic_id, exportMetadata.sector, exportMetadata.provider)}
+              title="⬇ Build ExoFOP-TESS ZIP of the raw light-curve FITS"
+              caption={<p className="text-slate-500 mt-2">
+                A second ZIP, same rules and same name and initials: the raw {exportMetadata.provider || "SPOC"} light-curve
+                FITS this fit used (code L), straight from MAST. It uses the next counter so it does not clash with the
+                ZIP above on the same UT day.
+              </p>}
+            />
+          )}
         </div>
       )}
     </section>
@@ -206,3 +227,23 @@ export function _buildExofopImages(plotPng: string | null, ffiPng: string | null
 // ============================================================================
 // Observables + planet-prediction panels
 // ============================================================================
+
+/** Raw light-curve FITS for the second ZIP. Fetched from the site's MAST
+ *  download route at build time, so nothing is held in memory until then. */
+export function _buildRawFitsImages(tic: number, sector: number, provider: string | null): ExofopImage[] {
+  const who = provider || "SPOC";
+  return [{
+    key: `${who.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-lc-s${String(sector).padStart(4, "0")}`,
+    label: `Raw ${who} light-curve FITS`,
+    b64: "", ext: "fits", code: "L",
+    fetchBytes: async () => {
+      const r = await fetch(fitsDownloadUrl(tic, sector));
+      if (!r.ok) {
+        let msg = `${r.status}`;
+        try { msg = (await r.json()).detail ?? msg; } catch { /* not JSON */ }
+        throw new Error(msg);
+      }
+      return new Uint8Array(await r.arrayBuffer());
+    },
+  }];
+}
