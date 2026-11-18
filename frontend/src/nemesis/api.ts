@@ -1,4 +1,4 @@
-import { API_BASE } from "../api";
+import { API_BASE, readableError } from "../api";
 
 export interface NemesisStatus {
   enabled: boolean;
@@ -77,11 +77,7 @@ export interface NemesisResult {
 }
 
 async function j<T>(r: Response): Promise<T> {
-  if (!r.ok) {
-    let msg = `${r.status}`;
-    try { msg = (await r.json()).detail ?? msg; } catch { /* not JSON */ }
-    throw new Error(msg);
-  }
+  if (!r.ok) throw await readableError(r, "NEMESIS request");
   return r.json();
 }
 
@@ -116,11 +112,16 @@ export const nemesisFiles = (id: string) =>
   fetch(`${API_BASE}/api/nemesis/jobs/${id}/files`).then((r) => j<{ name: string; bytes: number }[]>(r));
 
 /** Vetstar PDF report for a finished run (built on the site from the worker's result). */
-export async function nemesisReportPdf(id: string, hciImage?: string | null): Promise<Uint8Array> {
+export async function nemesisReportPdf(
+  id: string, hciImage?: string | null, credit?: { author?: string; initials?: string },
+): Promise<Uint8Array> {
   const r = await fetch(`${API_BASE}/api/nemesis/jobs/${id}/report`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hci_image: hciImage ?? null, include_ffi: true }),
+    body: JSON.stringify({
+      hci_image: hciImage ?? null, include_ffi: true,
+      author: credit?.author?.trim() || null, initials: credit?.initials?.trim() || null,
+    }),
   });
   if (!r.ok) {
     let msg = `${r.status}`;

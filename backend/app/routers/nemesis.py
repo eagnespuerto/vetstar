@@ -128,6 +128,8 @@ def nemesis_file(job_id: str, name: str):
 class NemesisReportQuery(BaseModel):
     hci_image: Optional[str] = None   # base64 PNG from /api/nemesis/hci, if the user scored it
     include_ffi: bool = True
+    author: Optional[str] = Field(default=None, max_length=80)     # "Prepared by" on the cover
+    initials: Optional[str] = Field(default=None, max_length=8)
 
 
 @router.post("/api/nemesis/jobs/{job_id}/report")
@@ -145,7 +147,8 @@ def nemesis_report(job_id: str, q: NemesisReportQuery):
             ffi_b64 = (cut or {}).get("image")
         except Exception as exc:  # the report still builds without the cutout
             log.warning("NEMESIS report: FFI cutout failed: %s", exc)
-    pdf = build_nemesis_pdf(result, hci_image_b64=q.hci_image, ffi_image_b64=ffi_b64)
+    pdf = build_nemesis_pdf(result, hci_image_b64=q.hci_image, ffi_image_b64=ffi_b64,
+                            author=q.author, initials=q.initials)
     name = f"vetstar_nemesis_TIC{int(meta.get('tic') or 0)}_S{int(meta.get('sector') or 0):03d}.pdf"
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
