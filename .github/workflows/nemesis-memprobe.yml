@@ -1,0 +1,51 @@
+name: NEMESIS memory probe
+
+# Measures NEMESIS's memory per stage on a real target, in light and full
+# mode, to size or split the vetstar NEMESIS worker. Manual or on pushes to
+# probe/** branches only; never on main.
+on:
+  workflow_dispatch:
+    inputs:
+      tic: { description: "TIC ID", default: "103633434" }
+      sector: { description: "Sector", default: "20" }
+  push:
+    branches: ["probe/**"]  # or run it manually from the Actions tab
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [lite, full]
+    env:
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMBA_NUM_THREADS: "1"
+      MALLOC_ARENA_MAX: "2"
+      NEMESIS_TLS_THREADS: "1"
+      PROBE_DIR: ${{ github.workspace }}/probe_out
+      NEMESIS_CACHE_DIR: ${{ github.workspace }}/probe_out/cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nemesis_worker/requirements.txt
+      - name: Install the worker's exact stack
+        run: pip install -r nemesis_worker/requirements.txt psutil
+      - name: Probe
+        working-directory: nemesis_worker
+        run: >
+          python -m tools.memprobe ${{ inputs.tic || '103633434' }} ${{ inputs.sector || '20' }} "30 minute"
+          ${{ matrix.mode == 'lite' && '--lite' || '' }} --out ../memprobe-${{ matrix.mode }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: memprobe-${{ matrix.mode }}
+          path: memprobe-${{ matrix.mode }}.json

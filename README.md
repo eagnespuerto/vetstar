@@ -1,4 +1,4 @@
-# Vetstar v1.0.0
+# Vetstar v2: NEMESIS and OGLE GUI
 
 [![license](https://img.shields.io/badge/license-CC0-blue)](LICENSE)
 [![release](https://img.shields.io/github/v/release/eagnespuerto/vetstar?include_prereleases&sort=semver)](https://github.com/eagnespuerto/vetstar/releases/latest)
@@ -9,27 +9,53 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eagnespuerto)
 [![Linktree](https://img.shields.io/badge/Linktree-soitsagnes-43E55E?logo=linktree&logoColor=white)](https://linktr.ee/soitsagnes)
 
-*(TESS Vetting Studio)*
+**A beginner-friendly GUI for peer-reviewed planet-search pipelines.**
+Search a TESS star with the same methods professional surveys use, without
+installing anything or writing code.
 
-A web app for TESS light-curve vetting, now split into two independent
-pipelines behind a top-level header tab switch:
+Professional pipelines are powerful but hard to start with: pinned Python
+environments, long notebooks, dozens of settings, and outputs written for
+experts. Vetstar v2 puts two of them behind a guided web interface and
+explains every result in plain words.
 
-- **Transit** — the original full transit / eclipse vetting pipeline (legacy
-  Kepler files also accepted), with a STEHM-based habitability scoring
-  engine and multi-sector analysis. Upload a SPOC FITS file (or pull one
-  from MAST by TIC + sector) and receive a complete vetting report with
-  PDF export.
-- **Microlensing** *(new in v1.0.0)* — a PSPL / flare / null model-comparison
-  classifier for user-flagged positive excursions, plus a TESS
-  sector-coverage finder that tells you which catalogued microlensing
-  events actually fall inside TESS sectors.
+## Peer-reviewed pipelines, made accessible
+
+| In Vetstar | Pipeline | Published method | What Vetstar adds |
+|---|---|---|---|
+| **Transit → NEMESIS (guided)** | [NEMESIS](https://github.com/daxfeliz/NEMESIS): TESS full-frame-image photometry, PLD detrending, BLS + TLS search | Feliz et al. 2021, *AJ* 161, 247 ([doi](https://doi.org/10.3847/1538-3881/abedb3)); NEMESIS II survey: Feliz et al. 2026, [arXiv:2611.21758](https://arxiv.org/abs/2611.21758) (submitted to *AJ*) | A four-step wizard, a live progress bar, NEMESIS II paper-style figures with "how to read this plot" notes, and the full NEMESIS PDF report |
+| **Transit → vetting tests** | [LEO-Vetter](https://github.com/mkunimoto/LEO-vetter), run by NEMESIS on every detection | Kunimoto et al. 2025, *AJ* 170, 280 ([arXiv:2509.10619](https://arxiv.org/abs/2509.10619)) | Each of the 18 tests shown as pass / flag with a one-line explanation, and a plain verdict: planet candidate, likely false positive, or needs a closer look |
+| **Microlensing → OGLE search** | OGLE-IV event selection, adapted to TESS | Mróz et al. 2019, *ApJS* 244, 29 ([doi](https://doi.org/10.3847/1538-4365/ab426b)), building on Mróz et al. 2017 (*Nature* 548, 183) and the OGLE Early Warning System (Udalski 2003, *AcA* 53, 291) | Runs the cuts on a whole light curve with no window to mark, shows every cut with its OGLE value and TESS adaptation, then hands the event to the PSPL / flare / null classifier |
+
+Vetstar runs these methods; it does not replace them. Please cite the
+original papers when you use results (see [References](#references)).
+A detection is a **candidate**, not a confirmed planet or event.
+
+The first real run reproduces the NEMESIS II paper's TOI-1235.01 result
+(TIC 103633434, Sector 20): TLS period 3.448 d, depth 0.77 ppt, radius
+1.905 R⊕, SDE 15.3, LEO-Vetter planet candidate.
+
+## What's in v2
+
+- **Transit**: *NEMESIS (guided)* is the default mode. Pick a star and a
+  sector, keep or change the defaults, watch the run, then read the verdict,
+  the LEO-Vetter tests and four explained plots. The v1 pipeline stays as
+  *Quick check* (upload a SPOC FITS file or pull one from MAST), and the
+  v1 FFI cutout, ExoFOP-TESS parameters and HCI v2 habitability score still
+  work on NEMESIS results.
+- **Microlensing**: *Step 1* is the automatic OGLE-IV search; *Step 2* is
+  the existing PSPL / flare / null model comparison on the event it found.
+  TESS sector coverage of known events is unchanged.
+- **Design**: a new look with dark mode, set out in [DESIGN.md](DESIGN.md)
+  (Google Fonts, an OKLCH palette built from two brand sets, WCAG AA contrast).
 
 No install required.
 
-**Live at <https://vetstar.onrender.com>**
+**Live at <https://vetstar.onrender.com>** (v1). The v2 test site is
+<https://vetstar-v2.onrender.com>.
 
 The first visit after the service has been idle may take ~30 seconds to
-wake up (free-tier cold start); after that it runs normally.
+wake up (free-tier cold start); after that it runs normally. A NEMESIS
+search then takes a few minutes on the NEMESIS worker.
 
 Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 
@@ -44,11 +70,16 @@ Source code and issue tracker: <https://github.com/eagnespuerto/vetstar>
 ## What it does
 
 The app is divided into two top-level pipelines, chosen via the **Transit /
-Microlensing** tabs in the header. Each has its own analysis workflow; the
-Transit pipeline is the original Vetstar tooling, and the Microlensing
-pipeline is new in v1.0.0.
+Microlensing** tabs in the header.
 
-### Transit / eclipse vetting pipeline
+- **Transit** opens on *NEMESIS (guided)*, described
+  [above](#peer-reviewed-pipelines-made-accessible). The two *Quick check*
+  tabs run Vetstar's own pipeline, described next. It is faster, works on
+  an uploaded light curve, and is the one the Raspberry Pi port uses.
+- **Microlensing** opens with the automatic OGLE-IV search (Step 1), then the
+  model-comparison classifier and the TESS coverage finder described below.
+
+### Transit Quick check (Vetstar's own pipeline)
 
 - **Period searches** — Box Least Squares (BLS) + Lomb-Scargle periodograms
 - **Adaptive dip event detection** with adjustable sensitivity (see below)
@@ -140,7 +171,19 @@ pipeline is new in v1.0.0.
   representative sector's single-sector report (the sector with the highest
   BLS SDE).
 
-### Microlensing pipeline *(new in v1.0.0)*
+### Microlensing pipeline
+
+**Step 1: automatic OGLE-IV search.** The loaded light curve is scanned
+with the event selection of Mróz et al. (2019): at least 3 consecutive
+points ≥ 3σ above the baseline with χ²₃₊ ≥ 32, a flat light curve outside
+the event, a single bump of at least 0.1 mag, then a PSPL fit with the
+source and blend flux solved analytically and the paper's final cuts on
+χ²/dof, u₀, t_E and blending. Three cuts are adapted to TESS, and each row
+in the results shows the OGLE value and why it changed: the event window is
+sized from the fitted model (OGLE uses 720 days, longer than a sector),
+flatness is tested against the PSPL baseline, and the difference-imaging
+cut is shown as not applicable. *Step 2* passes the event's window to the
+classifier below.
 
 A second top-level pipeline sitting alongside Transit, for
 detecting/characterising **single-lens microlensing events** in TESS
@@ -629,6 +672,19 @@ curve, each kept at its true aspect ratio.
 
 ## How to use the app
 
+### Guided NEMESIS search (recommended for new users)
+
+1. **Pick a star.** Type a TIC number (try 103633434, TOI-1235) and choose a sector.
+2. **Options.** The defaults suit most stars; the cadence is set from the sector.
+3. **Run NEMESIS.** A progress bar shows each step: building the light curve,
+   BLS, TLS and LEO-Vetter. A run takes a few minutes; you can switch tabs.
+4. **Results.** Read the verdict, the period, depth, duration and size, the
+   LEO-Vetter tests, and four plots, each with "how to read this plot" notes.
+   The FFI cutout, ExoFOP-TESS parameters, HCI v2 score and the full NEMESIS
+   PDF report are below.
+
+The steps that follow are for **Quick check**.
+
 ### Step 1 — load a light curve
 
 Use the **Upload file** or **Fetch from MAST** tab. For MAST, enter a TIC
@@ -971,6 +1027,24 @@ Measured on a Pi 4 (1 GB) running Raspberry Pi OS Bookworm 64-bit:
 On a 512 MB Pi (Zero W / 3A), turn off ExoMiner and FFI in the PDF-extras
 panel to keep peak under 300 MB.
 
+### NEMESIS worker
+
+NEMESIS needs Python 3.12 with its own pinned stack (numpy 1.26, TLS,
+wotan, lightkurve, LEO-Vetter) and about 650-850 MB at peak, more than the
+site's free instance. So it runs as a separate service in
+[`nemesis_worker/`](nemesis_worker/README.md), and the site forwards
+`/api/nemesis/*` to it. The hosted worker is a Hugging Face Docker Space
+(files in `nemesis_worker/hf_space/`); any Docker host with 1 GB or more works.
+
+| Site variable | Meaning |
+|---|---|
+| `NEMESIS_WORKER_URL` | worker address, e.g. `https://<user>-vetstar-nemesis.hf.space` |
+| `NEMESIS_WORKER_TOKEN` | same value as the worker's `WORKER_TOKEN` secret |
+
+Without `NEMESIS_WORKER_URL` the site still works: the guided mode tells
+users to use Quick check. `nemesis_worker/tools/memprobe.py` measures
+NEMESIS's memory per stage if you need to size a host.
+
 ### Cloud service (Render)
 
 The cloud studio (React + FastAPI + Docker) imports the same
@@ -1197,6 +1271,27 @@ adaptive detection, BLS / Lomb-Scargle, transit geometry (TLCM),
 predicted observables (POE), RV mass function, HCI scoring, ExoMiner
 features, and FFI rendering — with every equation rendered as a LaTeX
 image, see [docs/SCIENCE.md](docs/SCIENCE.md).
+
+Pipelines behind the v2 guided modes:
+
+- Feliz, D. L. et al. (2021). *NEMESIS: Exoplanet Transit Survey of Nearby
+  M-dwarfs in TESS FFIs. I.* AJ 161, 247. doi:10.3847/1538-3881/abedb3.
+- Feliz, D. L. et al. (2026). *NEMESIS II.* arXiv:2611.21758 (submitted to AJ).
+- Kunimoto, M. et al. (2025). *LEO-Vetter: Fully Automated Flux- and
+  Pixel-Level Vetting of TESS Planet Candidates to Support Occurrence Rates.*
+  AJ 170, 280. arXiv:2509.10619.
+- Hippke, M. & Heller, R. (2019). *Optimized transit detection algorithm to
+  search for periodic transits of small planets.* A&A 623, A39 (Transit Least Squares).
+- Mróz, P. et al. (2019). *Microlensing optical depth and event rate toward
+  the Galactic bulge from 8 yr of OGLE-IV observations.* ApJS 244, 29.
+  doi:10.3847/1538-4365/ab426b.
+- Mróz, P. et al. (2017). *No large population of unbound or wide-orbit
+  Jupiter-mass planets.* Nature 548, 183.
+- Udalski, A. (2003). *The Optical Gravitational Lensing Experiment. Real
+  time data analysis systems in the OGLE-III survey.* AcA 53, 291.
+- Paczyński, B. (1986). *Gravitational microlensing by the galactic halo.* ApJ 304, 1.
+
+Habitability and geometry:
 
 - Hill, M. L., Kane, S. R., Foley, B. J., & Schaefer, L. K. (2026).
   *Smaller Than Earth Habitability Model (STEHM): The Lower Size Limit for
