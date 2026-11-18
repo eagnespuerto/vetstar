@@ -19,6 +19,9 @@ const images: ExofopImage[] = [
     fetchBytes: async () => pdf },
   { key: "nemesis-vetting-report", label: "duplicate key on purpose", b64: "", ext: "pdf", code: "O",
     fetchBytes: async () => pdf },
+  // Raw TESScut cutout, as the wizard's second ZIP adds it (code I, .fits).
+  { key: "tess-s0020-1-1_ra_dec_11x11_astrocut", label: "Raw TESScut full-frame-image cutout (FITS)",
+    b64: "", ext: "fits", code: "I", fetchBytes: async () => new TextEncoder().encode("SIMPLE  =                    T") },
 ];
 // 23:30 UTC on 18 Nov is already 19 Nov in UTC+8: the file date must stay 20261118.
 const a = await buildExofopArchive({

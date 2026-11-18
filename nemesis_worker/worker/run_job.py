@@ -37,6 +37,11 @@ def build_settings(req: dict, out_dir: Path) -> dict:
     s["verbose"] = True  # progress markers in the log
     s["show_fig"] = False
     s["cache_dir_path"] = os.environ.get("NEMESIS_CACHE_DIR") or str(out_dir / "cache")
+    # Quaternions come from the AWS mirror (see quaternions.py), saved here.
+    s["quat_savepath"] = str(Path(s["cache_dir_path"]) / "quaternions") + "/"
+    # Keep the TESScut cutout so users can download the raw pixels (moved
+    # into the job folder after the run, see collect_raw_fits).
+    s["keep_FITS"] = True
     s["N_TLS_threads"] = int(os.environ.get("NEMESIS_TLS_THREADS", "1"))
     # NEMESIS defaults to the Primary Mission (sectors 1-26). Allow later sectors.
     s["last_updated_sector"] = int(os.environ.get("NEMESIS_LAST_SECTOR", "120"))
@@ -62,6 +67,36 @@ LITE_SETTINGS = {
     "duration_grid_step": 1.1,       # TLS duration grid (default 1.05)
     "N_TLS_threads": 1,
 }
+
+
+def collect_raw_fits(cache_dir: Path, out_dir: Path, tic: int, since: float) -> list[str]:
+    """Move this job's raw FITS out of the shared cache into <out>/fits/.
+
+    TESScut cutouts (cache/TESSCut) carry no TIC in their names, but the worker
+    runs one job at a time, so every cutout written since the job started is
+    this job's. SPOC TPFs (cache/TESS, 2-minute runs) carry the TIC, so those
+    are copied and left in the cache for the next run of the same star.
+    """
+    import shutil
+
+    dest = out_dir / "fits"
+    moved: list[str] = []
+    tess_cut = cache_dir / "TESSCut"
+    if tess_cut.exists():
+        for p in tess_cut.rglob("*.fits"):
+            if p.is_file() and p.stat().st_mtime >= since - 5:
+                dest.mkdir(exist_ok=True)
+                shutil.move(str(p), dest / p.name)
+                moved.append(p.name)
+    tpf = cache_dir / "TESS"
+    if tpf.exists():
+        tic16 = f"{tic:016d}"
+        for p in tpf.rglob("*.fits"):
+            if p.is_file() and (tic16 in p.name or f"TIC_{tic}" in p.parts):
+                dest.mkdir(exist_ok=True)
+                shutil.copy2(p, dest / p.name)
+                moved.append(p.name)
+    return moved
 
 
 def lite_mode() -> bool:
@@ -118,6 +153,9 @@ def main(job_dir: str) -> int:
 
         print(f"[vetstar] NEMESIS {nemesis_tess.__version__} TIC {tic} S{sector} {cadence}", flush=True)
         settings = build_settings(req, out_dir)
+        if settings.get("use_quat_jitter_mask", True):
+            from .quaternions import ensure_quaternions
+            ensure_quaternions(sector, settings["quat_savepath"])
         _hdu, lc_df, transit_results, _used = full_pipeline(
             ID=tic, path=str(out_dir) + "/", cadence=cadence, Sector=sector, settings=settings,
         )
@@ -125,6 +163,9 @@ def main(job_dir: str) -> int:
         del _hdu, _used
         import gc
         gc.collect()
+        if not lite_mode():
+            raw = collect_raw_fits(Path(settings["cache_dir_path"]), out_dir, tic, started)
+            print(f"[vetstar] raw FITS kept: {raw or 'none'}", flush=True)
         if lc_df is None or len(lc_df) == 0:
             raise RuntimeError("NEMESIS produced no usable light curve for this star and sector.")
         print("[vetstar] summarising", flush=True)
@@ -146,6 +187,12 @@ def main(job_dir: str) -> int:
         return 0
     except Exception as exc:
         traceback.print_exc()
+        try:  # don't leave a failed run's cutouts in the shared cache
+            if not lite_mode():
+                collect_raw_fits(Path(build_settings(req, out_dir)["cache_dir_path"]), out_dir,
+                                 int(req.get("tic", 0)), started)
+        except Exception:
+            pass
         (job / "error.json").write_text(json.dumps({
             "error": f"{type(exc).__name__}: {exc}",
             "runtime_s": round(time.time() - started, 1),

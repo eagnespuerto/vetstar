@@ -80,8 +80,10 @@ def test_file_names_follow_convention(archive):
         assert m["target"] == "TIC103633434" and m["xx"] == xx and m["stamp"] == date
         assert " " not in f
     codes = {FILE_RE.match(f)["code"] for f in files}
-    assert codes == {"L", "O"}
+    assert codes == {"L", "O", "I"}
     assert any(f.endswith(".pdf") for f in files) and any(f.endswith(".png") for f in files)
+    fits = [f for f in files if f.endswith(".fits")]
+    assert len(fits) == 1 and fits[0].startswith(f"TIC103633434I-{xx}{date}.")   # raw FITS, code I
     # The duplicated key got a distinguishing [y] letter.
     assert any(re.search(r"nemesis-vetting-reporta\.pdf$", f) for f in files)
 

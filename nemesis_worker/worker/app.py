@@ -3,7 +3,7 @@
 POST /jobs                 queue a NEMESIS run, returns {"job_id", "position"}
 GET  /jobs/{id}            status, stage, queue position, log tail
 GET  /jobs/{id}/result     JSON summary (light curve, periodogram, fold, LEO-Vetter)
-GET  /jobs/{id}/files      report files NEMESIS wrote (PDF/PNG)
+GET  /jobs/{id}/files      report files NEMESIS wrote (PDF/PNG) and raw FITS
 GET  /jobs/{id}/files/{n}  download one report file
 GET  /health               {"ok": true, "nemesis_version": ...}
 
@@ -279,7 +279,7 @@ def job_result(job_id: str):
 
 def _report_files(d: Path) -> list[Path]:
     out = d / "out"
-    files = [p for p in out.rglob("*") if p.suffix.lower() in (".pdf", ".png")
+    files = [p for p in out.rglob("*") if p.suffix.lower() in (".pdf", ".png", ".fits")
              and "cache" not in p.parts]
     return sorted(files, key=lambda p: p.name)
 
