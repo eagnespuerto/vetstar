@@ -11,6 +11,8 @@ interface OgleReport {
   verdict: "ogle_event" | "fails_ogle_cuts" | "no_event";
   summary: string;
   passed: boolean;
+  /** Set when slow stellar variability was removed before the (unchanged) OGLE search. */
+  cleaning?: { note: string; window_d: number } | null;
   cuts: Cut[];
   fit: null | { t0: number; u0: number; tE: number; f_s: number; chi2_dof: number; tE_longer_than_data: boolean };
   event_window?: { t_start: number; t_end: number };
@@ -68,6 +70,7 @@ export function OglePanel({ lc, onUseWindow }: { lc: LC; onUseWindow: (a: number
               {rep.verdict === "ogle_event" ? "✓ Microlensing-like event" : rep.verdict === "no_event" ? "No event found" : "! Event fails OGLE cuts"}
             </div>
             <p className="text-sm">{rep.summary}</p>
+            {rep.cleaning && <p className="text-xs mt-1 opacity-80">Light curve cleaned first: {rep.cleaning.note}</p>}
           </div>
           {rep.fit && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
