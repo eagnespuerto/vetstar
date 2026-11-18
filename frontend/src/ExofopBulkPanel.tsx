@@ -19,16 +19,117 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-/** One image to bundle into the ExoFOP archive. */
+/** One file to bundle into the ExoFOP archive (a PNG plot by default). */
 export interface ExofopImage {
   /** Short slug used inside the filename (no spaces, no dots, no slashes). */
   key: string;
   /** Human-readable label used in the descriptor "description" column. */
   label: string;
-  /** PNG bytes, base64-encoded (no data-URI prefix). */
+  /** File bytes, base64-encoded (no data-URI prefix). Empty when `url` is set. */
   b64: string;
-  /** ExoFOP single-letter file-type code. L=Light curve, O=Other. Default O. */
+  /** ExoFOP single-letter file-type code: F finding chart, I image,
+   *  L light curve, P photometry, S spectrum, O other. Default O. */
   code?: string;
+  /** File extension without the dot. Default "png". */
+  ext?: string;
+  /** Produce the bytes at build time instead of `b64` (e.g. a PDF report). */
+  fetchBytes?: () => Promise<Uint8Array>;
+}
+
+/** ExoFOP file-type codes (Bulk File Upload Instructions, section 3). */
+const EXOFOP_CODES = new Set(["F", "I", "L", "P", "S", "O"]);
+
+/** UT date as YYYYMMDD. The spec's DATESTAMP is the *UT* date of the file. */
+export function utDateStamp(d = new Date()): string {
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** Descriptor column text: plain ASCII, no pipes (pipes delimit columns). */
+export function descriptorText(s: string): string {
+  return s
+    .replace(/[–—]/g, "-")
+    .replace(/R⊕/g, "R_Earth")
+    .replace(/⊕/g, "Earth")
+    .replace(/[|\r\n]+/g, " ")
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Optional-info part of a filename: letters, digits, dots and dashes only. */
+export function filenameInfo(s: string): string {
+  return s.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+
+export interface ExofopArchive {
+  zipName: string;
+  zip: Blob;
+  /** Descriptor + files, in archive order (for checks and tests). */
+  entries: { name: string; data: Uint8Array }[];
+}
+
+/**
+ * Build an ExoFOP-TESS bulk-upload archive (Bulk File Upload Instructions):
+ * `xxYYYYMMDD-nnn.zip` holding a same-named `.txt` descriptor and the files,
+ * flat, each named `TIC<id><C>-xx<UT date>.<info>[y].<ext>`. Returns null
+ * when there is nothing to bundle. Inputs are assumed already validated.
+ */
+export async function buildExofopArchive(opts: {
+  ticId: number; sector?: number | null; initials: string; counter: string; tag: string;
+  images: ExofopImage[]; now?: Date;
+}): Promise<ExofopArchive | null> {
+  const { ticId, sector, initials: ini, counter: cnt, tag: tg, images } = opts;
+  // Spec: archive date = creation date, file DATESTAMP = UT date. Use UT for both.
+  const yyyymmdd = utDateStamp(opts.now);
+  const archiveBase = `${ini}${yyyymmdd}-${cnt}`;
+  const seen = new Set<string>();
+  const planned: { label: string; filename: string; bytes: Uint8Array }[] = [];
+  for (const img of images) {
+    if (!img.b64 && !img.fetchBytes) continue;
+    const code = (img.code || "O").toUpperCase();
+    if (!EXOFOP_CODES.has(code)) throw new Error(`Unknown ExoFOP file-type code "${code}".`);
+    const ext = (img.ext || "png").replace(/^\./, "").toLowerCase();
+    const safeKey = filenameInfo(img.key.replace(/_/g, "-"));
+    const stem = `TIC${ticId}${code}-${ini}${yyyymmdd}`;
+    let filename = `${stem}.${safeKey}.${ext}`;
+    // Keep names short (ExoFOP has no stated cap; 100 keeps them readable).
+    if (filename.length > 100) {
+      const maxKey = 100 - `${stem}..${ext}`.length;
+      filename = `${stem}.${safeKey.slice(0, Math.max(maxKey, 1))}.${ext}`;
+    }
+    // Spec [y]: a letter after the optional info to tell duplicates apart.
+    if (seen.has(filename)) {
+      const base = filename.slice(0, -(ext.length + 1));
+      let suffix = "a";
+      while (seen.has(`${base}${suffix}.${ext}`)) suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
+      filename = `${base}${suffix}.${ext}`;
+    }
+    let bytes: Uint8Array;
+    if (img.fetchBytes) {
+      try {
+        bytes = await img.fetchBytes();
+      } catch (e: any) {
+        throw new Error(`Could not get ${img.label}: ${e?.message || e}`);
+      }
+    } else {
+      bytes = b64ToBytes(img.b64);
+    }
+    seen.add(filename);
+    planned.push({ label: img.label, filename, bytes });
+  }
+  if (planned.length === 0) return null;
+
+  // Five pipe-delimited columns: file | data tag | group | proprietary months | description.
+  // No group, so the proprietary period must be 0.
+  const descriptor = planned.map((x) =>
+    `${x.filename}|${descriptorText(tg)}||0|${descriptorText(`Vetstar - ${x.label}${sector ? ` (Sector ${sector})` : ""}`)}`,
+  ).join("\n") + "\n";
+  const entries = [
+    { name: `${archiveBase}.txt`, data: new TextEncoder().encode(descriptor) },
+    ...planned.map((x) => ({ name: x.filename, data: x.bytes })),
+  ];
+  return { zipName: `${archiveBase}.zip`, zip: buildZip(entries), entries };
 }
 
 interface Props {
@@ -103,63 +204,16 @@ export default function ExofopBulkPanel({
     localStorage.setItem("vetstar.exofop.initials", ini);
     localStorage.setItem("vetstar.exofop.tag", tg);
 
-    const now = new Date();
-    const yyyymmdd =
-      `${now.getFullYear()}` +
-      String(now.getMonth() + 1).padStart(2, "0") +
-      String(now.getDate()).padStart(2, "0");
-    const archiveBase = `${ini}${yyyymmdd}-${cnt}`;
-
     setBusy(true);
     try {
-      const seen = new Set<string>();
-      const planned: { key: string; label: string; filename: string; bytes: Uint8Array }[] = [];
-      for (const img of images) {
-        if (!img.b64) continue;
-        const code = img.code || "O";
-        const safeKey = img.key.replace(/_/g, "-");
-        let filename = `TIC${ticId}${code}-${ini}${yyyymmdd}.${safeKey}.png`;
-        // 100-char cap per spec §1.
-        if (filename.length > 100) {
-          const maxKey =
-            100 - `TIC${ticId}${code}-${ini}${yyyymmdd}..png`.length;
-          filename = `TIC${ticId}${code}-${ini}${yyyymmdd}.${safeKey.slice(0, Math.max(maxKey, 1))}.png`;
-        }
-        // Disambiguate collisions with a/b/c suffixes.
-        if (seen.has(filename)) {
-          let suffix = "a";
-          while (seen.has(filename.replace(/\.png$/, `${suffix}.png`))) {
-            suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
-          }
-          filename = filename.replace(/\.png$/, `${suffix}.png`);
-        }
-        seen.add(filename);
-        planned.push({
-          key: img.key,
-          label: img.label,
-          filename,
-          bytes: b64ToBytes(img.b64),
-        });
-      }
-
-      if (planned.length === 0) {
+      const archive = await buildExofopArchive({
+        ticId, sector, initials: ini, counter: cnt, tag: tg, images,
+      });
+      if (!archive) {
         setError("No plots available to bundle yet.");
         return;
       }
-
-      const descriptorLines = planned.map(
-        (x) =>
-          `${x.filename}|${tg}||0|Vetstar — ${x.label}${sector ? ` (Sector ${sector})` : ""}`,
-      );
-      const descriptorBytes = new TextEncoder().encode(
-        descriptorLines.join("\n") + "\n",
-      );
-
-      const zipBlob = buildZip([
-        { name: `${archiveBase}.txt`, data: descriptorBytes },
-        ...planned.map((x) => ({ name: x.filename, data: x.bytes })),
-      ]);
-      triggerDownload(zipBlob, `${archiveBase}.zip`);
+      triggerDownload(archive.zip, archive.zipName);
 
       const nextN = Math.min(parseInt(cnt, 10) + 1, 999);
       setCounter(String(nextN).padStart(3, "0"));
@@ -177,7 +231,7 @@ export default function ExofopBulkPanel({
       </summary>
       {caption ?? (
         <p className="text-slate-500 mt-2">
-          Packages every diagnostic plot (PNG) into a single{" "}
+          Packages every diagnostic plot and report (PNG, PDF) into a single{" "}
           <code>xxYYYYMMDD-nnn.zip</code> with a matching{" "}
           <code>.txt</code> descriptor, ready for the{" "}
           <a

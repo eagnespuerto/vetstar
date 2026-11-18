@@ -6,12 +6,13 @@
 import { useEffect, useRef, useState } from "react";
 import { mastSectors, type SectorInfo } from "../api";
 import {
-  nemesisFileUrl, nemesisFiles, nemesisHci, nemesisJob, nemesisResult, nemesisSectors, nemesisStatus,
+  nemesisFileBytes, nemesisFileUrl, nemesisFiles, nemesisHci, nemesisReportPdf, nemesisJob, nemesisResult, nemesisSectors, nemesisStatus,
   submitNemesis, type LeoTest, type NemesisJobRequest, type NemesisJobStatus,
   type NemesisResult, type NemesisStatus,
 } from "./api";
 import { MiniChart } from "./MiniChart";
 import FfiCutoutPanel from "../FfiCutoutPanel";
+import ExofopBulkPanel, { type ExofopImage } from "../ExofopBulkPanel";
 import { ObservablesSection } from "../transit/ObservablesPanel";
 import type { VettingResult } from "../types";
 
@@ -73,6 +74,66 @@ function PaperFigure({ name, b64, children }: { name: keyof typeof HOW_TO_READ; 
         </ul>
       </figcaption>
     </figure>
+  );
+}
+
+function saveBytes(bytes: Uint8Array, name: string, type: string) {
+  const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** PDF report + ExoFOP-TESS bulk-upload ZIP for a finished NEMESIS run. */
+function ExportCard({ jobId, result, files, hciImage }: {
+  jobId: string; result: NemesisResult; files: { name: string; bytes: number }[]; hciImage: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const { tic, sector } = result.meta;
+  const method = result.primary ?? "TLS";
+  const f = result.figures ?? {};
+  // ExoFOP file-type codes: L = light curve, O = other.
+  const images: ExofopImage[] = [
+    f.light_curve && { key: "nemesis-lc", label: "NEMESIS detrended light curve", b64: f.light_curve, code: "L" },
+    f.fold && { key: `nemesis-${method.toLowerCase()}-fold`, label: `NEMESIS ${method} phase-folded transit with residuals`, b64: f.fold, code: "L" },
+    f.odd_even && { key: "nemesis-odd-even", label: "NEMESIS odd and even transits", b64: f.odd_even, code: "L" },
+    f.periodogram && { key: `nemesis-${method.toLowerCase()}-periodogram`, label: `NEMESIS ${method} periodogram`, b64: f.periodogram, code: "O" },
+    hciImage && { key: "hci-v2", label: "Habitability Chance Index v2 summary", b64: hciImage, code: "O" },
+    { key: "nemesis-vetting-report", label: "NEMESIS vetting report (verdict, LEO-Vetter tests, figures)",
+      b64: "", ext: "pdf", code: "O", fetchBytes: () => nemesisReportPdf(jobId, hciImage) },
+    ...files.filter((x) => /multi_page\.pdf$/.test(x.name) && x.name.includes(`_${method}_`)).map((x) => ({
+      key: `nemesis-${method.toLowerCase()}-report`, label: `NEMESIS ${method} multi-page vetting report`,
+      b64: "", ext: "pdf", code: "O", fetchBytes: () => nemesisFileBytes(jobId, x.name),
+    })),
+  ].filter(Boolean) as ExofopImage[];
+
+  return (
+    <div className="card p-5 space-y-3">
+      <h3 className="text-lg font-bold">Save or share these results</h3>
+      <div className="flex flex-wrap gap-3 items-center">
+        <button className="btn-primary" disabled={busy} onClick={async () => {
+          setBusy(true); setErr(null);
+          try {
+            saveBytes(await nemesisReportPdf(jobId, hciImage),
+              `vetstar_nemesis_TIC${tic}_S${String(sector).padStart(3, "0")}.pdf`, "application/pdf");
+          } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+        }}>{busy ? "Building PDF…" : "Download PDF report"}</button>
+        <span className="text-xs text-muted">Verdict, numbers, LEO-Vetter tests, the four plots, FFI cutout
+          {hciImage ? " and your HCI score" : ""}.</span>
+      </div>
+      {err && <p role="alert" className="text-sm text-coral-700">{err}</p>}
+      <ExofopBulkPanel ticId={tic} sector={sector} images={images}
+        caption={<p className="text-muted mt-2">
+          One <code>xxYYYYMMDD-nnn.zip</code> with a matching <code>.txt</code> descriptor, following the{" "}
+          <a href="https://exofop.ipac.caltech.edu/tess/ExoFOP-TESS_Bulk_File_Upload_Instructions.pdf"
+             target="_blank" rel="noopener noreferrer">ExoFOP-TESS bulk upload rules</a>: flat folder,
+          <code>TIC{tic}C-xxYYYYMMDD.info.ext</code> names with the UT date, file codes L (light curve) and O
+          (other), and proprietary period 0. Includes the four plots, {hciImage ? "the HCI summary, " : ""}the Vetstar
+          PDF report and NEMESIS's own report.
+        </p>} />
+    </div>
   );
 }
 
@@ -594,6 +655,10 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
                 )}
               </div>
             </>
+          )}
+
+          {primary && jobId && (
+            <ExportCard jobId={jobId} result={result} files={files} hciImage={hci?.hci_image ?? null} />
           )}
 
           {files.length > 0 && jobId && (

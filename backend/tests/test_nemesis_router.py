@@ -75,3 +75,33 @@ def test_leo_to_verdict():
     assert v["flags"] == ["odd_even_mismatch", "secondary_eclipse_detected"]
     assert f(_leo("FP", ["offset", "odd_even"]))["category"] == "false_positive_blend"
     assert f(_leo("FP", ["vshaped"])) == {"category": "ambiguous", "flags": []}
+
+
+def test_report_pdf_from_worker_result(monkeypatch):
+    """The site builds a Vetstar PDF from the worker's result JSON."""
+    import base64
+
+    from backend.app.routers import nemesis as nm
+
+    png = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15"
+        b"\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    ).decode()
+    params = {"method": "TLS", "period_d": 3.4476, "t0_btjd": 1845.508, "duration_hr": 1.66,
+              "depth_ppt": 0.77, "sde": 15.3, "radius_earth": 1.9, "n_transits": 6.0}
+    result = {
+        "primary": "TLS",
+        "search": {"TLS": {"params": params, "leo": {"available": True, "disposition": "PC", "tests": [
+            {"key": "weak", "title": "Signal strength", "group": "FA", "passed": True,
+             "meaning": "The dip is too weak.", "detail": "MES 30"}]}}},
+        "figures": {k: png for k in ("light_curve", "periodogram", "fold", "odd_even")},
+        "star": {"tic_id": 103633434, "ra": 152.2, "dec": 69.3, "teff": 3912.0},
+        "meta": {"tic": 103633434, "sector": 20, "cadence": "30 minute", "nemesis_version": "2.0",
+                 "runtime_s": 116.2, "lite": False},
+    }
+    monkeypatch.setenv("NEMESIS_WORKER_URL", "http://worker.invalid")
+    monkeypatch.setattr(nm, "_call", lambda method, path, body=None, raw=False: result)
+    r = client.post("/api/nemesis/jobs/abc123/report", json={"include_ffi": False})
+    assert r.status_code == 200
+    assert r.content[:5] == b"%PDF-"
+    assert 'vetstar_nemesis_TIC103633434_S020.pdf' in r.headers["content-disposition"]
