@@ -132,6 +132,16 @@ def fetch_dvt(tic_id: int, sector: Optional[int] = None) -> Optional[dict]:
     if dvt_products is None:
         return None
 
+    from .aws_mirror import download as aws_download
+    aws_path = aws_download(str(dvt_products[0]["dataURI"] if "dataURI" in dvt_products.colnames else ""))
+    if aws_path:
+        log.info("DVT downloaded from AWS mirror: %s", aws_path)
+        try:
+            return parse_dvt_fits(aws_path)
+        except Exception as e:
+            log.warning("DVT: parse failed for %s: %s", aws_path, e)
+            return None
+
     def download():
         with MAST_DOWNLOAD_LOCK:
             return Observations.download_products(dvt_products[:1])
