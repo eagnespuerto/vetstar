@@ -23,7 +23,7 @@ const images: ExofopImage[] = [
 // 23:30 UTC on 18 Nov is already 19 Nov in UTC+8: the file date must stay 20261118.
 const a = await buildExofopArchive({
   ticId: 103633434, sector: 20, initials: "ea", counter: "007", tag: "20261118_puerto_vetstar_001",
-  images, now: new Date(Date.UTC(2026, 10, 18, 23, 30)),
+  images, now: new Date(Date.UTC(2026, 10, 18, 23, 30)), author: "Ma. Liza Peñaflor | test",
 });
 if (!a) throw new Error("no archive");
 writeFileSync(outPath, new Uint8Array(await a.zip.arrayBuffer()));

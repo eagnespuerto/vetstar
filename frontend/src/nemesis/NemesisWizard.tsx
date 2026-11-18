@@ -12,7 +12,7 @@ import {
 } from "./api";
 import { MiniChart } from "./MiniChart";
 import FfiCutoutPanel from "../FfiCutoutPanel";
-import ExofopBulkPanel, { type ExofopImage } from "../ExofopBulkPanel";
+import ExofopBulkPanel, { IdentityFields, useExofopIdentity, type ExofopImage } from "../ExofopBulkPanel";
 import { ObservablesSection } from "../transit/ObservablesPanel";
 import type { VettingResult } from "../types";
 
@@ -91,6 +91,9 @@ function ExportCard({ jobId, result, files, hciImage }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // One name + initials for the PDF cover and the ZIP (shared, remembered).
+  const identity = useExofopIdentity();
+  const credit = { author: identity.name, initials: identity.initials };
   const { tic, sector } = result.meta;
   const method = result.primary ?? "TLS";
   const f = result.figures ?? {};
@@ -102,7 +105,7 @@ function ExportCard({ jobId, result, files, hciImage }: {
     f.periodogram && { key: `nemesis-${method.toLowerCase()}-periodogram`, label: `NEMESIS ${method} periodogram`, b64: f.periodogram, code: "O" },
     hciImage && { key: "hci-v2", label: "Habitability Chance Index v2 summary", b64: hciImage, code: "O" },
     { key: "nemesis-vetting-report", label: "NEMESIS vetting report (verdict, LEO-Vetter tests, figures)",
-      b64: "", ext: "pdf", code: "O", fetchBytes: () => nemesisReportPdf(jobId, hciImage) },
+      b64: "", ext: "pdf", code: "O", fetchBytes: () => nemesisReportPdf(jobId, hciImage, credit) },
     ...files.filter((x) => /multi_page\.pdf$/.test(x.name) && x.name.includes(`_${method}_`)).map((x) => ({
       key: `nemesis-${method.toLowerCase()}-report`, label: `NEMESIS ${method} multi-page vetting report`,
       b64: "", ext: "pdf", code: "O", fetchBytes: () => nemesisFileBytes(jobId, x.name),
@@ -112,11 +115,14 @@ function ExportCard({ jobId, result, files, hciImage }: {
   return (
     <div className="card p-5 space-y-3">
       <h3 className="text-lg font-bold">Save or share these results</h3>
+      <div className="flex flex-wrap gap-2 items-end text-xs">
+        <IdentityFields identity={identity} />
+      </div>
       <div className="flex flex-wrap gap-3 items-center">
         <button className="btn-primary" disabled={busy} onClick={async () => {
           setBusy(true); setErr(null);
           try {
-            saveBytes(await nemesisReportPdf(jobId, hciImage),
+            saveBytes(await nemesisReportPdf(jobId, hciImage, credit),
               `vetstar_nemesis_TIC${tic}_S${String(sector).padStart(3, "0")}.pdf`, "application/pdf");
           } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
         }}>{busy ? "Building PDF…" : "Download PDF report"}</button>
@@ -124,7 +130,7 @@ function ExportCard({ jobId, result, files, hciImage }: {
           {hciImage ? " and your HCI score" : ""}.</span>
       </div>
       {err && <p role="alert" className="text-sm text-coral-700">{err}</p>}
-      <ExofopBulkPanel ticId={tic} sector={sector} images={images}
+      <ExofopBulkPanel ticId={tic} sector={sector} images={images} identity={identity}
         caption={<p className="text-muted mt-2">
           One <code>xxYYYYMMDD-nnn.zip</code> with a matching <code>.txt</code> descriptor, following the{" "}
           <a href="https://exofop.ipac.caltech.edu/tess/ExoFOP-TESS_Bulk_File_Upload_Instructions.pdf"

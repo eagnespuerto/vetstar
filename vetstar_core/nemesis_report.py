@@ -124,8 +124,16 @@ def _header_footer(canvas, doc, title: str):
     canvas.restoreState()
 
 
+def credit_line(author: Optional[str], initials: Optional[str]) -> str:
+    """'E. A. Puerto (ea)', 'E. A. Puerto', '(ea)' or '' (same rule as the ZIP)."""
+    a = (author or "").strip()
+    i = "".join(c for c in (initials or "").strip().lower() if c.isalpha())
+    return f"{a} ({i})" if a and i else a or (f"({i})" if i else "")
+
+
 def build_nemesis_pdf(result: Dict[str, Any], hci_image_b64: Optional[str] = None,
-                      ffi_image_b64: Optional[str] = None) -> bytes:
+                      ffi_image_b64: Optional[str] = None, author: Optional[str] = None,
+                      initials: Optional[str] = None) -> bytes:
     st = _styles()
     meta = result.get("meta") or {}
     star = result.get("star") or {}
@@ -140,6 +148,10 @@ def build_nemesis_pdf(result: Dict[str, Any], hci_image_b64: Optional[str] = Non
         f"NEMESIS {meta.get('nemesis_version', '?')} · {meta.get('cadence', '')} cadence · "
         f"{'light mode (coarser TLS grid)' if meta.get('lite') else 'full NEMESIS II settings'} · "
         f"run time {_int(meta.get('runtime_s'))} s", st["nm_small"]))
+    credit = credit_line(author, initials)
+    if credit:
+        from xml.sax.saxutils import escape  # Paragraph text is markup
+        story.append(Paragraph(f"Prepared by {escape(credit)}", st["nm_body"]))
     story.append(Spacer(1, 8))
 
     # Verdict
@@ -237,7 +249,8 @@ def build_nemesis_pdf(result: Dict[str, Any], hci_image_b64: Optional[str] = Non
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=inch, rightMargin=inch,
                             topMargin=0.85 * inch, bottomMargin=0.7 * inch,
-                            title=f"Vetstar NEMESIS report TIC {tic} S{sector}", author="Vetstar")
+                            title=f"Vetstar NEMESIS report TIC {tic} S{sector}",
+                            author=credit_line(author, initials) or "Vetstar")
     doc.build(story, onFirstPage=lambda c, d: _header_footer(c, d, title),
               onLaterPages=lambda c, d: _header_footer(c, d, title))
     return buf.getvalue()

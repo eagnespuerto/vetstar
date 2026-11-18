@@ -101,7 +101,16 @@ def test_report_pdf_from_worker_result(monkeypatch):
     }
     monkeypatch.setenv("NEMESIS_WORKER_URL", "http://worker.invalid")
     monkeypatch.setattr(nm, "_call", lambda method, path, body=None, raw=False: result)
-    r = client.post("/api/nemesis/jobs/abc123/report", json={"include_ffi": False})
+    r = client.post("/api/nemesis/jobs/abc123/report",
+                    json={"include_ffi": False, "author": "A & <B>", "initials": "ab"})
     assert r.status_code == 200
     assert r.content[:5] == b"%PDF-"
     assert 'vetstar_nemesis_TIC103633434_S020.pdf' in r.headers["content-disposition"]
+
+
+def test_credit_line():
+    from vetstar_core.nemesis_report import credit_line
+    assert credit_line("E. A. Puerto", "EA") == "E. A. Puerto (ea)"
+    assert credit_line("E. A. Puerto", None) == "E. A. Puerto"
+    assert credit_line("", "ea") == "(ea)"
+    assert credit_line(None, None) == ""

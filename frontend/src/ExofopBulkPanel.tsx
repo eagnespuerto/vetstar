@@ -78,8 +78,11 @@ export interface ExofopArchive {
 export async function buildExofopArchive(opts: {
   ticId: number; sector?: number | null; initials: string; counter: string; tag: string;
   images: ExofopImage[]; now?: Date;
+  /** Optional person credited in each description, with the initials. */
+  author?: string;
 }): Promise<ExofopArchive | null> {
   const { ticId, sector, initials: ini, counter: cnt, tag: tg, images } = opts;
+  const credit = opts.author?.trim() ? `, by ${creditLine(opts.author, ini)}` : "";
   // Spec: archive date = creation date, file DATESTAMP = UT date. Use UT for both.
   const yyyymmdd = utDateStamp(opts.now);
   const archiveBase = `${ini}${yyyymmdd}-${cnt}`;
@@ -123,7 +126,7 @@ export async function buildExofopArchive(opts: {
   // Five pipe-delimited columns: file | data tag | group | proprietary months | description.
   // No group, so the proprietary period must be 0.
   const descriptor = planned.map((x) =>
-    `${x.filename}|${descriptorText(tg)}||0|${descriptorText(`Vetstar - ${x.label}${sector ? ` (Sector ${sector})` : ""}`)}`,
+    `${x.filename}|${descriptorText(tg)}||0|${descriptorText(`Vetstar - ${x.label}${sector ? ` (Sector ${sector})` : ""}${credit}`)}`,
   ).join("\n") + "\n";
   const entries = [
     { name: `${archiveBase}.txt`, data: new TextEncoder().encode(descriptor) },
@@ -132,8 +135,100 @@ export async function buildExofopArchive(opts: {
   return { zipName: `${archiveBase}.zip`, zip: buildZip(entries), entries };
 }
 
+const LS_NAME = "vetstar.exofop.name";
+const LS_INITIALS = "vetstar.exofop.initials";
+
+function lsGet(k: string): string {
+  try { return localStorage.getItem(k) || ""; } catch { return ""; }
+}
+function lsSet(k: string, v: string) {
+  // An empty value removes the entry, so clearing a box really forgets it.
+  try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* private mode: not remembered */ }
+}
+
+/** Suggested ExoFOP initials from a name: "Ella Agnes Puerto" -> "eap". */
+export function initialsFromName(name: string): string {
+  return name
+    .normalize("NFKD").replace(/[^\p{L}\s.-]/gu, "")
+    .split(/[\s.-]+/).filter(Boolean)
+    .map((w) => w[0]).join("").toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+/** "E. A. Puerto (ea)", "E. A. Puerto", "(ea)" or "" for credits. */
+export function creditLine(name: string, initials: string): string {
+  const n = name.trim(), i = initials.trim().toLowerCase();
+  return n && i ? `${n} (${i})` : n || (i ? `(${i})` : "");
+}
+
+export interface ExofopIdentity {
+  name: string;
+  setName: (v: string) => void;
+  initials: string;
+  setInitials: (v: string) => void;
+}
+
+/**
+ * Your name (optional) and ExoFOP initials, remembered in this browser and
+ * shared by every export (ZIP descriptions, file names, PDF cover). Typing a
+ * name fills in suggested initials while the initials box is empty.
+ */
+export function useExofopIdentity(): ExofopIdentity {
+  const [name, setNameState] = useState(() => lsGet(LS_NAME));
+  const [initials, setInitialsState] = useState(() => lsGet(LS_INITIALS));
+  const [autoInitials, setAutoInitials] = useState(() => !lsGet(LS_INITIALS));
+  const setName = (v: string) => {
+    setNameState(v); lsSet(LS_NAME, v.trim());
+    if (autoInitials) { const s = initialsFromName(v); setInitialsState(s); lsSet(LS_INITIALS, s); }
+  };
+  const setInitials = (v: string) => {
+    setInitialsState(v); lsSet(LS_INITIALS, v.trim().toLowerCase());
+    setAutoInitials(v.trim() === "");
+  };
+  return { name, setName, initials, setInitials };
+}
+
+/** Name + initials inputs, used by the ZIP builder and the NEMESIS export card. */
+export function IdentityFields({ identity, compact = false }: { identity: ExofopIdentity; compact?: boolean }) {
+  return (
+    <>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-slate-600">Your name <span className="text-slate-400">(optional)</span></span>
+        <input
+          type="text"
+          value={identity.name}
+          onChange={(e) => identity.setName(e.target.value)}
+          placeholder="E. A. Puerto"
+          maxLength={60}
+          autoComplete="name"
+          className={`${compact ? "w-44" : "w-56"} px-2 py-1 border border-slate-300 rounded`}
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-slate-600">Initials (xx)</span>
+        <input
+          type="text"
+          value={identity.initials}
+          onChange={(e) => identity.setInitials(e.target.value)}
+          placeholder="mc"
+          maxLength={6}
+          className="w-20 px-2 py-1 border border-slate-300 rounded font-mono"
+        />
+      </label>
+      <p className="basis-full text-slate-500 text-[11px] leading-snug" role="note">
+        Vetstar does not record your name or initials. They are used only to build your files: the
+        "Prepared by" line on the PDF and the ExoFOP file names and descriptions in the ZIP. The ZIP is
+        made in your browser; for the PDF they are sent with that one request and not stored. Your browser
+        remembers them on this device so you don't retype them; clear the boxes to forget them.
+      </p>
+    </>
+  );
+}
+
 interface Props {
   ticId?: number | null;
+  /** Shared name + initials; when given, the panel does not show its own fields. */
+  identity?: ExofopIdentity;
   /** Single-sector context, used in the description column. Optional. */
   sector?: number | null;
   /** Source list of bundleable images. May be empty until plots have loaded. */
@@ -160,16 +255,15 @@ export default function ExofopBulkPanel({
   images,
   title = "⬇ Build ExoFOP-TESS bulk-upload ZIP",
   caption,
+  identity: sharedIdentity,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [initials, setInitials] = useState<string>(
-    () => localStorage.getItem("vetstar.exofop.initials") || "",
-  );
+  const ownIdentity = useExofopIdentity();
+  const identity = sharedIdentity ?? ownIdentity;
+  const initials = identity.initials;
   const [counter, setCounter] = useState<string>("001");
-  const [tag, setTag] = useState<string>(
-    () => localStorage.getItem("vetstar.exofop.tag") || "",
-  );
+  const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
 
   const run = async () => {
     setError(null);
@@ -201,13 +295,13 @@ export default function ExofopBulkPanel({
       return;
     }
 
-    localStorage.setItem("vetstar.exofop.initials", ini);
-    localStorage.setItem("vetstar.exofop.tag", tg);
+    lsSet(LS_INITIALS, ini);
+    lsSet("vetstar.exofop.tag", tg);
 
     setBusy(true);
     try {
       const archive = await buildExofopArchive({
-        ticId, sector, initials: ini, counter: cnt, tag: tg, images,
+        ticId, sector, initials: ini, counter: cnt, tag: tg, images, author: identity.name,
       });
       if (!archive) {
         setError("No plots available to bundle yet.");
@@ -246,18 +340,8 @@ export default function ExofopBulkPanel({
           auto-bumps after each build.
         </p>
       )}
-      <div className="grid grid-cols-1 sm:grid-cols-[auto_auto_1fr_auto] gap-2 mt-3 items-end">
-        <label className="flex flex-col gap-0.5">
-          <span className="text-slate-600">Initials (xx)</span>
-          <input
-            type="text"
-            value={initials}
-            onChange={(e) => setInitials(e.target.value)}
-            placeholder="mc"
-            maxLength={6}
-            className="w-20 px-2 py-1 border border-slate-300 rounded font-mono"
-          />
-        </label>
+      <div className="flex flex-wrap gap-2 mt-3 items-end">
+        {!sharedIdentity && <IdentityFields identity={identity} compact />}
         <label className="flex flex-col gap-0.5">
           <span className="text-slate-600">Counter (nnn)</span>
           <input
@@ -285,7 +369,7 @@ export default function ExofopBulkPanel({
             value={tag}
             onChange={(e) => setTag(e.target.value)}
             placeholder="YYYYMMDD_initials_NNN"
-            className="px-2 py-1 border border-slate-300 rounded font-mono"
+            className="min-w-[14rem] px-2 py-1 border border-slate-300 rounded font-mono"
           />
         </label>
         <button

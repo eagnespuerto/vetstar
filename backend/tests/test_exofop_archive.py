@@ -98,4 +98,6 @@ def test_descriptor_rows(archive):
         assert cols[3] == "0"                    # proprietary period must be 0 without a group
         assert cols[4]                           # description
     assert any("with residuals" in r for r in rows)   # "|" in a label was removed, not a 6th column
-    assert any("periodogram - 1.9 R_Earth" in r for r in rows)   # em dash and R-circled-plus made ASCII
+    assert any("periodogram - 1.9 R_Earth" in r for r in rows)
+    # Author credit: ASCII-folded, pipe removed, with the initials, on every row.
+    assert all(r.endswith(", by Ma. Liza Penaflor test (ea)") for r in rows), rows[0]   # em dash and R-circled-plus made ASCII
