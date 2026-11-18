@@ -112,6 +112,24 @@ function ExportCard({ jobId, result, files, hciImage }: {
     })),
   ].filter(Boolean) as ExofopImage[];
 
+  // Second ZIP: NEMESIS's own report pages plus the raw FITS pixels.
+  // ExoFOP codes: I = image (FITS cutout / TPF), O = other (report pages).
+  const isFits = (n: string) => /\.fits$/i.test(n);
+  const reportMulti = (n: string) => /multi_page\.pdf$/.test(n) && n.includes(`_${method}_`);
+  const rawFiles = files.filter((x) => !reportMulti(x.name));
+  const fitsCount = rawFiles.filter((x) => isFits(x.name)).length;
+  const rawImages: ExofopImage[] = rawFiles.map((x) => {
+    const ext = (x.name.match(/\.([a-z0-9]+)$/i)?.[1] ?? "dat").toLowerCase();
+    const stem = x.name.replace(/\.[^.]+$/, "").replace(new RegExp(`^TIC_?${tic}_?`), "");
+    const label = !isFits(x.name) ? `NEMESIS report page ${x.name}`
+      : /astrocut/i.test(x.name) ? `Raw TESScut full-frame-image cutout (FITS) ${x.name}`
+      : /_tp\.fits$/i.test(x.name) ? `Raw SPOC target pixel file (FITS) ${x.name}`
+      : `Raw FITS ${x.name}`;
+    return { key: stem, label, b64: "", ext, code: isFits(x.name) ? "I" : "O",
+             fetchBytes: () => nemesisFileBytes(jobId, x.name) };
+  });
+  const rawMb = rawFiles.reduce((a, x) => a + x.bytes, 0) / 2 ** 20;
+
   return (
     <div className="card p-5 space-y-3">
       <h3 className="text-lg font-bold">Save or share these results</h3>
@@ -139,6 +157,16 @@ function ExportCard({ jobId, result, files, hciImage }: {
           (other), and proprietary period 0. Includes the four plots, {hciImage ? "the HCI summary, " : ""}the Vetstar
           PDF report and NEMESIS's own report.
         </p>} />
+      {rawImages.length > 0 && (
+        <ExofopBulkPanel ticId={tic} sector={sector} images={rawImages} identity={identity} defaultCounter="002"
+          title={`⬇ Build ExoFOP-TESS ZIP of NEMESIS pages${fitsCount ? " and raw FITS" : ""}`}
+          caption={<p className="text-muted mt-2">
+            A second ZIP, same rules and same name and initials: NEMESIS's own report pages
+            {fitsCount ? <> and the raw pixel data NEMESIS used ({fitsCount} FITS file{fitsCount > 1 ? "s" : ""}, code I)</> : null}.
+            About {rawMb < 1 ? rawMb.toFixed(1) : Math.round(rawMb)} MB before zipping. It uses counter 002 so it does
+            not clash with the ZIP above if you upload both on the same UT day.
+          </p>} />
+      )}
     </div>
   );
 }

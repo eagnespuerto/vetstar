@@ -237,6 +237,9 @@ interface Props {
   title?: string;
   /** Optional caption shown above the form. */
   caption?: React.ReactNode;
+  /** Starting archive counter (nnn). Give a second ZIP on the same page "002"
+   *  so two uploads on the same UT day don't share a name. */
+  defaultCounter?: string;
 }
 
 /**
@@ -256,13 +259,14 @@ export default function ExofopBulkPanel({
   title = "⬇ Build ExoFOP-TESS bulk-upload ZIP",
   caption,
   identity: sharedIdentity,
+  defaultCounter = "001",
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ownIdentity = useExofopIdentity();
   const identity = sharedIdentity ?? ownIdentity;
   const initials = identity.initials;
-  const [counter, setCounter] = useState<string>("001");
+  const [counter, setCounter] = useState<string>(defaultCounter);
   const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
 
   const run = async () => {
