@@ -166,6 +166,7 @@ export function ExportToolbar({
           </div>
           <ExofopBulkPanel
             identity={identity}
+            tagDescription="Vetstar-miniOGLE"
             ticId={exportMetadata.tic_id}
             sector={exportMetadata.sector ?? undefined}
             images={_buildExofopImages(pngB64, ffiPng)}
@@ -191,6 +192,7 @@ export function ExportToolbar({
           {exportMetadata.sector != null && (
             <ExofopBulkPanel
               identity={identity}
+              tagDescription="Vetstar-miniOGLE"
               defaultCounter="002"
               ticId={exportMetadata.tic_id}
               sector={exportMetadata.sector}
