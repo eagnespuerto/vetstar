@@ -3,7 +3,7 @@
 # from GitHub at a fixed commit. To update: change VETSTAR_REF and save.
 FROM python:3.12-slim
 
-ARG VETSTAR_REF=b138725
+ARG VETSTAR_REF=43a65a8
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git build-essential \
  && rm -rf /var/lib/apt/lists/*
