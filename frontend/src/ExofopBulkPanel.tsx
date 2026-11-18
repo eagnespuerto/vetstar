@@ -297,6 +297,8 @@ interface Props {
   /** Starting archive counter (nnn). Give a second ZIP on the same page "002"
    *  so two uploads on the same UT day don't share a name. */
   defaultCounter?: string;
+  /** Default description for the tag builder, e.g. "Vetstar-NEMESIS". */
+  tagDescription?: string;
 }
 
 /**
@@ -317,6 +319,7 @@ export default function ExofopBulkPanel({
   caption,
   identity: sharedIdentity,
   defaultCounter = "001",
+  tagDescription = "Vetstar-NEMESIS",
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -329,7 +332,7 @@ export default function ExofopBulkPanel({
   const [counter, setCounter] = useState<string>(() => pad3(lastCounter(initials) + offset));
   const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
   const [tagUser, setTagUser] = useState<string>(() => lsGet("vetstar.exofop.username"));
-  const [tagDesc, setTagDesc] = useState<string>("Vetstar-NEMESIS");
+  const [tagDesc, setTagDesc] = useState<string>(tagDescription);
   const tagProblem = tag.trim() ? checkDataTag(tag) : null;
 
   const run = async () => {
