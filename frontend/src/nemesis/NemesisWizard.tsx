@@ -114,6 +114,71 @@ const VERDICTS = {
         text: "At least one false-alarm test flagged the signal. It may be noise or stellar activity. LEO-Vetter is strict for shallow dips, so check the folded light curve yourself." },
 } as const;
 
+// Share of the progress bar for each stage: [start %, end %]. Rough split
+// from where a NEMESIS run spends its time.
+const STAGE_SPAN: Record<string, [number, number]> = {
+  queued: [0, 5], download: [5, 35], bls: [35, 60], tls: [60, 85], report: [85, 98], done: [100, 100],
+};
+// Typical seconds per stage on a small instance; sets how fast the bar creeps.
+const STAGE_TYPICAL_S: Record<string, number> = { queued: 30, download: 240, bls: 180, tls: 300, report: 120 };
+
+const TIPS = [
+  "TESS takes a picture of a large patch of sky every 30 minutes (10 minutes in later years), for about 27 days.",
+  "A planet the size of Earth dims a Sun-like star by less than 0.01 %. That is why the noise has to be removed so carefully.",
+  "NEMESIS builds its own light curve from the full-frame images, so it can look at stars that never got a 2-minute light curve.",
+  "M dwarfs are small, cool stars. A planet blocks more of their light, so small planets are easier to find around them.",
+  "BLS looks for box-shaped dips; TLS uses a realistic transit shape with darker edges (limb darkening).",
+  "Most signals are not planets: eclipsing binaries, spots and spacecraft jitter can all make dips. That is what LEO-Vetter checks.",
+  "A planet candidate still needs follow-up, such as ground-based photometry or radial velocities, before it can be called a planet.",
+  "Free servers are slow, so a run can take 10 to 30 minutes. You can switch tabs; the run keeps going.",
+];
+
+/** Estimated progress: the stage sets the range, time inside it creeps toward
+ *  the end of the range but never reaches it, so the bar never stalls or lies. */
+function estimateProgress(stage: string, secondsInStage: number): number {
+  const [a, b] = STAGE_SPAN[stage] ?? [0, 5];
+  if (a === b) return a;
+  const typical = STAGE_TYPICAL_S[stage] ?? 120;
+  return a + (b - a) * (1 - Math.exp(-secondsInStage / typical)) * 0.95;
+}
+
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function RunProgress({ job, startedAt }: { job: NemesisJobStatus | null; startedAt: number | null }) {
+  const [now, setNow] = useState(Date.now());
+  const stageRef = useRef<{ key: string; since: number }>({ key: "queued", since: Date.now() });
+  useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
+  const stage = job?.stage ?? "queued";
+  if (stageRef.current.key !== stage) stageRef.current = { key: stage, since: Date.now() };
+  const pct = estimateProgress(stage, (now - stageRef.current.since) / 1000);
+  const elapsed = startedAt ? (now - startedAt) / 1000 : 0;
+  const tip = TIPS[Math.floor(elapsed / 20) % TIPS.length];
+  const label = RUN_STAGES.find((s) => s.key === stage)?.label ?? "Working";
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between text-sm">
+        <span className="font-semibold text-heading">{label}…</span>
+        <span className="font-mono text-muted tabular">{Math.round(pct)} % · {mmss(elapsed)} elapsed</span>
+      </div>
+      <div className="h-3 w-full rounded-full bg-ink-100 overflow-hidden" role="progressbar"
+           aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)} aria-label="NEMESIS run progress">
+        <div className="h-full rounded-full bg-gradient-to-r from-iris-600 via-lagoon to-ember transition-[width] duration-1000 ease-out relative overflow-hidden"
+             style={{ width: `${pct}%` }}>
+          <div className="absolute inset-0 progress-shimmer" />
+        </div>
+      </div>
+      <p className="text-xs text-muted">
+        The percentage is an estimate from the current step. {stage === "queued" && elapsed > 20
+          ? "A free server may be waking up from sleep; this can take a minute."
+          : ""}
+      </p>
+      <div className="rounded-lg border border-line bg-surface-muted p-3 text-sm flex gap-2" aria-live="off">
+        <span aria-hidden="true">💡</span><span key={tip} className="animate-fade-in">{tip}</span>
+      </div>
+    </div>
+  );
+}
+
 function Stepper({ step }: { step: Step }) {
   return (
     <ol className="flex flex-wrap gap-2" aria-label="Progress">
@@ -192,6 +257,7 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
   const [error, setError] = useState<string | null>(null);
   const [hci, setHci] = useState<any>(null);
   const [hciBusy, setHciBusy] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -227,7 +293,7 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
 
   const run = async () => {
     if (sector == null) return;
-    setError(null); setResult(null); setHci(null); setStep(3); setJob(null);
+    setError(null); setResult(null); setHci(null); setStep(3); setJob(null); setStartedAt(Date.now());
     try {
       const { job_id } = await submitNemesis({ tic: Number(tic), sector, ...opts });
       setJobId(job_id);
@@ -388,7 +454,8 @@ export default function NemesisWizard({ onUseQuickCheck }: { onUseQuickCheck: ()
 
       {step === 3 && (
         <div className="card p-5 space-y-4" aria-live="polite">
-          <p className="text-sm text-muted">This usually takes 3 to 15 minutes. You can leave this tab open and come back.</p>
+          <RunProgress job={job} startedAt={startedAt} />
+          <p className="text-sm text-muted">A run usually takes 5 to 30 minutes. You can switch to another tab and come back.</p>
           <ol className="space-y-2">
             {RUN_STAGES.map((s, i) => {
               const done = i < stageIdx, now = i === stageIdx && job?.state !== "error";

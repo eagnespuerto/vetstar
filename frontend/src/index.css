@@ -25,6 +25,15 @@
   .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold; }
 }
 
+/* NEMESIS progress bar: a soft moving highlight, and fading tips. */
+@keyframes vs-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.progress-shimmer {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  animation: vs-shimmer 1.8s linear infinite;
+}
+@keyframes vs-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.animate-fade-in { animation: vs-fade-in 400ms ease-out; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
