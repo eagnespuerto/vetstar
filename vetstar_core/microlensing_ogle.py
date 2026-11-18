@@ -63,8 +63,10 @@ def tess_cuts() -> Dict[str, Dict[str, Any]]:
         "chi2_3plus_min": {"value": 32.0, "ogle": 32.0,
                            "why": "Same as OGLE."},
         "chi2_out_max": {"value": 2.0, "ogle": 2.0,
-                         "why": "Same as OGLE, but 'outside' is the rest of the sector, "
-                                "not a 720-day window."},
+                         "why": "Same threshold as OGLE. OGLE compares data outside a 720-day "
+                                "window with a flat baseline; a TESS sector is short next to an "
+                                "event's wings, so here it is the residual from the PSPL model "
+                                "(baseline F_s + F_b) outside the event window."},
         "amplitude_mag_min": {"value": 0.1, "ogle": 0.1,
                               "why": "Same as OGLE. Rejects small-amplitude variables; "
                                      "low-magnification TESS events may fail it."},
@@ -317,7 +319,18 @@ def ogle_search(time, flux, flux_err, window_d: float = 6.0,
         f_base, sig_base = robust_baseline(f, out)
         report["baseline"] = {"flux": f_base, "sigma": sig_base}
     report["event_window"] = {"t_start": center - half, "t_end": center + half}
-    chi2_out = (float((((f[out] - f_base) / e[out]) ** 2).sum()) / max(int(out.sum()) - 1, 1)
+    # OGLE tests flatness against a constant baseline because its window is
+    # far longer than any event. A TESS sector can be short next to the
+    # event's wings, so test the residuals from the fitted PSPL model, which
+    # levels off to the true baseline F_s + F_b. Same intent: no other
+    # variability outside the event.
+    if fit is not None:
+        ref = fit.fs * pspl_magnification(t, fit.t0, fit.tE, fit.u0) + fit.fb
+        n_par = 1
+    else:
+        ref = np.full_like(f, f_base)
+        n_par = 1
+    chi2_out = (float((((f[out] - ref[out]) / e[out]) ** 2).sum()) / max(int(out.sum()) - n_par, 1)
                 if out.sum() >= 10 else None)
     # Other brightenings = strong bumps wholly outside the event window.
     others = [b for b in strong if b is not main
@@ -332,7 +345,8 @@ def ogle_search(time, flux, flux_err, window_d: float = 6.0,
              f">= {cuts['chi2_3plus_min']['value']}", cuts),
         _cut("chi2_out_max", chi2_out, None if chi2_out is None
              else chi2_out <= cuts["chi2_out_max"]["value"],
-             f"<= {cuts['chi2_out_max']['value']} outside the event window", cuts),
+             f"<= {cuts['chi2_out_max']['value']} outside the event window"
+             + ("" if chi2_out is not None else " (too few points outside the event to test)"), cuts),
         {"name": "n_DIA", "value": None, "passed": None, "rule": ">= 3 on difference images",
          "ogle": 3, "why": "Not applicable: TESS light curves carry no difference-image detections."},
         _cut("n_bump", n_bump, n_bump == 1, "exactly one bump", cuts),

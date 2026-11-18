@@ -67,3 +67,14 @@ def test_endpoint():
                json={"time": T.tolist(), "flux": f.tolist(), "flux_err": e.tolist()})
     assert r.status_code == 200 and r.json()["paper"]["doi"] == "10.3847/1538-4365/ab426b"
     assert "chi2_3plus_min" in c.get("/api/microlensing/ogle_cuts").json()
+
+
+def test_long_event_in_short_light_curve_passes():
+    """Regression: the UI's PSPL demo (tE = 5 d over a 40-d span) failed the
+    flatness cut because its wings filled the 'outside' data."""
+    t = 1200 + 40 * np.arange(400) / 399
+    r = np.random.default_rng(7)
+    f = pspl_flux(t, 1220.0, 5.0, 0.15, 1.0, 0.0) + r.normal(0, 3e-4, len(t))
+    rep = ogle_search(t, f, np.full(len(t), 3e-4))
+    assert rep["verdict"] == "ogle_event", rep["summary"]
+    assert _cut(rep, "chi2_out_max")["value"] < 2.0
