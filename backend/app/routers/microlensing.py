@@ -458,7 +458,12 @@ def api_microlensing_ogle_search(req: OgleSearchRequest):
     if not (0.5 <= req.window_d <= 30):
         raise HTTPException(status_code=400, detail="window_d must be between 0.5 and 30 days.")
     try:
-        return ogle_search(req.time, req.flux, req.flux_err, window_d=req.window_d)
+        # Clean first (slow stellar variability), then run OGLE unchanged.
+        from vetstar_core.lc_clean import clean_for_event_search
+        tc, fc, ec, cleaning = clean_for_event_search(req.time, req.flux, req.flux_err)
+        report = ogle_search(tc, fc, ec, window_d=req.window_d)
+        report["cleaning"] = cleaning
+        return report
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # pragma: no cover
