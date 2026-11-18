@@ -24,6 +24,7 @@ from vetstar_core.microlensing_coverage import (
 )
 from vetstar_core.microlensing_coverage import parse_events_csv, resolve_ra_dec_to_tic
 from vetstar_core.microlensing_ffi import make_ffi_gaia_cutout
+from vetstar_core.microlensing_ogle import ogle_search, tess_cuts
 from vetstar_core.microlensing_report import build_microlensing_pdf
 from vetstar_core.parsers import parse_upload
 from vetstar_core.timeouts import run_with_timeout
@@ -430,3 +431,35 @@ def api_microlensing_fit(req: MicrolensingFitRequest):
     except Exception as e:  # pragma: no cover — surfaced as 500 with trace
         raise _handle_exception("microlensing fit", e)
     return result
+
+
+class OgleSearchRequest(BaseModel):
+    time: list[float]
+    flux: list[float]
+    flux_err: list[float]
+    window_d: float = 6.0
+
+
+@router.get("/api/microlensing/ogle_cuts")
+def api_microlensing_ogle_cuts():
+    """The OGLE-IV (Mróz et al. 2019) cuts and their TESS adaptations."""
+    return tess_cuts()
+
+
+@router.post("/api/microlensing/ogle_search")
+def api_microlensing_ogle_search(req: OgleSearchRequest):
+    """Automatic OGLE-style event search over the whole light curve.
+
+    No window needed: the bump search finds the event, then the Mróz et al.
+    (2019) cuts and PSPL fit decide whether it looks like microlensing.
+    """
+    if not (len(req.time) == len(req.flux) == len(req.flux_err)):
+        raise HTTPException(status_code=400, detail="time, flux, flux_err must all have the same length.")
+    if not (0.5 <= req.window_d <= 30):
+        raise HTTPException(status_code=400, detail="window_d must be between 0.5 and 30 days.")
+    try:
+        return ogle_search(req.time, req.flux, req.flux_err, window_d=req.window_d)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # pragma: no cover
+        raise _handle_exception("OGLE microlensing search", e)
