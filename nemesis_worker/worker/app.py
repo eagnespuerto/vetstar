@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 JOBS_DIR = Path(os.environ.get("NEMESIS_JOBS_DIR", "/tmp/nemesis_jobs"))
@@ -166,6 +166,29 @@ def health():
     with _lock:
         depth = len(_queue) + (1 if _running else 0)
     return {"ok": True, "nemesis_version": v, "queue_depth": depth}
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Human-readable status page, so the Space's App tab is not a bare 404."""
+    h = health()
+    up = "running" if h["ok"] else "down"
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vetstar NEMESIS worker</title>
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;
+color:#454545;background:#FFF5E9}}h1{{color:#453C67}}code{{background:#FFE6C7;padding:0 .3em;border-radius:4px}}
+.ok{{color:#00864F;font-weight:600}}</style></head><body>
+<h1>vetstar NEMESIS worker</h1>
+<p>Status: <span class="ok">{up}</span> &middot; NEMESIS {h['nemesis_version'] or 'unknown'}
+&middot; jobs in queue: {h['queue_depth']}</p>
+<p>This is the back end that runs <a href="https://github.com/daxfeliz/NEMESIS">NEMESIS</a>
+(Feliz et al. 2021; NEMESIS II, Feliz et al. 2026) with LEO-Vetter for
+<a href="https://github.com/eagnespuerto/vetstar">vetstar</a>. It has no web interface of its own:
+use vetstar's guided NEMESIS mode to search a star.</p>
+<p>API: <code>GET /health</code>, <code>POST /jobs</code>, <code>GET /jobs/{{id}}</code>,
+<code>GET /jobs/{{id}}/result</code>.</p>
+</body></html>"""
 
 
 @app.post("/jobs", dependencies=[Depends(_auth)])
