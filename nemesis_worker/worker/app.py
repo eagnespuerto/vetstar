@@ -168,6 +168,58 @@ def health():
     return {"ok": True, "nemesis_version": v, "queue_depth": depth}
 
 
+_SUPPORTED: Optional[set] = None
+
+
+def supported_sectors() -> set:
+    """Sectors in NEMESIS's own date table (TESS_Sector_observation_check).
+
+    Read from the installed source instead of importing nemesis_tess, which
+    costs ~400 MB. Any other sector makes NEMESIS raise "Invalid SectorNum".
+    """
+    global _SUPPORTED
+    if _SUPPORTED is None:
+        import importlib.util
+        import re
+        try:
+            src = Path(importlib.util.find_spec("nemesis_tess.pipeline").origin).read_text(encoding="utf-8")
+            i = src.index("def TESS_Sector_observation_check")
+            j = src.index("Invalid SectorNum", i)
+            _SUPPORTED = {int(k) for k in re.findall(r"(?m)^\s*(\d{1,3})\s*:\s*\(", src[i:j])}
+        except Exception:
+            _SUPPORTED = set(range(1, 93))  # table at the pinned commit
+    return _SUPPORTED
+
+
+def observed_sectors(tic: int) -> list[int]:
+    """Sectors whose full-frame images cover this star (tess-point)."""
+    from astroquery.mast import Catalogs
+    from tess_stars2px import tess_stars2px_function_entry as t2px
+    row = Catalogs.query_criteria(catalog="TIC", ID=tic)[0]
+    _, _, _, sec, *_ = t2px(tic, float(row["ra"]), float(row["dec"]), aberrate=False)
+    return sorted({int(s) for s in sec if int(s) > 0})
+
+
+def cadence_for(sector: int) -> str:
+    return "30 minute" if sector <= 26 else "10 minute"
+
+
+@app.get("/sectors/{tic}", dependencies=[Depends(_auth)])
+def sectors(tic: int):
+    """Sectors NEMESIS can run for this star, and the ones it cannot (and why)."""
+    try:
+        seen = observed_sectors(tic)
+    except Exception as exc:
+        raise HTTPException(502, f"Could not look up TESS coverage for TIC {tic}: {exc}")
+    ok = supported_sectors()
+    return {
+        "tic": tic,
+        "sectors": [{"sector": s, "cadence": cadence_for(s)} for s in seen if s in ok],
+        "unsupported": [s for s in seen if s not in ok],
+        "max_supported": max(ok),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Human-readable status page, so the Space's App tab is not a bare 404."""
@@ -195,6 +247,10 @@ use vetstar's guided NEMESIS mode to search a star.</p>
 def create_job(req: JobRequest):
     if req.minP and req.maxP and req.minP >= req.maxP:
         raise HTTPException(422, "minP must be below maxP")
+    if req.sector not in supported_sectors():
+        raise HTTPException(422, f"NEMESIS cannot process sector {req.sector} yet: its sector table "
+                                 f"ends at sector {max(supported_sectors())}. Pick an earlier sector "
+                                 "or use Quick check.")
     with _lock:
         if len(_queue) >= MAX_QUEUE:
             raise HTTPException(503, "The NEMESIS queue is full. Please try again later.")
