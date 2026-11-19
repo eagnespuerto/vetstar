@@ -7,6 +7,7 @@ import { parseCsv, parseJson, makeDemoPspl, makeDemoFlare } from "./microlensing
 import { PrefillBanner } from "./microlensing/PrefillBanner";
 import { DataLoader } from "./microlensing/DataLoader";
 import { FfiCutoutSection } from "./microlensing/GaiaPanels";
+import { GAIA_OVERLAY_PAUSED, GaiaPauseNotice } from "./microlensing/gaiaPause";
 
 export type { ClassifierPrefill } from "./microlensing/types";
 
@@ -119,7 +120,7 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
     const dec = lastAutoload?.resolved_dec ?? prefill?.dec;
     const sector = lastAutoload?.sector ?? prefill?.sector ?? null;
     const tic_id = lastAutoload?.tic_id ?? null;
-    if (ra == null || dec == null) return;
+    if (ra == null || dec == null || GAIA_OVERLAY_PAUSED) return;
     setFfiBusy(true); setFfiErr(null); setFfiData(null);
     let cancelled = false;
     fetchMicrolensingFfi({ ra, dec, sector, tic_id })
@@ -163,7 +164,7 @@ export default function MicrolensingClassifier({ prefill, onDismissPrefill }: Cl
         />
       )}
 
-      {(ffiData || ffiBusy || ffiErr) && (
+      {GAIA_OVERLAY_PAUSED ? (lc && <GaiaPauseNotice />) : (ffiData || ffiBusy || ffiErr) && (
         <FfiCutoutSection ffiData={ffiData} busy={ffiBusy} err={ffiErr} />
       )}
 
