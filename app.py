@@ -134,6 +134,13 @@ def open_browser_later(url: str, delay: float = 1.5):
 
 
 def main():
+    # Windows consoles and redirected output default to cp1252, which cannot
+    # print the banner's emoji (or many log lines): never crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description="Vetstar launcher")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)

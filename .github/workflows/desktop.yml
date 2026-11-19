@@ -60,9 +60,13 @@ jobs:
         run: |
           exe=$(ls dist/Vetstar-*-windows-portable.exe)
           "$exe" --no-browser --port 8765 > run.log 2>&1 &
-          for i in $(seq 1 90); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 2; done
-          curl -sf http://127.0.0.1:8765/api/health
-          curl -sf http://127.0.0.1:8765/ | grep -qi "<div id=\"root\"" || { cat run.log; exit 1; }
+          # The one-file exe unpacks itself on first start, which is slow on CI.
+          for i in $(seq 1 180); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 2; done
+          ok=1
+          curl -sf http://127.0.0.1:8765/api/health || ok=0
+          curl -sf http://127.0.0.1:8765/ | grep -qi '<div id="root"' || ok=0
+          echo "----- run.log -----"; cat run.log
+          [ "$ok" = 1 ]
 
       - name: Smoke test (.deb)
         if: matrix.kind == 'deb'
@@ -70,8 +74,11 @@ jobs:
           sudo apt-get install -y ./dist/vetstar_*.deb
           vetstar --no-browser --port 8765 > run.log 2>&1 &
           for i in $(seq 1 90); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 2; done
-          curl -sf http://127.0.0.1:8765/api/health
-          curl -sf http://127.0.0.1:8765/ | grep -qi '<div id="root"' || { cat run.log; exit 1; }
+          ok=1
+          curl -sf http://127.0.0.1:8765/api/health || ok=0
+          curl -sf http://127.0.0.1:8765/ | grep -qi '<div id="root"' || ok=0
+          echo "----- run.log -----"; cat run.log
+          [ "$ok" = 1 ]
 
       - uses: actions/upload-artifact@v4
         with:

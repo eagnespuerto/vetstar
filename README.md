@@ -833,6 +833,11 @@ download the desktop app from the
 The desktop app runs the whole site on your computer and opens it in your
 browser.
 
+> **Internet access is required for NEMESIS.** The desktop app sends NEMESIS
+> jobs to the public Vetstar site. Quick check, the OGLE search and the
+> ExoFOP files run on your computer, but TESS data also downloads from STScI,
+> so plan to be online.
+
 | System | File | How to start |
 |---|---|---|
 | Windows 10/11 (64-bit) | `Vetstar-<version>-windows-portable.exe` | Double-click it. Nothing to install. |
@@ -846,10 +851,7 @@ Good to know:
   exe is not code-signed. Click **More info → Run anyway**.
 - Downloads and caches go to `%LOCALAPPDATA%\Vetstar` (Windows) or
   `~/.local/share/vetstar` (Linux).
-- NEMESIS jobs are sent to the public Vetstar site, so they need the
-  internet and wait in the same queue as the site. Quick check, the OGLE
-  search and the ExoFOP files all run on your computer. TESS data still
-  downloads from STScI.
+- NEMESIS jobs wait in the same queue as the site.
 - If port 8000 is busy, the app picks the next free one and prints the
   address in its window.
 
