@@ -68,7 +68,11 @@ def _call(method: str, path: str, body: Optional[dict] = None, raw: bool = False
             payload = resp.read()
             if raw:
                 return payload, resp.headers.get("Content-Type", "application/octet-stream")
-            return json.loads(payload)
+            try:
+                return json.loads(payload)
+            except ValueError:
+                # e.g. a relay site without NEMESIS answers with its HTML page.
+                raise HTTPException(502, "NEMESIS is not available from this server right now. Use Quick check.")
     except urllib.error.HTTPError as exc:
         try:
             detail = json.loads(exc.read()).get("detail", str(exc))
