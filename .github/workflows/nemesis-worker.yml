@@ -42,3 +42,20 @@ jobs:
           assert h[1].name == "PIXELS" and h[1].data["FLUX"].shape[1:] == (11, 11), h.info()
           print("ok", p.name, len(h[1].data), "cadences")
           PY
+      - name: TIC fallback with MAST "down" (AWS TIC copy + VizieR)
+        working-directory: nemesis_worker
+        env:
+          NEMESIS_CACHE_DIR: /tmp/ticcache
+        run: |
+          python - <<'PY'
+          from astroquery.mast import Catalogs
+          def down(*a, **k): raise ConnectionError("MAST down (simulated)")
+          Catalogs.query_object = down; Catalogs.query_criteria = down
+          from worker import tic_fallback as tf
+          tf.install()
+          r = Catalogs.query_object("TIC 103633434", radius=5 * 21 / 3600, catalog="TIC").to_pandas()
+          assert "103633434" in set(r["ID"]) and len(r) > 1, r
+          row = Catalogs.query_criteria(catalog="TIC", ID=103633434)[0]
+          assert abs(row["Tmag"] - 9.919) < 0.01, row
+          print("ok", len(r), "rows;", open("/tmp/ticcache/tic_coords.txt").read().count(chr(10)), "stars in tic_coords.txt")
+          PY
