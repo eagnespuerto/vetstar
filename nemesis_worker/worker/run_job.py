@@ -145,6 +145,9 @@ def main(job_dir: str) -> int:
         tic = int(req["tic"])
         sector = int(req["sector"])
 
+        # TIC queries fall back to STScI's AWS TIC copy when MAST is down.
+        from .tic_fallback import install as install_tic_fallback
+        install_tic_fallback()
         import nemesis_tess
         from nemesis_tess import full_pipeline
         from nemesis_tess.pipeline import check_ALL_thresholds
