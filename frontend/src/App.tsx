@@ -251,7 +251,7 @@ export default function App() {
               href={KOFI_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-3 py-2 bg-[#ff5e5b] hover:bg-[#e54d4a] border border-[#ff7a78] rounded text-sm font-medium transition"
+              className="inline-flex items-center gap-2 px-3 py-2 bg-[#ff5e5b] hover:bg-[#e54d4a] border border-[#ff7a78] rounded text-sm font-semibold text-white hover:text-white transition"
               title="Support Vetstar — buy me a Ko-fi"
             >
               <svg
