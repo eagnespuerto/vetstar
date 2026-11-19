@@ -1,0 +1,97 @@
+name: Desktop packages
+
+# Portable Windows exe and .deb packages for Linux (amd64) and Raspberry Pi
+# OS 64-bit (arm64). Each package is smoke-tested (starts, answers
+# /api/health, serves the UI). On a published release they are attached to
+# it; on a manual run or a PR they are kept as workflow artifacts.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'build_exe.py'
+      - 'build_exe.spec'
+      - 'packaging/**'
+      - '.github/workflows/desktop.yml'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            kind: exe
+          - os: ubuntu-22.04        # glibc 2.35: runs on Ubuntu 22.04+, Debian 12
+            kind: deb
+          - os: ubuntu-22.04-arm    # arm64: Raspberry Pi OS 64-bit (Bookworm)
+            kind: deb
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ github.event.release.tag_name || '0.0.0-dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build portable exe
+        if: matrix.kind == 'exe'
+        shell: bash
+        run: |
+          python build_exe.py
+          mv dist/vetstar.exe "dist/Vetstar-${VERSION#v}-windows-portable.exe"
+
+      - name: Build .deb
+        if: matrix.kind == 'deb'
+        run: |
+          VETSTAR_ONEDIR=1 python build_exe.py
+          packaging/build_deb.sh "$VERSION"
+
+      - name: Smoke test (exe)
+        if: matrix.kind == 'exe'
+        shell: bash
+        run: |
+          exe=$(ls dist/Vetstar-*-windows-portable.exe)
+          "$exe" --no-browser --port 8765 > run.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 2; done
+          curl -sf http://127.0.0.1:8765/api/health
+          curl -sf http://127.0.0.1:8765/ | grep -qi "<div id=\"root\"" || { cat run.log; exit 1; }
+
+      - name: Smoke test (.deb)
+        if: matrix.kind == 'deb'
+        run: |
+          sudo apt-get install -y ./dist/vetstar_*.deb
+          vetstar --no-browser --port 8765 > run.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 2; done
+          curl -sf http://127.0.0.1:8765/api/health
+          curl -sf http://127.0.0.1:8765/ | grep -qi '<div id="root"' || { cat run.log; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vetstar-${{ matrix.kind }}-${{ matrix.os }}
+          path: |
+            dist/Vetstar-*-windows-portable.exe
+            dist/vetstar_*.deb
+
+  attach:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: pkgs
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" pkgs/* --clobber --repo "${{ github.repository }}"

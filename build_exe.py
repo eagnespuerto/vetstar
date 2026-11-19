@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Build a single-file executable of TESS Vetting Studio.
+Build the Vetstar desktop app with PyInstaller.
 
 Run this on the OS you want to target:
-    Windows  → produces dist/tess-vetting-studio.exe
-    macOS    → produces dist/tess-vetting-studio    (Mach-O)
-    Linux    → produces dist/tess-vetting-studio    (ELF)
+    Windows  → dist/vetstar.exe   (one portable file)
+    Linux    → dist/vetstar       (or dist/vetstar/ with VETSTAR_ONEDIR=1,
+                                   which packaging/build_deb.sh turns into a .deb)
 
 PyInstaller cannot cross-compile. To get a Windows .exe you must run this
 on a Windows machine (or in a Windows VM / GitHub Actions runner).
@@ -38,17 +38,15 @@ def main():
     run([sys.executable, "-m", "pip", "install", "-r", str(BACKEND_REQ)])
     run([sys.executable, "-m", "pip", "install", "pyinstaller>=6.0"])
 
-    # 2. Build the frontend if not present.
-    if not (DIST / "index.html").is_file():
-        if not shutil.which("npm"):
-            sys.exit(
-                "npm not found. Install Node.js >= 18 and rerun, or run "
-                "`npm install && npm run build` in ./frontend yourself first."
-            )
-        run(["npm", "install", "--no-audit", "--no-fund"], cwd=FRONTEND)
-        run(["npm", "run", "build"], cwd=FRONTEND)
+    # 2. Build the frontend fresh (a committed frontend/dist may be stale).
+    npm = shutil.which("npm")  # npm.cmd on Windows: call it by its full path
+    if npm:
+        run([npm, "ci", "--no-audit", "--no-fund"], cwd=FRONTEND)
+        run([npm, "run", "build"], cwd=FRONTEND)
+    elif (DIST / "index.html").is_file():
+        print(f"npm not found; using the existing frontend bundle at {DIST}")
     else:
-        print(f"Frontend bundle already present at {DIST}")
+        sys.exit("npm not found. Install Node.js >= 18 and rerun.")
 
     # 3. Clean previous PyInstaller outputs.
     for d in ("build", "dist", "__pycache__"):

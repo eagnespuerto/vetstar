@@ -32,17 +32,35 @@ router = APIRouter()
 TIMEOUT_S = 20
 
 
+def _relay_site() -> str:
+    """A Vetstar site to relay NEMESIS calls through (the desktop app uses the
+    public site, so the worker token never ships in a download). Only used
+    when no worker URL is set."""
+    if os.environ.get("NEMESIS_WORKER_URL"):
+        return ""
+    return os.environ.get("NEMESIS_SITE_URL", "").rstrip("/")
+
+
 def _base() -> str:
-    return os.environ.get("NEMESIS_WORKER_URL", "").rstrip("/")
+    site = _relay_site()
+    return site + "/api/nemesis" if site else os.environ.get("NEMESIS_WORKER_URL", "").rstrip("/")
 
 
 def _call(method: str, path: str, body: Optional[dict] = None, raw: bool = False):
     base = _base()
     if not base:
         raise HTTPException(503, "The NEMESIS worker is not set up on this server. Use Quick check.")
+    if _relay_site() and path == "/health":
+        # The site's /status wraps the worker's /health.
+        st = _call("GET", "/status")
+        if not st.get("online"):
+            raise HTTPException(503, st.get("detail") or "NEMESIS is offline on the Vetstar site.")
+        return {k: v for k, v in st.items() if k not in ("enabled", "online")}
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method)
-    req.add_header("X-Worker-Token", os.environ.get("NEMESIS_WORKER_TOKEN", ""))
+    if not _relay_site():
+        req.add_header("X-Worker-Token", os.environ.get("NEMESIS_WORKER_TOKEN", ""))
+    req.add_header("User-Agent", "vetstar-desktop")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
