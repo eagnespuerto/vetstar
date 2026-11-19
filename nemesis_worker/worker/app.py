@@ -32,6 +32,13 @@ from pydantic import BaseModel, Field
 JOBS_DIR = Path(os.environ.get("NEMESIS_JOBS_DIR", "/tmp/nemesis_jobs"))
 JOB_TTL_S = float(os.environ.get("NEMESIS_JOB_TTL_HOURS", "24")) * 3600
 JOB_TIMEOUT_S = float(os.environ.get("NEMESIS_JOB_TIMEOUT_MIN", "40")) * 60
+# While downloading pixels, NEMESIS waits on MAST (TESScut, lksearch). When
+# MAST hangs, the log stops growing; end the job after this long instead of
+# waiting out the whole timeout. Later stages (BLS/TLS) can be quiet for
+# long stretches, so the rule only applies to the download stage.
+STALL_S = float(os.environ.get("NEMESIS_STALL_MIN", "10")) * 60
+MAST_STALL_MSG = ("MAST did not answer for {m:.0f} minutes while downloading the TESS pixels "
+                  "(TESScut). MAST is sometimes slow or briefly down. Please try again in a while.")
 MAX_QUEUE = int(os.environ.get("NEMESIS_MAX_QUEUE", "10"))
 TOKEN = os.environ.get("WORKER_TOKEN", "")
 
@@ -104,6 +111,31 @@ def _status(job_id: str) -> dict:
     return out
 
 
+def _watch(proc: subprocess.Popen, log_path: Path, poll_s: float = 15.0) -> bool:
+    """Wait for the job. Kill it on the overall timeout, or when the log has
+    not grown for STALL_S during the download stage. True if it stalled."""
+    start = last_change = time.monotonic()
+    last_size = -1
+    while proc.poll() is None:
+        now = time.monotonic()
+        try:
+            size = log_path.stat().st_size
+        except OSError:
+            size = last_size
+        if size != last_size:
+            last_size, last_change = size, now
+        if now - start > JOB_TIMEOUT_S:
+            proc.kill(); proc.wait()
+            return False
+        if now - last_change > STALL_S:
+            stage = _stage(log_path.read_text(errors="replace"))[0] if log_path.exists() else "queued"
+            if stage == "download":
+                proc.kill(); proc.wait()
+                return True
+        time.sleep(poll_s)
+    return False
+
+
 def _run(job_id: str) -> None:
     d = JOBS_DIR / job_id
     with open(d / "log.txt", "ab") as log:
@@ -113,11 +145,9 @@ def _run(job_id: str) -> None:
             cwd=str(Path(__file__).resolve().parent.parent),
             env={**os.environ, "MPLBACKEND": "Agg", "PYTHONUNBUFFERED": "1"},
         )
-        try:
-            proc.wait(timeout=JOB_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        stalled = _watch(proc, d / "log.txt")
+    if stalled and not (d / "result.json").exists():
+        (d / "error.json").write_text(json.dumps({"error": MAST_STALL_MSG.format(m=STALL_S / 60)}))
     if not (d / "result.json").exists() and not (d / "error.json").exists():
         msg = ("Timed out" if proc.returncode is None or proc.returncode < 0
                else f"Worker process exited with code {proc.returncode}")
