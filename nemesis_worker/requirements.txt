@@ -5,3 +5,6 @@
 nemesis-tess @ git+https://github.com/daxfeliz/NEMESIS.git@bc7312ecd6785fc98c53fc7351dc2da20df99205
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
+# Cut NEMESIS's TESScut stamp from STScI's public AWS cubes (worker/tesscut_aws.py).
+astrocut>=1.5,<2
+s3fs

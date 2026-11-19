@@ -156,6 +156,12 @@ def main(job_dir: str) -> int:
         if settings.get("use_quat_jitter_mask", True):
             from .quaternions import ensure_quaternions
             ensure_quaternions(sector, settings["quat_savepath"])
+        # TIC coordinates first: they name the cutout NEMESIS looks for, and
+        # the same record fills the star panel afterwards.
+        star = star_info(tic)
+        from .tesscut_aws import ensure_tesscut
+        ensure_tesscut(tic, sector, cadence, star.get("ra"), star.get("dec"),
+                       int(settings.get("cutoutsize", 11)), settings["cache_dir_path"])
         _hdu, lc_df, transit_results, _used = full_pipeline(
             ID=tic, path=str(out_dir) + "/", cadence=cadence, Sector=sector, settings=settings,
         )
@@ -174,7 +180,7 @@ def main(job_dir: str) -> int:
         params = result["search"][primary]["params"] if primary else {}
         from .figures import all_figures
         result["figures"] = all_figures(lc_df, transit_results, primary, params, tic, sector, cadence)
-        result["star"] = star_info(tic)
+        result["star"] = star if star.get("ra") is not None else star_info(tic)
         result["meta"] = {
             "tic": tic, "sector": sector, "cadence": cadence,
             "nemesis_version": nemesis_tess.__version__,

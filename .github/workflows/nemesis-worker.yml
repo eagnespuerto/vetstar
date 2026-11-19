@@ -1,0 +1,44 @@
+name: NEMESIS worker
+
+# Installs the worker's exact stack (NEMESIS pins numpy 1.26 etc.), runs its
+# tests, and makes one real TESScut cutout from the AWS cubes the way a job
+# does. The site's CI does not cover nemesis_worker/.
+
+on:
+  pull_request:
+    paths:
+      - 'nemesis_worker/**'
+      - '.github/workflows/nemesis-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: nemesis_worker/requirements.txt
+      - name: Install the worker's stack
+        run: pip install -r nemesis_worker/requirements.txt pytest httpx
+      - name: Tests
+        working-directory: nemesis_worker
+        run: python -m pytest -q tests
+      - name: AWS cutout (TOI-1235, S20)
+        working-directory: nemesis_worker
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from astropy.io import fits
+          from worker.tesscut_aws import ensure_tesscut
+          p = ensure_tesscut(103633434, 20, "30 minute", 158.310966, 69.270744, 11, "/tmp/cache")
+          assert p and p.is_file(), "no cutout"
+          h = fits.open(p)
+          assert h[1].name == "PIXELS" and h[1].data["FLUX"].shape[1:] == (11, 11), h.info()
+          print("ok", p.name, len(h[1].data), "cadences")
+          PY
