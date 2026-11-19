@@ -183,6 +183,7 @@ export default function ManualDipSelector({ result }: { result: VettingResult })
         t_start: selWindow.t0,
         t_end: selWindow.t1,
         crowdsap: result.star.crowdsap ?? undefined,
+        lc_token: result.lc_token ?? undefined,
       });
       setDip(d);
     } catch (e: any) {

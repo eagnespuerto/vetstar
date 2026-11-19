@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.microlensing_coverage import (
+from vetstar_core.microlensing_coverage import (
     EventRow,
     evaluate_catalog,
     evaluate_event,
     parse_events_csv,
 )
-from app.tess_sector_dates import get_sector_window, all_known_windows
+from vetstar_core.tess_sector_dates import get_sector_window, all_known_windows
 
 
 # ---------------------------------------------------------------------------

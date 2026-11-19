@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from backend.app.detrend import fit_sinusoid, apply_detrend
+from vetstar_core.detrend import fit_sinusoid, apply_detrend
 from backend.tests.conftest import make_sinusoid, inject_box_transit
 
 
@@ -42,7 +42,7 @@ def test_detrend_lifts_transit_visibility_above_variability():
     assert transit_depth > 3.0 * np.std(resid)
 
 
-from backend.app.detrend import apply_variability_detrend
+from vetstar_core.detrend import apply_variability_detrend
 
 
 def test_skip_when_amplitude_below_noise_floor():
@@ -78,7 +78,7 @@ def test_apply_when_amplitude_exceeds_noise_floor():
 
 def test_run_full_vetting_defaults_disable_detrend(rng):
     """high_variability=False must produce detrend.applied=False and use BLS on raw flux."""
-    from backend.app.pipeline import run_full_vetting, StarInfo
+    from vetstar_core.pipeline import run_full_vetting, StarInfo
 
     t = np.linspace(0.0, 27.0, 5000)
     f = 1.0 + rng.normal(0.0, 1e-3, size=t.size)
@@ -91,7 +91,7 @@ def test_run_full_vetting_defaults_disable_detrend(rng):
 
 
 def test_run_full_vetting_with_variability_toggle_runs_fit(rng):
-    from backend.app.pipeline import run_full_vetting, StarInfo
+    from vetstar_core.pipeline import run_full_vetting, StarInfo
 
     t = np.linspace(0.0, 27.0, 8000)
     f = make_sinusoid(t, period=4.0, amp=0.01)
@@ -107,7 +107,7 @@ def test_run_full_vetting_with_variability_toggle_runs_fit(rng):
 
 
 def test_detrend_plot_emitted_when_applied(rng):
-    from backend.app.pipeline import run_full_vetting, StarInfo
+    from vetstar_core.pipeline import run_full_vetting, StarInfo
 
     t = np.linspace(0.0, 27.0, 8000)
     f = make_sinusoid(t, period=4.0, amp=0.01)
@@ -123,7 +123,7 @@ def test_detrend_plot_emitted_when_applied(rng):
 
 
 def test_detrend_plot_absent_when_disabled(rng):
-    from backend.app.pipeline import run_full_vetting, StarInfo
+    from vetstar_core.pipeline import run_full_vetting, StarInfo
 
     t = np.linspace(0.0, 27.0, 5000)
     f = 1.0 + rng.normal(0.0, 1e-3, size=t.size)
@@ -135,7 +135,7 @@ def test_detrend_plot_absent_when_disabled(rng):
 def test_defaults_match_pre_change_pipeline_output(rng):
     """With high_variability=False and secondary_sigma=3.0, run_full_vetting
     must produce the same BLS, secondary, verdict as before these changes."""
-    from backend.app.pipeline import run_full_vetting, StarInfo
+    from vetstar_core.pipeline import run_full_vetting, StarInfo
 
     t = np.linspace(0.0, 27.0, 6000)
     f = 1.0 + rng.normal(0.0, 1e-3, size=t.size)

@@ -6,12 +6,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Build context is the repo root (see docker-compose.yml).
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY backend/app ./app
+COPY vetstar_core ./vetstar_core
 
-ENV PYTHONUNBUFFERED=1 \
+ENV PYTHONPATH=/app     PYTHONUNBUFFERED=1 \
     MALLOC_ARENA_MAX=2
 EXPOSE 8000
 

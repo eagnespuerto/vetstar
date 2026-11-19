@@ -60,7 +60,7 @@ astrophysics convention: `★` = host star, `p` = planet/companion,
 ## 1. Light-curve ingestion & detrending
 
 Vetstar accepts SPOC FITS, TESS-SPOC FFI, QLP FFI, or legacy Kepler FITS.
-The parser (`backend/app/parsers.py`) extracts the time series and quality
+The parser (`vetstar_core/parsers.py`) extracts the time series and quality
 flags, then normalises the flux to a baseline of unity. For SPOC products
 the **PDCSAP_FLUX** column is preferred (planetary-friendly systematics
 removal); legacy Kepler PDCSAP_FLUX is treated identically.
@@ -260,6 +260,48 @@ fragments.
 BLS (Kovács, Zucker & Mazeh 2002) is the matched-filter optimised for a
 **boxcar** transit shape: a baseline flux dropping briefly by `δ`, then
 returning. Vetstar uses `astropy.timeseries.BoxLeastSquares`.
+
+**Trial periods.** The blind search runs from 0.5 d to 0.7 × the baseline
+on a grid that is **even in frequency**, not in period. A BLS peak is about
+`duration / (P × baseline)` wide in frequency, the same at every period, so
+even frequency steps sample every peak equally well. The step is
+
+$$\Delta f \;=\; \dfrac{d_{\min}}{T^{2}}$$
+
+with `d_min` the shortest box (0.05 d) and `T` the baseline. This is the
+rule `BoxLeastSquares.autoperiod` uses. The grid is capped at 20,000 points.
+Up to v1.0 the grid was even in period. That grid was about 50 times too
+coarse at 0.5 d and far too fine near the long end, and the crowd of
+long-period points pulled the SDE of a long-period transit down below the
+threshold. The known-period search (`run_bls_constrained`) samples each of
+its ±2 % windows the same way.
+
+**Trial durations.** Every period is tried with boxes of 0.05, 0.1, 0.15,
+0.2 and 0.3 d (1.2 to 7.2 h). Longer boxes of 0.4, 0.5 and 0.75 d (9.6 to
+18 h) are added only where the box is at most 5 % of the period, so from
+8, 10 and 15 d. They are for long-period planets and evolved hosts, whose
+transits the 0.3 d box cut short. The 5 % limit keeps a wide box away from
+short periods, where it mostly fits stellar variability.
+
+**Variability guard.** BLS fits a box to anything periodic, so rotation or
+pulsation that has not been detrended also gives a peak, with an SDE of
+about 8 on the new grid. (The old grid hid this: its crowd of long-period
+points pulled that SDE down to about 4.) So a high SDE alone is not taken
+as a detection. `bls_variability_check` folds the light curve at the BLS
+period and fits two models: the BLS box, and a smooth curve made of a
+sinusoid at that period plus its next two harmonics. Each model's gain is
+the drop in the sum of squared residuals against a flat line. The result
+carries their ratio as `smooth_to_box_ratio`, and `likely_variability` is
+true when the smooth curve gains more than the box (ratio above 1).
+
+A transit is narrow, so three harmonics capture little of it: injected
+transits from 0.62 to 13 d, deep or shallow, with or without 0.05 %
+variability, all score 0.5 or less. Pure sinusoids from 1.3 to 11 d and
+0.05 % to 1 % amplitude score 1.9 or more. When no discrete dip event was
+found and the peak is flagged, the verdict is "No significant
+transit/eclipse signal" with the flag `bls_peak_is_variability`, and it
+suggests the *High stellar variability* detrend of §1. The guard never
+overrides detected events.
 
 The frequency-domain output is the **signal residue** SR; Vetstar's quoted
 **Signal Detection Efficiency (SDE)** standardises the peak against the
@@ -517,14 +559,14 @@ envelope and downgrades the score regardless of radius.
 
 ## 9. Habitability Chance Index (HCI)
 
-The HCI is a 0-100 weighted sum of six sub-scores, each in [0, 1]:
+The HCI (version 2) is a 0-100 weighted sum of seven sub-scores, each in [0, 1]:
 
-$$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{6} w_{i}\,s_{i},\qquad \sum_{i=1}^{6} w_{i} = 1$$
+$$\mathrm{HCI} \;=\; 100 \cdot \sum_{i=1}^{7} w_{i}\,s_{i},\qquad \sum_{i=1}^{7} w_{i} = 1$$
 
-with weights `wᵢ = (0.30, 0.25, 0.15, 0.15, 0.10, 0.05)` for
-**size, habitable-zone, stellar type, TOI disposition, vetting flags,
-multi-sector**. The weighting is the contribution declared in
-`backend/app/habitability.py`. Each sub-score has a documented closed-form
+with weights `wᵢ = (0.30, 0.25, 0.15, 0.10, 0.10, 0.05, 0.05)` for
+**size, habitable-zone, stellar type, vetting flags, cosmic shoreline,
+tidal locking, system age**. The weighting is the contribution declared in
+`vetstar_core/habitability.py`. Each sub-score has a documented closed-form
 mapping:
 
 | Sub-score | Inputs | Mapping |
@@ -532,9 +574,46 @@ mapping:
 | Size      | `Rp` (and `ρp` if known) | piecewise from STEHM Fig 5: full credit ≥ 0.8 R⊕, marginal 0.7-0.8, falls to 0 by 0.5 R⊕; capped/downgraded by `ρp` band |
 | HZ        | `a` (AU) or `S/S⊕`        | distance/flux compared to Kopparapu boundaries (§7.2); 1.0 within conservative HZ, taper to 0 outside optimistic HZ |
 | Star      | `T_eff` (or density-typed) | 1.0 for FGK, taper for late-K / early-M, penalty for M-dwarfs |
-| Disp      | ExoFOP TOI flag           | CP/KP = 1.0, PC/APC = 0.75, FP = 0.05, Unknown = 0.5 |
 | Vetting   | Centroid / odd-even / secondary / companion-size pipeline outputs | each failed test deducts; passing all gives 1.0 |
-| Sectors   | Number of independent detections | 1 → 0.4, 2 → 0.7, 3 → 0.9, ≥ 4 → 1.0 |
+| Shoreline | `Mp`, `Rp`, `S/S⊕`, `L★`  | `q = I_xuv / I_shore`; 1.0 for `q ≤ 0.1`, linear in `log q` down to 0.05 at `q ≥ 10` |
+| Locking   | `a`, `M★`, age            | `x = a / r_T`; 1.0 for `x ≥ 1.5`, linear down to 0.4 at `x = 1`, 0.4 inside |
+| Age       | age, `M★`                 | 0.1 below 0.1 Gyr, log ramp to 0.7 at 1 Gyr, linear to 1.0 at 3 Gyr; falls to 0.3 over the last 20% of the main-sequence lifetime; 0.5 when unknown |
+
+**Cosmic shoreline.** Zahnle & Catling (2017) show that bodies with and
+without atmospheres are separated by a line `I ∝ v_esc⁴`. They draw the line
+by eye, so we anchor it at Mars (`v_esc = 5.03 km s⁻¹`, `I = 0.431 I⊕`):
+
+$$I_{\rm shore} = 0.431\,\left(\frac{v_{\rm esc}}{5.03\ \mathrm{km\,s^{-1}}}\right)^{4},\qquad v_{\rm esc} = 11.186\,\sqrt{M_p/R_p}\ \mathrm{km\,s^{-1}}$$
+
+The flux compared with it is their cumulative-XUV proxy (their eq. 27),
+`I_xuv = (S/S⊕)(L★/L☉)^{-0.6}`, which is harsher for low-mass stars. The mass
+is the measured one when there is one, else the median of the mass-radius
+relations (§8).
+
+**Tidal locking.** Kasting et al. (1993), after Peale (1977), give the
+distance inside which an Earth-like planet (initial spin 13.5 h, `Q = 100`)
+is locked after a time `t`:
+
+$$r_T = 0.46\ \mathrm{AU}\,\left(\frac{t}{4.5\ \mathrm{Gyr}}\right)^{1/6}\left(\frac{M_\star}{M_\odot}\right)^{1/3}$$
+
+Locked planets can still be habitable in 3-D climate models, so the term is a
+mark-down and carries only 5% of the weight. With no age estimate, `t` is
+4.5 Gyr or half the main-sequence lifetime, whichever is less.
+
+**System age.** In order of preference: a provided age; gyrochronology,
+`P_rot = 0.407\,(B{-}V - 0.495)^{0.325}\,t_{\rm Myr}^{0.566}` (Mamajek &
+Hillenbrand 2008), valid for `0.5 < B−V < 0.9`, with `B−V` from `T_eff`
+(Ballesteros 2012); else unknown. The rotation period is the one the user gave
+for the variability detrend, else the top Lomb-Scargle peak when it has
+power ≥ 0.05, FAP ≤ 10⁻³, period ≥ 0.5 d and is not within 5% of the orbital
+period, half of it or twice it. A single TESS sector only reaches periods of
+about 13 d, so in practice this finds young, fast rotators. The main-sequence
+lifetime is `10 Gyr (M★/M☉)^{-2.5}`.
+
+Version 1 also scored the ExoFOP TOI disposition (15%) and the multi-sector
+detection count (5%). Both measured confidence in the detection, not the
+planet, and were removed in v2. A false-positive disposition is reported as a
+caveat instead.
 
 After the weighted sum, a **bulk-density modifier of ±10 percentage points**
 is applied to the final HCI when `ρp` is available (§8.3):
@@ -647,14 +726,14 @@ sector**:
 $$\bigl|T_{14}^{(s)} - T_{14}^{(s')}\bigr| \;\le\; 0.05\;\mathrm{h}$$
 
 Events are grouped by duration (this ±0.05 h tolerance) and by period
-(±2 % fractional tolerance, `PERIOD_MATCH_TOL_FRAC` in `pipeline.py`).
+(±2 % fractional tolerance, `PERIOD_MATCH_TOL_FRAC` in `vetstar_core/pipeline/models.py`).
 Up to **two distinct objects** are reported per target. An object is
 flagged **confirmed** when it appears in ≥ 2 sectors with matching
 duration *and* period. This separates a genuine repeating planet from a
 second transit signal of different duration on the same star.
 
-For each identified object the pipeline recomputes the **HCI** using the
-real multi-sector detection counts, and re-extracts the full **ExoMiner**
+For each identified object the pipeline recomputes the **HCI** (which, from
+v2, does not use the sector counts) and re-extracts the full **ExoMiner**
 view set from the sector showing that object's deepest event.
 
 ---
@@ -724,7 +803,7 @@ the PSPL fit alone) and a `planet_predictions` block (fiducial-lens
 physical scales plus a planetary-anomaly detection floor). Both are
 rendered in the on-screen results panel and included in the PDF vetting
 report at `POST /api/microlensing/report`. Backend:
-`backend/app/microlensing.py::compute_observables` and
+`vetstar_core/microlensing.py::compute_observables` and
 `compute_planet_predictions`.
 
 ### 17.1 Peak magnification, brightening, and FWHM
@@ -931,7 +1010,7 @@ implementation is scipy-based and single-lens only. Binary-lens
 Given a user-flagged positive excursion in a light curve (window
 `[t_start, t_end]` with a peak guess `t0_guess`), the classifier fits three
 competing forward models on the windowed flux and returns a verdict via
-Bayesian Information Criterion. Backend: `backend/app/microlensing.py`.
+Bayesian Information Criterion. Backend: `vetstar_core/microlensing.py`.
 
 ### 15.1 Paczyński single-lens (PSPL) magnification
 
@@ -1114,7 +1193,7 @@ Given a catalog of known / candidate microlensing events (from Gaia
 alerts, OGLE, MOA, KMTNet — all publish RA/Dec/`t0`), Module B
 determines which events are actually observable in TESS data, so Module A
 can be run against a real target list rather than blind. Backend:
-`backend/app/microlensing_coverage.py`.
+`vetstar_core/microlensing_coverage.py`.
 
 ### 16.1 tess-point coordinate resolution
 
@@ -1132,7 +1211,7 @@ well-formed payload.
 
 Sector observation windows are sourced from **tess-point's bundled
 `TESS_Spacecraft_Pointing_Data.midtimes` table** in
-`backend/app/tess_sector_dates.py`. tess-point ships the per-sector
+`vetstar_core/tess_sector_dates.py`. tess-point ships the per-sector
 BJD midtimes for the full mission (currently sectors 1–121) — those
 midtimes are the authoritative TESS calendar the tess-point
 maintainers keep updated. From each midtime we form a window

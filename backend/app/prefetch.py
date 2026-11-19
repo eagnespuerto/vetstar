@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
 log = logging.getLogger("vetting")
@@ -31,10 +31,7 @@ log = logging.getLogger("vetting")
 # well clear of the OOM killer. Override with VETSTAR_MAX_JOBS on bigger boxes.
 VET_SLOTS = threading.BoundedSemaphore(max(1, int(os.environ.get("VETSTAR_MAX_JOBS", "1"))))
 
-# pyplot's figure registry isn't thread-safe, and prefetch threads (DVT
-# phase fold, FFI cutout) render while the job thread draws its own plots.
-# Every matplotlib render that can overlap another takes this lock.
-PLOT_LOCK = threading.RLock()
+from vetstar_core.timeouts import result_within  # noqa: E402
 
 
 class Prefetcher:
@@ -61,8 +58,9 @@ class Prefetcher:
         if fut is None:
             return default
         try:
-            return fut.result(timeout=timeout)
-        except FutureTimeout:
+            # Leave a late fetch alone: a later get() may still want it.
+            return result_within(fut, timeout, cancel=False)
+        except TimeoutError:
             log.warning("prefetch %s timed out after %ss", name, timeout)
         except Exception as e:
             log.warning("prefetch %s failed: %s", name, e)

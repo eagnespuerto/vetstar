@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from backend.app.exominer import run_exominer
-from backend.app.pipeline import detect_events, make_verdict, odd_even_check
+from vetstar_core.exominer import run_exominer
+from vetstar_core.pipeline import detect_events, make_verdict, odd_even_check
 
 from backend.tests.conftest import inject_box_transit
 

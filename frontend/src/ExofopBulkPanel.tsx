@@ -19,20 +19,273 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-/** One image to bundle into the ExoFOP archive. */
+/** One file to bundle into the ExoFOP archive (a PNG plot by default). */
 export interface ExofopImage {
   /** Short slug used inside the filename (no spaces, no dots, no slashes). */
   key: string;
   /** Human-readable label used in the descriptor "description" column. */
   label: string;
-  /** PNG bytes, base64-encoded (no data-URI prefix). */
+  /** File bytes, base64-encoded (no data-URI prefix). Empty when `url` is set. */
   b64: string;
-  /** ExoFOP single-letter file-type code. L=Light curve, O=Other. Default O. */
+  /** ExoFOP single-letter file-type code: F finding chart, I image,
+   *  L light curve, P photometry, S spectrum, O other. Default O. */
   code?: string;
+  /** File extension without the dot. Default "png". */
+  ext?: string;
+  /** Produce the bytes at build time instead of `b64` (e.g. a PDF report). */
+  fetchBytes?: () => Promise<Uint8Array>;
+}
+
+/** ExoFOP file-type codes (Bulk File Upload Instructions, section 3). */
+const EXOFOP_CODES = new Set(["F", "I", "L", "P", "S", "O"]);
+
+/** UT date as YYYYMMDD. The spec's DATESTAMP is the *UT* date of the file. */
+export function utDateStamp(d = new Date()): string {
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** Descriptor column text: plain ASCII, no pipes (pipes delimit columns). */
+export function descriptorText(s: string): string {
+  return s
+    .replace(/[–—]/g, "-")
+    .replace(/R⊕/g, "R_Earth")
+    .replace(/⊕/g, "Earth")
+    .replace(/[|\r\n]+/g, " ")
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Optional-info part of a filename: letters, digits, dots and dashes only. */
+export function filenameInfo(s: string): string {
+  return s.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+
+export interface ExofopArchive {
+  zipName: string;
+  zip: Blob;
+  /** Descriptor + files, in archive order (for checks and tests). */
+  entries: { name: string; data: Uint8Array }[];
+}
+
+/**
+ * Build an ExoFOP-TESS bulk-upload archive (Bulk File Upload Instructions):
+ * `xxYYYYMMDD-nnn.zip` holding a same-named `.txt` descriptor and the files,
+ * flat, each named `TIC<id><C>-xx<UT date>.<info>[y].<ext>`. Returns null
+ * when there is nothing to bundle. Inputs are assumed already validated.
+ */
+export async function buildExofopArchive(opts: {
+  ticId: number; sector?: number | null; initials: string; counter: string; tag: string;
+  images: ExofopImage[]; now?: Date;
+  /** Optional person credited in each description, with the initials. */
+  author?: string;
+}): Promise<ExofopArchive | null> {
+  const { ticId, sector, initials: ini, counter: cnt, tag: tg, images } = opts;
+  const credit = opts.author?.trim() ? `, by ${creditLine(opts.author, ini)}` : "";
+  // Spec: archive date = creation date, file DATESTAMP = UT date. Use UT for both.
+  const yyyymmdd = utDateStamp(opts.now);
+  const archiveBase = `${ini}${yyyymmdd}-${cnt}`;
+  const seen = new Set<string>();
+  const planned: { label: string; filename: string; bytes: Uint8Array }[] = [];
+  for (const img of images) {
+    if (!img.b64 && !img.fetchBytes) continue;
+    const code = (img.code || "O").toUpperCase();
+    if (!EXOFOP_CODES.has(code)) throw new Error(`Unknown ExoFOP file-type code "${code}".`);
+    const ext = (img.ext || "png").replace(/^\./, "").toLowerCase();
+    const safeKey = filenameInfo(img.key.replace(/_/g, "-"));
+    const stem = `TIC${ticId}${code}-${ini}${yyyymmdd}`;
+    let filename = `${stem}.${safeKey}.${ext}`;
+    // Keep names short (ExoFOP has no stated cap; 100 keeps them readable).
+    if (filename.length > 100) {
+      const maxKey = 100 - `${stem}..${ext}`.length;
+      filename = `${stem}.${safeKey.slice(0, Math.max(maxKey, 1))}.${ext}`;
+    }
+    // Spec [y]: a letter after the optional info to tell duplicates apart.
+    if (seen.has(filename)) {
+      const base = filename.slice(0, -(ext.length + 1));
+      let suffix = "a";
+      while (seen.has(`${base}${suffix}.${ext}`)) suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
+      filename = `${base}${suffix}.${ext}`;
+    }
+    let bytes: Uint8Array;
+    if (img.fetchBytes) {
+      try {
+        bytes = await img.fetchBytes();
+      } catch (e: any) {
+        throw new Error(`Could not get ${img.label}: ${e?.message || e}`);
+      }
+    } else {
+      bytes = b64ToBytes(img.b64);
+    }
+    seen.add(filename);
+    planned.push({ label: img.label, filename, bytes });
+  }
+  if (planned.length === 0) return null;
+
+  // Five pipe-delimited columns: file | data tag | group | proprietary months | description.
+  // No group, so the proprietary period must be 0.
+  const descriptor = planned.map((x) =>
+    `${x.filename}|${descriptorText(tg)}||0|${descriptorText(`Vetstar - ${x.label}${sector ? ` (Sector ${sector})` : ""}${credit}`)}`,
+  ).join("\n") + "\n";
+  const entries = [
+    { name: `${archiveBase}.txt`, data: new TextEncoder().encode(descriptor) },
+    ...planned.map((x) => ({ name: x.filename, data: x.bytes })),
+  ];
+  return { zipName: `${archiveBase}.zip`, zip: buildZip(entries), entries };
+}
+
+/**
+ * ExoFOP data tag rules (help.php, "Data Tags"): either the short-hand tag
+ * number ExoFOP gave an existing tag, or a full tag of at most 100 characters
+ * in four underscore-separated parts, YYYYMMDD_username_description_n, where
+ * username is your ExoFOP login, description has only letters, numbers and
+ * hyphens, and n is 0-99999999999999. Returns a problem to show, or null.
+ */
+export function checkDataTag(tag: string): string | null {
+  const t = tag.trim();
+  if (!t) return "Data tag is required (column 2 of the descriptor).";
+  if (/^\d+$/.test(t)) return null; // short-hand tag number
+  if (t.length > 100) return "Data tag must be 100 characters or fewer.";
+  const parts = t.split("_");
+  if (parts.length !== 4) {
+    return `Data tag needs 4 parts joined by "_": YYYYMMDD_username_description_number (this one has ${parts.length}).`;
+  }
+  const [date, user, desc, num] = parts;
+  const m = /^(\d{4})(\d{2})(\d{2})$/.exec(date);
+  const d = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (!m || !d || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) {
+    return "Data tag part 1 must be a real date, YYYYMMDD.";
+  }
+  if (!user || /\s/.test(user)) return "Data tag part 2 must be your ExoFOP login username.";
+  if (!/^[A-Za-z0-9-]+$/.test(desc)) {
+    return "Data tag part 3 (description) may use only letters, numbers and hyphens.";
+  }
+  if (!/^\d{1,14}$/.test(num)) return "Data tag part 4 must be a number from 0 to 99999999999999.";
+  return null;
+}
+
+/** Build a new-style tag: UT date + username + description (cleaned) + number. */
+export function makeDataTag(username: string, description: string, n: number | string, now = new Date()): string {
+  const desc = description.normalize("NFKD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return `${utDateStamp(now)}_${username.trim()}_${desc}_${String(n).trim() || "1"}`;
+}
+
+const LS_COUNTER = "vetstar.exofop.counter";
+
+/** Last archive counter used today (UT) by these initials, or 0. ExoFOP names
+ *  archives xxYYYYMMDD-nnn, so the counter must carry over between page loads:
+ *  starting again at 001 tempts people to rename the ZIP, and a renamed ZIP no
+ *  longer matches the .txt descriptor inside it. */
+export function lastCounter(initials: string, day = utDateStamp()): number {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_COUNTER) || "{}");
+    return v.day === day && v.ini === initials.trim().toLowerCase() ? Number(v.n) || 0 : 0;
+  } catch { return 0; }
+}
+function saveCounter(initials: string, n: number, day = utDateStamp()) {
+  try {
+    const prev = lastCounter(initials, day);
+    localStorage.setItem(LS_COUNTER, JSON.stringify({ day, ini: initials.trim().toLowerCase(), n: Math.max(prev, n) }));
+  } catch { /* private mode: not remembered */ }
+}
+const pad3 = (n: number) => String(Math.min(Math.max(n, 1), 999)).padStart(3, "0");
+
+const LS_NAME = "vetstar.exofop.name";
+const LS_INITIALS = "vetstar.exofop.initials";
+
+function lsGet(k: string): string {
+  try { return localStorage.getItem(k) || ""; } catch { return ""; }
+}
+function lsSet(k: string, v: string) {
+  // An empty value removes the entry, so clearing a box really forgets it.
+  try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* private mode: not remembered */ }
+}
+
+/** Suggested ExoFOP initials from a name: "Ella Agnes Puerto" -> "eap". */
+export function initialsFromName(name: string): string {
+  return name
+    .normalize("NFKD").replace(/[^\p{L}\s.-]/gu, "")
+    .split(/[\s.-]+/).filter(Boolean)
+    .map((w) => w[0]).join("").toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+/** "E. A. Puerto (ea)", "E. A. Puerto", "(ea)" or "" for credits. */
+export function creditLine(name: string, initials: string): string {
+  const n = name.trim(), i = initials.trim().toLowerCase();
+  return n && i ? `${n} (${i})` : n || (i ? `(${i})` : "");
+}
+
+export interface ExofopIdentity {
+  name: string;
+  setName: (v: string) => void;
+  initials: string;
+  setInitials: (v: string) => void;
+}
+
+/**
+ * Your name (optional) and ExoFOP initials, remembered in this browser and
+ * shared by every export (ZIP descriptions, file names, PDF cover). Typing a
+ * name fills in suggested initials while the initials box is empty.
+ */
+export function useExofopIdentity(): ExofopIdentity {
+  const [name, setNameState] = useState(() => lsGet(LS_NAME));
+  const [initials, setInitialsState] = useState(() => lsGet(LS_INITIALS));
+  const [autoInitials, setAutoInitials] = useState(() => !lsGet(LS_INITIALS));
+  const setName = (v: string) => {
+    setNameState(v); lsSet(LS_NAME, v.trim());
+    if (autoInitials) { const s = initialsFromName(v); setInitialsState(s); lsSet(LS_INITIALS, s); }
+  };
+  const setInitials = (v: string) => {
+    setInitialsState(v); lsSet(LS_INITIALS, v.trim().toLowerCase());
+    setAutoInitials(v.trim() === "");
+  };
+  return { name, setName, initials, setInitials };
+}
+
+/** Name + initials inputs, used by the ZIP builder and the NEMESIS export card. */
+export function IdentityFields({ identity, compact = false }: { identity: ExofopIdentity; compact?: boolean }) {
+  return (
+    <>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-slate-600">Your name <span className="text-slate-400">(optional)</span></span>
+        <input
+          type="text"
+          value={identity.name}
+          onChange={(e) => identity.setName(e.target.value)}
+          placeholder="E. A. Puerto"
+          maxLength={60}
+          autoComplete="name"
+          className={`${compact ? "w-44" : "w-56"} px-2 py-1 border border-slate-300 rounded`}
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-slate-600">Initials (xx)</span>
+        <input
+          type="text"
+          value={identity.initials}
+          onChange={(e) => identity.setInitials(e.target.value)}
+          placeholder="mc"
+          maxLength={6}
+          className="w-20 px-2 py-1 border border-slate-300 rounded font-mono"
+        />
+      </label>
+      <p className="basis-full text-slate-500 text-[11px] leading-snug" role="note">
+        Vetstar does not record your name or initials. They are used only to build your files: the
+        "Prepared by" line on the PDF and the ExoFOP file names and descriptions in the ZIP. The ZIP is
+        made in your browser; for the PDF they are sent with that one request and not stored. Your browser
+        remembers them on this device so you don't retype them; clear the boxes to forget them.
+      </p>
+    </>
+  );
 }
 
 interface Props {
   ticId?: number | null;
+  /** Shared name + initials; when given, the panel does not show its own fields. */
+  identity?: ExofopIdentity;
   /** Single-sector context, used in the description column. Optional. */
   sector?: number | null;
   /** Source list of bundleable images. May be empty until plots have loaded. */
@@ -41,6 +294,11 @@ interface Props {
   title?: string;
   /** Optional caption shown above the form. */
   caption?: React.ReactNode;
+  /** Starting archive counter (nnn). Give a second ZIP on the same page "002"
+   *  so two uploads on the same UT day don't share a name. */
+  defaultCounter?: string;
+  /** Default description for the tag builder, e.g. "Vetstar-NEMESIS". */
+  tagDescription?: string;
 }
 
 /**
@@ -59,16 +317,23 @@ export default function ExofopBulkPanel({
   images,
   title = "⬇ Build ExoFOP-TESS bulk-upload ZIP",
   caption,
+  identity: sharedIdentity,
+  defaultCounter = "001",
+  tagDescription = "Vetstar-NEMESIS",
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [initials, setInitials] = useState<string>(
-    () => localStorage.getItem("vetstar.exofop.initials") || "",
-  );
-  const [counter, setCounter] = useState<string>("001");
-  const [tag, setTag] = useState<string>(
-    () => localStorage.getItem("vetstar.exofop.tag") || "",
-  );
+  const ownIdentity = useExofopIdentity();
+  const identity = sharedIdentity ?? ownIdentity;
+  const initials = identity.initials;
+  // Next free counter today: after the last one used, offset for a second ZIP
+  // on the same page (defaultCounter "002" -> one after the first panel's).
+  const offset = Math.max(parseInt(defaultCounter, 10) || 1, 1);
+  const [counter, setCounter] = useState<string>(() => pad3(lastCounter(initials) + offset));
+  const [tag, setTag] = useState<string>(() => lsGet("vetstar.exofop.tag"));
+  const [tagUser, setTagUser] = useState<string>(() => lsGet("vetstar.exofop.username"));
+  const [tagDesc, setTagDesc] = useState<string>(tagDescription);
+  const tagProblem = tag.trim() ? checkDataTag(tag) : null;
 
   const run = async () => {
     setError(null);
@@ -89,10 +354,9 @@ export default function ExofopBulkPanel({
       return;
     }
     const tg = tag.trim();
-    if (!tg) {
-      setError(
-        "Data tag is required (column 2 of the descriptor). Must be valid for your ExoFOP account.",
-      );
+    const tagProblem = checkDataTag(tg);
+    if (tagProblem) {
+      setError(tagProblem);
       return;
     }
     if (images.length === 0) {
@@ -100,69 +364,22 @@ export default function ExofopBulkPanel({
       return;
     }
 
-    localStorage.setItem("vetstar.exofop.initials", ini);
-    localStorage.setItem("vetstar.exofop.tag", tg);
-
-    const now = new Date();
-    const yyyymmdd =
-      `${now.getFullYear()}` +
-      String(now.getMonth() + 1).padStart(2, "0") +
-      String(now.getDate()).padStart(2, "0");
-    const archiveBase = `${ini}${yyyymmdd}-${cnt}`;
+    lsSet(LS_INITIALS, ini);
+    lsSet("vetstar.exofop.tag", tg);
 
     setBusy(true);
     try {
-      const seen = new Set<string>();
-      const planned: { key: string; label: string; filename: string; bytes: Uint8Array }[] = [];
-      for (const img of images) {
-        if (!img.b64) continue;
-        const code = img.code || "O";
-        const safeKey = img.key.replace(/_/g, "-");
-        let filename = `TIC${ticId}${code}-${ini}${yyyymmdd}.${safeKey}.png`;
-        // 100-char cap per spec §1.
-        if (filename.length > 100) {
-          const maxKey =
-            100 - `TIC${ticId}${code}-${ini}${yyyymmdd}..png`.length;
-          filename = `TIC${ticId}${code}-${ini}${yyyymmdd}.${safeKey.slice(0, Math.max(maxKey, 1))}.png`;
-        }
-        // Disambiguate collisions with a/b/c suffixes.
-        if (seen.has(filename)) {
-          let suffix = "a";
-          while (seen.has(filename.replace(/\.png$/, `${suffix}.png`))) {
-            suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
-          }
-          filename = filename.replace(/\.png$/, `${suffix}.png`);
-        }
-        seen.add(filename);
-        planned.push({
-          key: img.key,
-          label: img.label,
-          filename,
-          bytes: b64ToBytes(img.b64),
-        });
-      }
-
-      if (planned.length === 0) {
+      const archive = await buildExofopArchive({
+        ticId, sector, initials: ini, counter: cnt, tag: tg, images, author: identity.name,
+      });
+      if (!archive) {
         setError("No plots available to bundle yet.");
         return;
       }
-
-      const descriptorLines = planned.map(
-        (x) =>
-          `${x.filename}|${tg}||0|Vetstar — ${x.label}${sector ? ` (Sector ${sector})` : ""}`,
-      );
-      const descriptorBytes = new TextEncoder().encode(
-        descriptorLines.join("\n") + "\n",
-      );
-
-      const zipBlob = buildZip([
-        { name: `${archiveBase}.txt`, data: descriptorBytes },
-        ...planned.map((x) => ({ name: x.filename, data: x.bytes })),
-      ]);
-      triggerDownload(zipBlob, `${archiveBase}.zip`);
-
-      const nextN = Math.min(parseInt(cnt, 10) + 1, 999);
-      setCounter(String(nextN).padStart(3, "0"));
+      triggerDownload(archive.zip, archive.zipName);
+      saveCounter(ini, parseInt(cnt, 10));
+      // Skip numbers another panel on this page may have used since.
+      setCounter(pad3(Math.max(parseInt(cnt, 10), lastCounter(ini)) + 1));
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -177,7 +394,7 @@ export default function ExofopBulkPanel({
       </summary>
       {caption ?? (
         <p className="text-slate-500 mt-2">
-          Packages every diagnostic plot (PNG) into a single{" "}
+          Packages every diagnostic plot and report (PNG, PDF) into a single{" "}
           <code>xxYYYYMMDD-nnn.zip</code> with a matching{" "}
           <code>.txt</code> descriptor, ready for the{" "}
           <a
@@ -192,18 +409,8 @@ export default function ExofopBulkPanel({
           auto-bumps after each build.
         </p>
       )}
-      <div className="grid grid-cols-1 sm:grid-cols-[auto_auto_1fr_auto] gap-2 mt-3 items-end">
-        <label className="flex flex-col gap-0.5">
-          <span className="text-slate-600">Initials (xx)</span>
-          <input
-            type="text"
-            value={initials}
-            onChange={(e) => setInitials(e.target.value)}
-            placeholder="mc"
-            maxLength={6}
-            className="w-20 px-2 py-1 border border-slate-300 rounded font-mono"
-          />
-        </label>
+      <div className="flex flex-wrap gap-2 mt-3 items-end">
+        {!sharedIdentity && <IdentityFields identity={identity} compact />}
         <label className="flex flex-col gap-0.5">
           <span className="text-slate-600">Counter (nnn)</span>
           <input
@@ -230,8 +437,10 @@ export default function ExofopBulkPanel({
             type="text"
             value={tag}
             onChange={(e) => setTag(e.target.value)}
-            placeholder="YYYYMMDD_initials_NNN"
-            className="px-2 py-1 border border-slate-300 rounded font-mono"
+            placeholder="tag number, or YYYYMMDD_username_description_1"
+            maxLength={100}
+            aria-invalid={!!tagProblem}
+            className={`min-w-[18rem] px-2 py-1 border rounded font-mono ${tagProblem ? "border-red-400" : "border-slate-300"}`}
           />
         </label>
         <button
@@ -242,6 +451,37 @@ export default function ExofopBulkPanel({
           {busy ? "Building…" : `Download ZIP (${images.length})`}
         </button>
       </div>
+      <div className="mt-2 rounded border border-slate-200 bg-white p-2 space-y-1.5">
+        <p className="text-slate-600">
+          No tag yet? Make one here. ExoFOP tags are <code>YYYYMMDD_username_description_number</code>,
+          where <b>username is your ExoFOP login</b> (not your initials) and the description uses only
+          letters, numbers and hyphens. After ExoFOP accepts a tag it also gives it a short number you can
+          use instead.
+        </p>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="flex flex-col gap-0.5">
+            <span className="text-slate-600">ExoFOP username</span>
+            <input type="text" value={tagUser} onChange={(e) => { setTagUser(e.target.value); lsSet("vetstar.exofop.username", e.target.value.trim()); }}
+              autoComplete="username" className="w-36 px-2 py-1 border border-slate-300 rounded font-mono" />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-slate-600">Description</span>
+            <input type="text" value={tagDesc} onChange={(e) => setTagDesc(e.target.value)}
+              className="w-44 px-2 py-1 border border-slate-300 rounded font-mono" />
+          </label>
+          <button type="button" disabled={!tagUser.trim()}
+            onClick={() => setTag(makeDataTag(tagUser, tagDesc || "Vetstar", 1))}
+            className="px-3 py-1.5 border border-slate-300 rounded hover:border-emerald-500 disabled:opacity-50">
+            Use as data tag
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-slate-600">
+        <b>Don't rename the ZIP.</b> ExoFOP looks for the <code>.txt</code> with the same name inside it, so
+        a renamed file (or a browser copy like <code>…-001 (1).zip</code>) has no descriptor. To change the
+        number, change Counter and build again. The counter carries on through the UT day.
+      </p>
+      {tagProblem && !error && <p className="mt-2 text-red-700">{tagProblem}</p>}
       {error && <p className="mt-2 text-red-700">{error}</p>}
       {images.length === 0 && !error && (
         <p className="mt-2 text-slate-500 italic">

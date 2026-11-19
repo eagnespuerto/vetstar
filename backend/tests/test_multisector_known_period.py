@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from backend.app.pipeline import (
+from vetstar_core.pipeline import (
     BLS_KNOWN_PERIOD_TOL_FRAC,
     run_full_vetting,
     run_multisector_analysis,

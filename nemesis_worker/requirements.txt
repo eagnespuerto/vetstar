@@ -1,0 +1,13 @@
+# NEMESIS worker. NEMESIS pins its own scientific stack (numpy 1.26, astropy
+# 7.0.1, TLS, wotan, lightkurve, LEO-Vetter ...), which clashes with vetstar's
+# numpy>=2 site image. That is why it runs as a separate service.
+# Pinned to a NEMESIS commit so LEO-Vetter test order stays as leo_tests.py expects.
+nemesis-tess @ git+https://github.com/daxfeliz/NEMESIS.git@bc7312ecd6785fc98c53fc7351dc2da20df99205
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+# Cut NEMESIS's TESScut stamp from STScI's public AWS cubes (worker/tesscut_aws.py).
+astrocut>=1.5,<2
+s3fs
+# TIC fallback from the AWS HATS copy when MAST is down (worker/tic_fallback.py).
+pyarrow>=17,<22   # 22+ needs NumPy 2; NEMESIS pins 1.26
+astropy-healpix>=1.0,<1.2

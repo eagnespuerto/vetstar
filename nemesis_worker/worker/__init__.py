@@ -1,0 +1,1 @@
+"""vetstar NEMESIS worker."""

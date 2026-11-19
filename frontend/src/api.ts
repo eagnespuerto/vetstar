@@ -70,9 +70,33 @@ export interface SectorInfo {
   providers: string[];
 }
 
+/** A short, readable error for a failed request. Never echoes an HTML page:
+ *  a gateway (Render/Cloudflare) answers 502/503/504 with a full web page
+ *  while the server restarts or wakes up. */
+export async function readableError(r: Response, what: string): Promise<Error> {
+  if (r.status === 502 || r.status === 503 || r.status === 504) {
+    return new Error(`${what} failed: the server is restarting or waking up. Please try again in a minute.`);
+  }
+  let text = await r.text();
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j.detail === "string") text = j.detail;
+  } catch { /* not JSON */ }
+  if (/^\s*<!doctype|^\s*<html/i.test(text)) text = "unexpected server response";
+  return new Error(`${what} failed (${r.status}): ${text.slice(0, 300)}`);
+}
+
+/** fetch that retries once after a short wait on a gateway error (502/503/504). */
+export async function fetchRetryGateway(url: string, init?: RequestInit, waitMs = 4000): Promise<Response> {
+  const r = await fetch(url, init);
+  if (r.status !== 502 && r.status !== 503 && r.status !== 504) return r;
+  await new Promise((res) => setTimeout(res, waitMs));
+  return fetch(url, init);
+}
+
 export async function mastSectors(ticId: number): Promise<SectorInfo[]> {
-  const r = await fetch(`${API_BASE}/api/mast/sectors/${ticId}`);
-  if (!r.ok) throw new Error(`Sector lookup failed: ${await r.text()}`);
+  const r = await fetchRetryGateway(`${API_BASE}/api/mast/sectors/${ticId}`);
+  if (!r.ok) throw await readableError(r, "Sector lookup");
   const data = await r.json();
   if (Array.isArray(data.sectors) && data.sectors.length > 0 && typeof data.sectors[0] === "number") {
     return (data.sectors as number[]).map((s) => ({ sector: s, providers: [] }));
@@ -297,8 +321,8 @@ export async function fetchHabitability(
     R_companion_Rjup: number;
     planet_mass_earth: number;
     use_archive_rv: boolean;
-    n_sectors_with_detections: number;
-    n_sectors_observed: number;
+    age_gyr: number;
+    rotation_period_d: number;
     vetting_verdict: Record<string, any>;
   }> = {}
 ) {
@@ -440,6 +464,8 @@ export interface ExominerRequest {
   duration: number;
   /** CROWDSAP from FITS header (dilution correction) */
   crowdsap?: number;
+  /** Access token for an upload with no TIC (from the analyze response) */
+  lc_token?: string;
 }
 
 export async function runExominer(req: ExominerRequest): Promise<ExominerResult> {
@@ -535,6 +561,8 @@ export interface ManualDipRequest {
   t_start: number;
   t_end: number;
   crowdsap?: number;
+  /** Access token for an upload with no TIC (from the analyze response) */
+  lc_token?: string;
 }
 
 export async function analyzeManualDip(req: ManualDipRequest): Promise<ManualDip> {

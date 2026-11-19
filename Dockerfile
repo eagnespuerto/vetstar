@@ -29,14 +29,15 @@ WORKDIR /app
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
-# Copy backend source.
+# Copy backend source and the shared science package.
 COPY backend/ ./backend/
+COPY vetstar_core/ ./vetstar_core/
 
 # Copy the built frontend from stage 1.
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-# Make sure backend is on the Python path so `app.main` resolves.
-ENV PYTHONPATH=/app/backend \
+# backend/ on the path so `app.main` resolves; /app for `vetstar_core`.
+ENV PYTHONPATH=/app/backend:/app \
     PYTHONUNBUFFERED=1 \
     FRONTEND_DIST=/app/frontend/dist
 

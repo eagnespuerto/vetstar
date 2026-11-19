@@ -1,0 +1,61 @@
+name: NEMESIS worker
+
+# Installs the worker's exact stack (NEMESIS pins numpy 1.26 etc.), runs its
+# tests, and makes one real TESScut cutout from the AWS cubes the way a job
+# does. The site's CI does not cover nemesis_worker/.
+
+on:
+  pull_request:
+    paths:
+      - 'nemesis_worker/**'
+      - '.github/workflows/nemesis-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: nemesis_worker/requirements.txt
+      - name: Install the worker's stack
+        run: pip install -r nemesis_worker/requirements.txt pytest httpx
+      - name: Tests
+        working-directory: nemesis_worker
+        run: python -m pytest -q tests
+      - name: AWS cutout (TOI-1235, S20)
+        working-directory: nemesis_worker
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from astropy.io import fits
+          from worker.tesscut_aws import ensure_tesscut
+          p = ensure_tesscut(103633434, 20, "30 minute", 158.310966, 69.270744, 11, "/tmp/cache")
+          assert p and p.is_file(), "no cutout"
+          h = fits.open(p)
+          assert h[1].name == "PIXELS" and h[1].data["FLUX"].shape[1:] == (11, 11), h.info()
+          print("ok", p.name, len(h[1].data), "cadences")
+          PY
+      - name: TIC fallback with MAST "down" (AWS TIC copy + VizieR)
+        working-directory: nemesis_worker
+        env:
+          NEMESIS_CACHE_DIR: /tmp/ticcache
+        run: |
+          python - <<'PY'
+          from astroquery.mast import Catalogs
+          def down(*a, **k): raise ConnectionError("MAST down (simulated)")
+          Catalogs.query_object = down; Catalogs.query_criteria = down
+          from worker import tic_fallback as tf
+          tf.install()
+          r = Catalogs.query_object("TIC 103633434", radius=5 * 21 / 3600, catalog="TIC").to_pandas()
+          assert "103633434" in set(r["ID"]) and len(r) > 1, r
+          row = Catalogs.query_criteria(catalog="TIC", ID=103633434)[0]
+          assert abs(row["Tmag"] - 9.919) < 0.01, row
+          print("ok", len(r), "rows;", open("/tmp/ticcache/tic_coords.txt").read().count(chr(10)), "stars in tic_coords.txt")
+          PY

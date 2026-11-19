@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.microlensing import (
+from vetstar_core.microlensing import (
     analyze_event,
     flare_flux,
     pspl_flux,
@@ -150,7 +150,7 @@ def test_analyze_rejects_tiny_window():
 def test_compute_observables_matches_paczynski_at_u0_small():
     """For u0 = 0.1, Paczynski's peak magnification is ~10.03; check ours
     matches, and check derived scalars are internally consistent."""
-    from app.microlensing import compute_observables
+    from vetstar_core.microlensing import compute_observables
     obs = compute_observables(
         {"t0": 1220.0, "tE": 5.0, "u0": 0.1, "f_s": 1.0, "f_b": 0.0},
         {"t0": 0.001, "tE": 0.02, "u0": 0.001, "f_s": 0.01, "f_b": 0.01},
@@ -174,7 +174,7 @@ def test_compute_observables_matches_paczynski_at_u0_small():
 def test_compute_observables_handles_wide_impact_parameter():
     """u0 > 1 means the source never enters the Einstein ring — crossing
     duration should be zero, but A_peak is still finite (just small)."""
-    from app.microlensing import compute_observables
+    from vetstar_core.microlensing import compute_observables
     obs = compute_observables(
         {"t0": 1500.0, "tE": 20.0, "u0": 1.5, "f_s": 0.7, "f_b": 0.3},
         {"t0": 0.1, "tE": 0.5, "u0": 0.01, "f_s": 0.05, "f_b": 0.05},
@@ -189,7 +189,7 @@ def test_compute_observables_handles_wide_impact_parameter():
 def test_analyze_response_includes_observables():
     """Full pipeline should emit the observables block."""
     t = np.linspace(1200.0, 1240.0, 400)
-    from app.microlensing import pspl_flux
+    from vetstar_core.microlensing import pspl_flux
     m = pspl_flux(t, 1220.0, 5.0, 0.15, 1.0, 0.0)
     flux, ferr = _make_synthetic(t, m, noise_ppm=200.0, seed=10)
     out = analyze_event(t, flux, ferr, 1200.0, 1240.0, 1220.0)
@@ -206,7 +206,7 @@ def test_analyze_response_includes_observables():
 # ---------------------------------------------------------------------------
 
 def test_exofop_rows_report_required_fields():
-    from app.microlensing import (
+    from vetstar_core.microlensing import (
         compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
     )
     pspl = {"t0": 1220.0, "tE": 5.0, "u0": 0.15, "f_s": 1.0, "f_b": 0.0}
@@ -235,7 +235,7 @@ def test_exofop_rows_include_host_star_radius_from_mass_relation():
     """R_star for the fiducial K-dwarf lens should land near 0.3 R_sun for
     the default 0.3 M_sun bulge-lens prior — verify the M–R interpolation
     stays consistent."""
-    from app.microlensing import (
+    from vetstar_core.microlensing import (
         compute_exofop_planet_rows, compute_observables, compute_planet_predictions,
     )
     pspl = {"t0": 1500.0, "tE": 20.0, "u0": 0.3, "f_s": 0.8, "f_b": 0.2}
@@ -256,7 +256,7 @@ def _make_synthetic_joint(t_tess, t_gaia_jd, true_t0, true_tE, true_u0,
                             gaia_baseline_mag=17.0, noise_ppm_tess=200.0,
                             noise_mmag_gaia=10.0, seed=42):
     """Return TESS (flux, err) and Gaia (mag, err) arrays for a shared PSPL."""
-    from app.microlensing import pspl_flux
+    from vetstar_core.microlensing import pspl_flux
     rng = np.random.default_rng(seed)
     # TESS: normalised flux (source only, no blend)
     model_tess = pspl_flux(t_tess, true_t0, true_tE, true_u0, 1.0, 0.0)
@@ -266,7 +266,7 @@ def _make_synthetic_joint(t_tess, t_gaia_jd, true_t0, true_tE, true_u0,
     # Gaia: mag centred on baseline, brightened by magnification.
     # G(t) = G_baseline - 2.5 log10(A(t))
     t_gaia_btjd = t_gaia_jd - 2_457_000.0
-    from app.microlensing import pspl_magnification
+    from vetstar_core.microlensing import pspl_magnification
     A = pspl_magnification(t_gaia_btjd, true_t0, true_tE, true_u0)
     gaia_mag_true = gaia_baseline_mag - 2.5 * np.log10(A)
     sigma_g = noise_mmag_gaia * 1e-3
@@ -277,7 +277,7 @@ def _make_synthetic_joint(t_tess, t_gaia_jd, true_t0, true_tE, true_u0,
 
 def test_joint_fit_recovers_shared_pspl_params():
     """Synthetic two-band PSPL → joint fit should recover t0/tE/u0."""
-    from app.microlensing import analyze_event_joint
+    from vetstar_core.microlensing import analyze_event_joint
     # TESS: 400 dense points over 40 days centered on peak
     t_tess = np.linspace(1200.0, 1240.0, 400)
     # Gaia: 60 sparse points over 5 years (2016-2021), covering the event
@@ -309,7 +309,7 @@ def test_joint_fit_recovers_shared_pspl_params():
 
 
 def test_joint_fit_rejects_too_few_gaia_points():
-    from app.microlensing import analyze_event_joint
+    from vetstar_core.microlensing import analyze_event_joint
     t_tess = np.linspace(1200.0, 1240.0, 200)
     tess_flux = np.ones_like(t_tess)
     tess_ferr = np.full_like(t_tess, 1e-3)
@@ -326,7 +326,7 @@ def test_joint_fit_rejects_too_few_gaia_points():
 
 def test_joint_fit_response_keys_stable():
     """Downstream consumers depend on a stable response shape."""
-    from app.microlensing import analyze_event_joint
+    from vetstar_core.microlensing import analyze_event_joint
     t_tess = np.linspace(1200.0, 1240.0, 400)
     t_gaia_jd = np.linspace(2_457_400.0, 2_459_400.0, 60)
     tess_flux, tess_ferr, gaia_mag, gaia_merr = _make_synthetic_joint(
@@ -347,7 +347,7 @@ def test_joint_fit_response_keys_stable():
 
 def test_pspl_matches_mulensmodel_reference():
     mm = pytest.importorskip("MulensModel")
-    from app.microlensing import pspl_magnification
+    from vetstar_core.microlensing import pspl_magnification
 
     t = np.linspace(1200.0, 1240.0, 400)
     for t0, tE, u0 in [(1220.0, 5.0, 0.15), (1500.0, 20.0, 0.5), (2000.0, 1.5, 0.02)]:

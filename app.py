@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TESS Vetting Studio — single-file launcher and PyInstaller entry point.
+Vetstar desktop launcher and PyInstaller entry point.
 
 Run modes:
     python app.py                  # dev: auto-build frontend if needed, then serve
@@ -8,7 +8,7 @@ Run modes:
     python app.py --skip-build     # don't rebuild frontend
     python app.py --api-only       # API only (no SPA)
     python app.py --no-browser     # don't auto-open the browser
-    ./tess-vetting-studio          # frozen exe: everything bundled, just runs
+    ./vetstar                      # frozen app: everything bundled, just runs
 """
 from __future__ import annotations
 
@@ -94,6 +94,35 @@ def ensure_frontend_built(skip_build: bool):
     return DIST.is_dir()
 
 
+# The public Vetstar site. The desktop app sends NEMESIS jobs through it
+# (the worker's token stays on the site), unless you run your own worker.
+PUBLIC_SITE = "https://vetstar.onrender.com"
+
+
+def user_data_dir() -> pathlib.Path:
+    """Where downloads and caches go: never the (possibly read-only) install folder."""
+    if sys.platform == "win32":
+        base = pathlib.Path(os.environ.get("LOCALAPPDATA", pathlib.Path.home() / "AppData" / "Local"))
+        d = base / "Vetstar"
+    else:
+        d = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")) / "vetstar"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def free_port(host: str, port: int) -> int:
+    """port if it is free, else the next free one (up to +20)."""
+    import socket
+    for p in range(port, port + 21):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, p))
+                return p
+            except OSError:
+                continue
+    return port
+
+
 def open_browser_later(url: str, delay: float = 1.5):
     def _open():
         time.sleep(delay)
@@ -105,7 +134,14 @@ def open_browser_later(url: str, delay: float = 1.5):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TESS Vetting Studio launcher")
+    # Windows consoles and redirected output default to cp1252, which cannot
+    # print the banner's emoji (or many log lines): never crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    ap = argparse.ArgumentParser(description="Vetstar launcher")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--reload", action="store_true")
@@ -116,25 +152,31 @@ def main():
 
     ensure_python_deps()
 
+    if IS_FROZEN:
+        # Run from a per-user folder so MAST/AWS downloads and caches land there.
+        data = user_data_dir()
+        os.chdir(data)
+        os.environ.setdefault("XDG_CACHE_HOME", str(data / "cache"))
+        if not os.environ.get("NEMESIS_WORKER_URL"):
+            os.environ.setdefault("NEMESIS_SITE_URL", PUBLIC_SITE)
+        args.port = free_port(args.host, args.port)
+
     if not args.api_only:
         ok = ensure_frontend_built(args.skip_build)
         if ok:
             os.environ["FRONTEND_DIST"] = str(DIST)
 
-    if not IS_FROZEN:
-        sys.path.insert(0, str(BACKEND))
+    # backend/ makes `app.main` importable; ROOT makes the shared
+    # `vetstar_core` package importable. When frozen, ROOT is the unpacked
+    # bundle (sys._MEIPASS), which holds both as data files.
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(BACKEND))
 
     import uvicorn
-    # Import the FastAPI app object directly. When frozen, the package was
-    # collected by PyInstaller and is importable from the bundled archive.
-    # When running from source, we just inserted backend/ into sys.path above.
-    if IS_FROZEN:
-        # PyInstaller put backend/app on the import path via Analysis(pathex=)
-        sys.path.insert(0, str(ROOT / "backend"))
     from app.main import app as fastapi_app
 
     url = f"http://{args.host}:{args.port}/"
-    print(f"\n🔭 TESS Vetting Studio starting at  {url}")
+    print(f"\n🔭 Vetstar starting at {url}")
     print(f"   Health check:                    {url}api/health")
     print(f"   Interactive API docs:            {url}docs")
     print(f"   Press Ctrl-C to quit.\n")
