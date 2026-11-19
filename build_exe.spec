@@ -1,13 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for TESS Vetting Studio.
+PyInstaller spec for the Vetstar desktop app (portable Windows exe, Linux/Pi OS .deb).
 
 Usage:
     pyinstaller build_exe.spec --clean --noconfirm
 
 Output:
-    dist/tess-vetting-studio          (one binary, no installer needed)
-    dist/tess-vetting-studio.exe      (on Windows)
+    dist/vetstar(.exe)    one portable binary (default)
+    dist/vetstar/         one folder, when VETSTAR_ONEDIR=1 (used for the .deb:
+                          starts faster because nothing is unpacked at launch)
 
 Notes on bundled deps that need extra care:
   - astropy: ships data files (CDS_units, IERS leap-second tables, etc.)
@@ -97,15 +98,35 @@ hiddenimports += [
     "pydantic.deprecated.decorator",
 ]
 
-# Our own modules
-hiddenimports += [
-    "app",
-    "app.main",
-    "app.pipeline",
-    "app.parsers",
-    "app.report",
-    "app.mast_fetch",
-]
+# Our own code ships as data (backend/app, vetstar_core) and is imported at
+# runtime, so PyInstaller never sees what it imports. Scan it and add every
+# third-party module it uses, so nothing is missing from the bundle.
+import ast as _ast
+import sys as _sys
+from pathlib import Path as _Path
+
+_local = {"app", "vetstar_core", "backend"}
+_found = set()
+for _src in list(_Path("backend/app").rglob("*.py")) + list(_Path("vetstar_core").rglob("*.py")):
+    try:
+        _tree = _ast.parse(_src.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    for _n in _ast.walk(_tree):
+        if isinstance(_n, _ast.Import):
+            _found.update(a.name for a in _n.names)
+        elif isinstance(_n, _ast.ImportFrom) and _n.module and _n.level == 0:
+            _found.add(_n.module)
+for _name in sorted(_found):
+    _top = _name.split(".")[0]
+    if _top in _local or _top in _sys.stdlib_module_names:
+        continue
+    hiddenimports.append(_name)
+for _pkg in ("MulensModel", "tess_stars2px"):
+    try:
+        datas += collect_data_files(_pkg)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------- 
@@ -136,24 +157,36 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# --onefile mode: produces a single self-contained binary.
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name="tess-vetting-studio",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,                # UPX often confuses antivirus on Windows
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=True,             # keep a console window so users see logs
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
+import os as _os
+
+NAME = "vetstar"
+ICON = "packaging/vetstar.ico" if _os.path.exists("packaging/vetstar.ico") else None
+
+if _os.environ.get("VETSTAR_ONEDIR") == "1":
+    # One folder (for the .deb): starts faster, nothing unpacked at launch.
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=NAME, debug=False,
+              strip=False, upx=False, console=True, icon=ICON)
+    coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name=NAME)
+else:
+    # One portable binary (Windows): no installer, runs from anywhere.
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name=NAME,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,                # UPX often confuses antivirus on Windows
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=True,             # keep a console window so users see logs
+        disable_windowed_traceback=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=ICON,
+    )

@@ -3,7 +3,7 @@
 [![license](https://img.shields.io/badge/license-CC0-blue)](LICENSE)
 [![release](https://img.shields.io/github/v/release/eagnespuerto/vetstar?include_prereleases&sort=semver)](https://github.com/eagnespuerto/vetstar/releases/latest)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23740438.svg)](https://doi.org/10.5281/zenodo.23740438)
-[![build](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml/badge.svg)](https://github.com/eagnespuerto/vetstar/actions/workflows/build.yml)
+[![build](https://github.com/eagnespuerto/vetstar/actions/workflows/desktop.yml/badge.svg)](https://github.com/eagnespuerto/vetstar/actions/workflows/desktop.yml)
 [![made with](https://img.shields.io/badge/made%20with-Python-3776AB?logo=python&logoColor=white)](https://github.com/eagnespuerto/vetstar)
 [![website](https://img.shields.io/badge/website-live-brightgreen)](https://vetstar.onrender.com/)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eagnespuerto)
@@ -151,9 +151,7 @@ Microlensing** tabs in the header.
 - **Phase-aware progress bar.** Stage-by-stage progress streams over
   Server-Sent Events and is grouped into four phases: Load light curve →
   Vet → SPOC DV + habitability → PDF report. The bar turns green for the PDF
-  phase and stays up under the results until the PDF is ready. The older
-  endpoints (`POST /api/mast/analyze_async`, `POST /api/mast/analyze`,
-  `POST /api/mast/report`, `POST /api/report`) still work for other clients.
+  phase and stays up under the results until the PDF is ready.
 - **PDF report** for archiving: a clean, consistent multi-page layout: every
   page carries the same header band and a footer with page numbers, tables
   share one zebra-striped style, section headings stay attached to their
@@ -171,116 +169,48 @@ Microlensing** tabs in the header.
   representative sector's single-sector report (the sector with the highest
   BLS SDE).
 
-### Microlensing pipeline
+### Microlensing pipeline: OGLE GUI
 
-**Step 1: automatic OGLE-IV search.** The loaded light curve is scanned
-with the event selection of Mróz et al. (2019): at least 3 consecutive
-points ≥ 3σ above the baseline with χ²₃₊ ≥ 32, a flat light curve outside
-the event, a single bump of at least 0.1 mag, then a PSPL fit with the
-source and blend flux solved analytically and the paper's final cuts on
-χ²/dof, u₀, t_E and blending. Three cuts are adapted to TESS, and each row
-in the results shows the OGLE value and why it changed: the event window is
-sized from the fitted model (OGLE uses 720 days, longer than a sector),
-flatness is tested against the PSPL baseline, and the difference-imaging
-cut is shown as not applicable. *Step 2* passes the event's window to the
-classifier below.
+**OGLE-IV event search.** Load a TESS light curve (by TIC and sector, a
+file, or a demo) and click **Run OGLE search**. Vetstar scans the whole
+light curve with the event selection of Mróz et al. (2019): at least 3
+points in a row ≥ 3σ above the baseline with χ²₃₊ ≥ 32, a flat light curve
+outside the event, a single bump of at least 0.1 mag, then a PSPL fit and
+the paper's final cuts on χ²/dof, u₀, t_E and blending. Each cut shows its
+value, the rule, and how it was adapted to TESS: the event window is sized
+from the fitted model (OGLE uses 720 days, longer than a sector), flatness
+is tested against the PSPL baseline, and the difference-imaging cut is not
+applicable.
 
-A second top-level pipeline sitting alongside Transit, for
-detecting/characterising **single-lens microlensing events** in TESS
-photometry. Positioned as a recovery / characterisation tool, best
-demonstrated by feeding it known events from ground surveys or Gaia
-alerts that happen to fall in TESS sectors. It is not for blind discovery.
+**Cleaning first.** Many TESS stars vary slowly (spots, pulsations), which
+hides short bumps from a flat-baseline search. When the smoothed light
+curve dips well below its level on both sides, Vetstar divides out a
+half-day running median, with bumps masked so they survive. A single
+microlensing event rises and falls once, so a quiet star with an event is
+left alone. The OGLE selection itself is unchanged.
 
-Two independent sub-tools, both under the **Microlensing** header tab:
+**Figure.** One matplotlib plot shows the light curve OGLE analysed, the
+strong bumps (▼), the event window, the PSPL fit and the residuals.
 
-The response also includes an **observables** block (peak magnification
-A_max, blended peak, peak brightening in magnitudes, Einstein-crossing
-duration, magnification FWHM, source and blend flux fractions, t₀ in
-BTJD + BJD, μ_rel under a fiducial θ_E) and a **planet_predictions**
-block (fiducial-lens θ_E, physical Einstein radius r_E in AU, v_rel,
-closest-approach distance, planet-detection floor q_min and the
-corresponding planet mass in Earth/Jupiter units under standard bulge
-priors: M_L = 0.3 M☉, D_L = 6 kpc, D_S = 8 kpc). Both are surfaced in
-the classifier UI and included in the PDF report.
+**ExoFOP-TESS files.** Two bulk-upload zips: the OGLE figure (with the
+TESScut cutout when available), and the raw light-curve FITS. See
+[Bulk ZIP for ExoFOP-TESS upload](#bulk-zip-for-exofop-tess-upload).
 
-**Module A: model-comparison classifier.** Drag a window across a positive
-excursion in an uploaded light curve (JSON or CSV, or a built-in PSPL/flare
-synthetic demo). The backend fits three competing models on the windowed,
-baseline-normalised flux:
+**TESS coverage (Module B).** Upload a CSV of known or candidate events
+(`event_id, ra, dec, t0, tE`, as Gaia Alerts, OGLE, MOA and KMTNet publish
+them). For each event, Vetstar finds the TESS sectors, cameras and CCDs
+that cover it and checks whether `t0` falls inside each sector. Each
+observable row has an **Analyze →** button that loads its TESS light curve
+into the OGLE search.
 
-- **PSPL (Paczyński single-lens)**: closed-form point-source point-lens
-  magnification `A(u) = (u²+2) / (u·√(u²+4))` with blending
-  `F = f_s·A(t) + f_b`. 5 free params: `t0, tE, u0, f_s, f_b`.
-- **Flare (Davenport 2014 empirical template)**: the key astrophysical
-  impostor. Polynomial rise, double-exponential decay. 3 free params:
-  `t_peak, amplitude, fwhm`.
-- **Null**: flat baseline (1 free param, closed-form weighted mean).
+One limit: the Galactic bulge, where microlensing peaks, sits at ecliptic
+latitude ≈ −5.5°, in TESS's thinnest coverage. Most classic bulge events
+come back **not observable**. Events at mid or high ecliptic latitudes are
+the realistic targets.
 
-Model selection uses **BIC** (Bayesian Information Criterion). The verdict
-follows the spec's decision rules: PSPL wins strongly if
-`ΔBIC(null − PSPL) > 10` and `|ΔBIC(flare − PSPL)| > 6`; anything closer
-returns `ambiguous`. Frontend renders a verdict badge with confidence, a
-BIC bar chart (with per-model overlay toggles on the light curve), the
-fitted PSPL parameters with linearised 1σ errors, a **symmetry score**
-(correlation of the PSPL residual's left wing with the mirrored right
-wing; PSPL residuals should look uncorrelated, flare residuals
-asymmetric), and a **residuals sub-plot** with per-model switcher.
-Achromaticity is flagged as *untestable from single-band TESS data* in
-the notes; the response leaves a hook for an optional second-band array
-to be added later.
-
-**Module B: TESS sector-overlap targeting.** Upload a CSV of known /
-candidate events with columns `event_id, ra, dec, t0, tE` (Gaia alerts,
-OGLE / MOA / KMTNet event lists all publish these). For each event the
-backend queries `tess-point` for `(sector, camera, ccd)` triples covering
-the coordinates, then checks whether `t0` (and optionally `t0 ± margin·tE`
-for wings) falls inside each returned sector's observation window. A
-hardcoded sector-date table lives in
-`vetstar_core/tess_sector_dates.py`; rows for sectors 1–26 use
-calendar-anchored values, later sectors use a nominal ~27.4-day cadence
-approximation flagged as `nominal: true` in the payload (drop in the
-official mission calendar for research-grade decisions).
-
-The classifier's results panel exposes three share/export controls:
-a **Share plot** button that rasterises the SVG light-curve + fit
-overlay to a PNG in-browser and uploads it to ImgBB (reusing the transit
-pipeline's `ShareToImgbbButton`), returning URL / BBCode / Markdown copy
-chips; a **Download PDF report** button that ships the fit result back
-to `/api/microlensing/report` and downloads a reportlab-rendered vetting
-PDF with the verdict banner, target block, observables table, predicted
-planet parameters table, PSPL best-fit table, model-comparison BIC
-table, and the embedded plot; and a **Download ExoFOP package** button
-that assembles a store-only ZIP with a headline `summary.csv` (one row
-per fit: verdict, confidence, PSPL params + errors, all three BICs,
-ΔBIC, symmetry score), `lightcurve_windowed.csv` (the data fed to the
-fit plus each model's curve on the same grid), a human-readable
-`notes.md` suitable for pasting into ExoFOP follow-up notes, a
-`fit_full.json` snapshot of the raw response for reproducibility, and
-the plot PNG. Packages are named from the handoff metadata (event id,
-TIC, sector) when available.
-
-The results table is sortable, filterable ("observable only"), and each
-observable row has an **Analyze →** button that hands the event off to
-Module A. In the classifier the prefill banner offers a **Fetch TESS
-light curve** button that resolves the event's RA/Dec to the nearest TIC
-via MAST, walks available sectors newest-first (preferring SPOC / TESS-SPOC
-/ QLP over DVT-only sectors), and loads the raw arrays directly into the
-classifier, with no manual FITS upload. Selection window auto-sets
-around `t0 ± 2·tE` on arrival; a MAST portal link is offered as fallback.
-
-The UI warns about one limit. The Galactic bulge, where microlensing
-rates peak, sits at ecliptic latitude ≈ −5.5°, right in TESS's *thinnest*
-coverage zone (cameras start ~6° off the ecliptic). So most classic bulge
-events come back **not observable**, as expected. Realistic yield is events
-at mid/high ecliptic latitudes or bulge-adjacent fields.
-
-Endpoints: `POST /api/microlensing/fit` (JSON body) and
-`POST /api/microlensing/coverage` (multipart CSV upload,
-`?margin_te=<float>` query knob for the wing margin).
-Tests: `backend/tests/test_microlensing.py` and
-`test_microlensing_coverage.py`: 22 tests exercising synthetic PSPL /
-flare / null recovery, symmetry, CSV parsing, sector lookup, and the
-bulge-zone flag.
+**Temporarily paused:** the TESScut FFI + Gaia DR3 overlay, while the Gaia
+ESA Archive is down for Gaia DR4 (25 November to 2 December 2026, per
+[ESA](https://www.cosmos.esa.int/web/gaia/news)). It returns after DR4.
 
 ### Habitability Chance Index (HCI)
 
@@ -382,7 +312,7 @@ and the ExoMiner scalar feature set (`a_au`, `insolation_searth`, `rv_k_ms`,
 
 **Stellar-parameter backfill chain.** Faint TIC targets often have empty
 ExoFOP and TIC v8 entries (only Tmag), which would otherwise leave most of
-the POE panel as em-dashes. `/api/observables` walks four backfill layers
+the POE panel as em-dashes. Vetstar walks four backfill layers
 so the panel stays useful:
 
 1. **ExoFOP-TESS** stellar entry (skipping the leading provenance header so
@@ -441,12 +371,11 @@ Model-independent quantities from the light curve itself, following Csizmadia
 
 The forward RV semi-amplitude K is computed two ways and cross-checked: the exact POE form and the Clubb (2008) textbook closed form (K = 203.255 m/s (1 day/P)^{1/3} (Mp sin i/Mjup)(Msun/M*)^{2/3} / sqrt(1-e^2)); they agree to <0.2% (the gap is the Mp<<M* approximation). The photometric semi-major axis is preferred over the Kepler-from-catalogue-mass
 estimate when available, sharpening the HCI habitable-zone sub-score. Absolute mass
-from RV (via `POST /api/rv`, which also accepts an RV time series and reduces it to
-K by the min/max method) feeds the predicted observables and HCI. RV lookup is archive-first: it queries the NASA Exoplanet Archive `pscomppars` table for `pl_rvamp` and falls back to an uploaded RV series when the catalog has no K. The deploy must allow outbound HTTPS to `exoplanetarchive.ipac.caltech.edu`.
+from RV (from the archive, or an uploaded RV series reduced to K by the min/max method) feeds the predicted observables and HCI. RV lookup is archive-first: it queries the NASA Exoplanet Archive `pscomppars` table for `pl_rvamp` and falls back to an uploaded RV series when the catalog has no K.
 
 When an absolute companion mass is available (RV semi-amplitude from the archive, an uploaded RV series, or an explicit override), the HCI **planet-size sub-score** is refined by bulk density (mass/radius): a rocky-consistent density (>~3.3 g/cm^3) confirms a solid surface, while a low density (<~2.2 g/cm^3) flags a volatile/H-He envelope and downgrades the score regardless of radius. Mass is resolved automatically from the archive on each HCI run (fails safe to radius-only) and can be set explicitly via `planet_mass_earth`.
 
-Planet mass from radius is computed with two relations for comparison, Chen & Kipping (2017, default) and a simple piecewise power-law, and both estimates plus their spread are reported (the mass-radius relation is the dominant error in the radius->mass->K chain). Select via `mr_relation` ("chen_kipping" | "powerlaw") on `/api/observables`.
+Planet mass from radius is computed with two relations for comparison, Chen & Kipping (2017, default) and a simple piecewise power-law, and both estimates plus their spread are reported (the mass-radius relation is the dominant error in the radius->mass->K chain).
 
 The mass-radius spread is propagated into the HCI itself: when only an estimated mass is available, both relations are run, the density check is evaluated for each, and the resulting size-score spread is carried into a reported **HCI range** (e.g. 78.5 with a 69.5-78.5 band). A measured mass (RV) collapses the range to a single value.
 
@@ -462,15 +391,14 @@ even-transit, and global / local centroid-motion views, plus scalar
 diagnostics (period, duration, depth in ppm, transit count, odd/even σ,
 secondary-depth σ, centroid-shift σ, scatter MAD, CROWDSAP, SG-detrend
 window) with σ badges. The panel auto-runs once vetting finishes and can be
-re-run manually. Backed by `POST /api/exominer`, which reads the most-recently
-parsed light-curve arrays from a process-level cache keyed by (TIC, sector).
+re-run manually.
 
 ### Manual dip selector
 
 When the automatic detector skips a dip you can see by eye, drag across the
 interactive light-curve plot to mark a candidate event. The backend
 characterises its depth, duration, U/V shape, and (when centroid moments are
-cached) an on-target test, via `POST /api/manual_dip`.
+cached) an on-target test.
 
 ### Plot sharing (ImgBB)
 
@@ -647,7 +575,23 @@ to the BLS-derived geometry.
 
 ## Example output
 
-A few representative outputs (illustrative, generated from a TESS-like
+**NEMESIS result for TOI-1235 (TIC 103633434, Sector 20).** The verdict from
+LEO-Vetter, the key numbers, and each plot with a plain note on how to read
+it. These match the NEMESIS II paper: period 3.448 d, depth 0.77 ppt,
+1.9 R⊕.
+
+![Vetstar NEMESIS result for TIC 103633434 Sector 20: planet candidate verdict, period, depth, duration and size, and the light curve with notes](docs/images/v2_nemesis_verdict.png)
+
+![NEMESIS plots for TIC 103633434: the detrended light curve and the TLS period search, each with how-to-read notes](docs/images/v2_nemesis_plots.png)
+
+**OGLE GUI result for TIC 279614617, Sector 9.** The star varies slowly, so
+the light curve was cleaned first. OGLE finds three sharp brightenings and
+rejects them as not microlensing (more than one bump, poor PSPL fit). They
+look like flares. Below the cuts are the two ExoFOP-TESS zips.
+
+![Vetstar OGLE GUI result for TIC 279614617 Sector 9: verdict, matplotlib figure with bumps, event window, PSPL fit and residuals, the OGLE cuts table and the ExoFOP export](docs/images/v2_ogle_gui.png)
+
+Outputs from the Quick check pipeline (illustrative, from a TESS-like
 target):
 
 **FFI cutout of the target field.** The target sits at the centre (red +),
@@ -897,373 +841,41 @@ If Vetstar is useful to you, you can support its development with the
 
 ---
 
-## VetStar Pi: Raspberry Pi OS port
+## Download and run
 
-A near-complete port of the Vetstar TESS vetting studio to Raspberry Pi OS.
-It runs the same science package as the cloud studio,
-[`vetstar_core/`](vetstar_core/), from a Tkinter GUI + `vetstar-pi` CLI.
-The Pi front end lives in [`pios/`](pios/) and is excluded from the
-Render Docker image via `.dockerignore`. Pi users install a release
-bundle (`vetstar-pi.tar.gz`) that holds both the front end and
-`vetstar_core`, so every fix to the site reaches the Pi with the next
-release.
+Use it online at [vetstar.onrender.com](https://vetstar.onrender.com/), or
+download the desktop app from the
+[latest release](https://github.com/eagnespuerto/vetstar/releases/latest).
+The desktop app runs the whole site on your computer and opens it in your
+browser.
 
-Two features are intentionally missing versus the cloud studio: the
-multi-sector representative-picker (per-sector state doesn't fit the Pi
-budget), and the joint TESS + Gaia PSPL fit (research-tier online-only
-workflow). Both exist in `vetstar_core`; the Pi front end just doesn't
-expose them. Everything else (MAST fetch, DVT, HCI, POE, TLCM, ExoMiner,
-FFI cutouts, Gaia/SIMBAD/NEA cross-match, high-variability detrend,
-progress reporting, microlensing coverage, Gaia Alerts fetcher, and full
-PDFs) is here and drives the same code paths as the cloud service.
+> **Internet access is required for NEMESIS.** The desktop app sends NEMESIS
+> jobs to the public Vetstar site. Quick check, the OGLE search and the
+> ExoFOP files run on your computer, but TESS data also downloads from STScI,
+> so plan to be online.
 
-### Install on a Pi
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | bash
-```
-
-`fetch.sh` downloads `vetstar-pi.tar.gz` from the latest GitHub release
-and runs its installer. To pin or test a version:
-
-```bash
-# a specific release
-curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | VETSTAR_VERSION=v1.1.0 bash
-# unreleased code from a branch, tag or commit (builds the bundle from source)
-curl -fsSL https://raw.githubusercontent.com/eagnespuerto/vetstar/HEAD/pios/fetch.sh | VETSTAR_REF=main bash
-```
-
-`VETSTAR_DIR` sets where the bundle is unpacked and `NO_INSTALL=1` stops
-after the download. If a release has no bundle yet, `fetch.sh` builds one
-from the default branch instead.
-
-The installer:
-
-- installs `python3-tk` and the BLAS/JPEG libs numpy/matplotlib link against
-- creates a venv under `~/.local/share/vetstar-pi/`
-- pulls **prebuilt ARM wheels from piwheels** (numpy, scipy, astropy,
-  matplotlib, reportlab, astroquery, tess-point), with no compilation on the Pi
-- drops a `vetstar-pi` launcher into `~/.local/bin/` and a desktop entry
-  under **Menu → Science → VetStar Pi** (menu refreshed via `lxpanelctl
-  restart` so it appears without a logout)
-- copies `vetstar_pi` and `vetstar_core` into the venv, first removing the
-  copies an install from before v1.1 left behind
-
-Tested on Raspberry Pi OS Bookworm (Python 3.11) and Bullseye (Python 3.9),
-Pi Zero 2 W / 3B / 4 / 5.
-
-### Use
-
-GUI: from **Menu → Science → VetStar Pi** or `vetstar-pi`.
-
-CLI, with every capability, headless:
-
-```bash
-vetstar-pi transit      TIC12345_S12.fits                                # local FITS → LC + PDF + JSON
-vetstar-pi transit      TIC12345_S12.fits --high-variability             # rotator detrend
-vetstar-pi transit      TIC12345_S12.fits --known-period-days 2.47       # constrained BLS
-vetstar-pi mast         12345 12   --out /tmp/lc.fits                    # SPOC LC by (TIC, sector)
-vetstar-pi sectors      12345                                            # list available sectors
-vetstar-pi microlens    events.csv --t-start 100 --t-end 106 --t0-guess 103
-vetstar-pi coverage     catalogue.csv --margin-te 0.5                    # tess-point sector overlap
-vetstar-pi habitability 12345 --period 3.7                               # HCI + POE + TLCM
-vetstar-pi exominer     TIC12345_S12.fits                                # feature views JSON
-vetstar-pi ffi          --ra 210.5 --dec -55.2 --sector 12               # TESScut cutout PNG
-vetstar-pi alerts       --ra 268.7 --dec -29.1 --radius 300              # Gaia Alerts cone search
-```
-
-Every remote call (MAST, TESScut, ExoFOP, Gaia, SIMBAD, NEA) fails soft: if
-the Pi is offline, the local transit pipeline still runs and the extras
-that need the network are skipped from the PDF with a log warning.
-
-### What's included, what's not
-
-| Feature                                          | Cloud studio | VetStar Pi |
-|--------------------------------------------------|:---:|:---:|
-| Transit pipeline (BLS, LS, events, verdict)      | ✅ | ✅ |
-| Optional sinusoidal pre-BLS detrend              | ✅ | ✅ |
-| Adaptive event detection + gap handling          | ✅ | ✅ |
-| Odd/even, secondary, centroid, shape, physics    | ✅ | ✅ |
-| Constrained BLS (known-period ± 2%)              | ✅ | ✅ |
-| Gaia DR3 / SIMBAD / NEA cross-match              | ✅ | ✅ |
-| Microlensing (PSPL / flare / null, BIC verdict)  | ✅ | ✅ |
-| Microlensing observables + planet predictions    | ✅ | ✅ |
-| Microlensing coverage (tess-point)               | ✅ | ✅ |
-| Gaia Alerts fetcher + cone search                | ✅ | ✅ |
-| MAST SPOC LC fetch by (TIC, sector)              | ✅ | ✅ |
-| SPOC DVT phase-fold + fitted geometry            | ✅ | ✅ |
-| TESScut FFI cutouts (transit + microlensing)     | ✅ | ✅ |
-| HCI habitability engine                          | ✅ | ✅ |
-| Predicted Observables (POE) + ExoFOP TOI params  | ✅ | ✅ |
-| Transit geometry (TLCM)                          | ✅ | ✅ |
-| ExoMiner feature/view extraction                 | ✅ | ✅ |
-| Progress reporting                               | ✅ | ✅ |
-| Full transit + microlensing PDF reports          | ✅ | ✅ |
-| Tkinter GUI                                      | – | ✅ |
-| Async SSE progress stream                        | ✅ | – (in-process reporter → Tk progress bar) |
-| React web frontend                               | ✅ | – |
-| Multi-sector representative-sector picking       | ✅ | – |
-| Joint TESS + Gaia microlensing fit               | ✅ | – |
-| ExoFOP-TESS bulk-upload ZIP builder              | ✅ | – |
-| ImgBB plot sharing                               | ✅ | – |
-
-Base deps (5): numpy, scipy, astropy, matplotlib, reportlab. Remote
-integrations pull astroquery + tess-point; all seven ship as piwheels
-ARM wheels.
-
-### Memory footprint
-
-Measured on a Pi 4 (1 GB) running Raspberry Pi OS Bookworm 64-bit:
-
-| Stage                                              | RSS (approx.) |
-|----------------------------------------------------|---------------|
-| Tkinter GUI idle, no file loaded                   | 75 MB         |
-| After loading a 20 000-cadence FITS                | 140 MB        |
-| Peak during single-sector BLS + cross-match run    | 320 MB        |
-| Peak during full PDF (HCI + ExoMiner + FFI)        | 420 MB        |
-| Idle after run                                     | 190 MB        |
-
-On a 512 MB Pi (Zero W / 3A), turn off ExoMiner and FFI in the PDF-extras
-panel to keep peak under 300 MB.
-
-### NEMESIS worker
-
-NEMESIS needs Python 3.12 with its own pinned stack (numpy 1.26, TLS,
-wotan, lightkurve, LEO-Vetter) and about 650-850 MB at peak, more than the
-site's free instance. So it runs as a separate service in
-[`nemesis_worker/`](nemesis_worker/README.md), and the site forwards
-`/api/nemesis/*` to it. The hosted worker is a Hugging Face Docker Space
-(files in `nemesis_worker/hf_space/`); any Docker host with 1 GB or more works.
-
-| Site variable | Meaning |
-|---|---|
-| `NEMESIS_WORKER_URL` | worker address, e.g. `https://<user>-vetstar-nemesis.hf.space` |
-| `NEMESIS_WORKER_TOKEN` | same value as the worker's `WORKER_TOKEN` secret |
-
-Without `NEMESIS_WORKER_URL` the site still works: the guided mode tells
-users to use Quick check. `nemesis_worker/tools/memprobe.py` measures
-NEMESIS's memory per stage if you need to size a host.
-
-### Cloud service (Render)
-
-The cloud studio (React + FastAPI + Docker) imports the same
-`vetstar_core` package; the image copies it and sets
-`PYTHONPATH=/app/backend:/app`. `pios/` is in `.dockerignore` so it never
-enters the build context, and `.github/workflows/ci-deploy.yml` uses
-`paths-ignore: pios/**` so pushes that only touch the Pi front end don't
-spin the Docker CI or the deploy jobs. Changes under `vetstar_core/` run
-both the site CI and the Pi bundle check (`.github/workflows/pi-bundle.yml`).
-
-The Pi bundle is built by `pios/build_bundle.py`. The `pi-bundle`
-workflow import-checks it on Python 3.9 and attaches it to each published
-GitHub release. It never creates a release itself.
-
-To run the full cloud studio locally (needs Python ≥ 3.10 + Node 22 or 24 LTS; 24 recommended):
-
-```bash
-python app.py                       # http://127.0.0.1:8000
-python app.py --port 9000           # custom port
-python app.py --host 0.0.0.0        # listen on all interfaces
-python app.py --reload              # auto-reload on backend changes
-python app.py --skip-build          # don't rebuild the frontend
-python app.py --api-only            # API only, no SPA
-```
-
-### Pi port layout
-
-See [`pios/README.md`](pios/README.md) for the full file-by-file listing.
-Summary:
-
-```
-pios/
-├── README.md · install.sh · fetch.sh · requirements-pi.txt · .gitattributes
-├── build_bundle.py                            ← builds vetstar-pi.tar.gz
-├── vetstar_pi/                                ← Pi front end only (v0.3.0)
-│   ├── cli.py · gui.py · plots.py
-│   └── __init__.py · __main__.py
-├── examples/microlens_example.csv
-└── systemd/vetstar-pi.desktop                 ← Science-menu entry
-```
-
-The science modules come from [`vetstar_core/`](vetstar_core/) at the repo
-root; the release bundle puts it next to `vetstar_pi/`.
-
-### Cloud-studio API endpoints
-
-Kept here for reference. The cloud service and its build/deploy paths
-are unchanged. None of the endpoints below exist in the Pi port; use the
-CLI or GUI instead.
-
-```
-POST /api/analyze              multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → JSON
-POST /api/report               multipart file + ?detect_threshold=&detect_min_snr=&high_variability=&rotation_period_days=&secondary_sigma=  → PDF (incl. HCI + ExoFOP + ExoMiner)
-GET  /api/mast/sectors/{tic}                                                        → sector list
-POST /api/mast/analyze         {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma, plot_detrend?, plot_bin_minutes?}   → JSON
-POST /api/mast/analyze_async   {tic_id, sector, ...same as /api/mast/analyze}                              → {"job_id": "..."}
-GET  /api/jobs/{job_id}/stream                                                                            → Server-Sent Events; data: {"type":"progress","stage":..., "percent":..., "message":...} per stage, final {"type":"done","result":{...}} or {"type":"error","message":"..."}
-POST /api/vet_async            {tic_id, sector, ...same as /api/mast/analyze}                              → {"job_id": "..."}; vet + PDF in one job
-POST /api/vet_async/upload     multipart file + same query params as /api/analyze (+ plot_detrend, plot_bin_minutes) → {"job_id": "..."}
-                               stream for both: progress…, {"type":"result","result":{...}} (render now), progress…, {"type":"done","result":{"report":{"report_id","filename"}|null,"report_error":...}}
-GET  /api/reports/{report_id}                                                                             → the PDF built by a vet job (last 4 kept, 30 min)
-POST /api/mast/report          {tic_id, sector, detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma}   → PDF (incl. HCI + ExoFOP + ExoMiner)
-POST /api/habitability         {tic_id, ...optional overrides}                      → HCI JSON (+ hci_image PNG)
-POST /api/observables          {tic_id?, stellar/orbit/planet params, vetting_verdict?} → POE JSON
-POST /api/rv                   {tic_id? (archive K), or k_ms|rv_values_ms + orbital_period_d} → mass function + absolute mass
-POST /api/mast/multisector     {tic_id, ?sectors (≤3), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → representative-sector VettingResult + mast.{sectors_used, comparison[], representative_sector, n_sectors_observed, n_sectors_with_detections, errors} JSON
-POST /api/mast/multisector/report  {tic_id, ?sectors (≤3), detect_threshold, detect_min_snr, high_variability, rotation_period_days, secondary_sigma} → single-sector PDF for the representative sector, HCI recomputed with multi-sector counts
-POST /api/exominer             {tic_id?, sector?, ...}  (uses cached light curve)   → ExoMiner views + scalars
-POST /api/ffi_cutout           {ra, dec, sector?, tic_id?, size_px?}                → TESScut FFI cutout PNG (cached)
-POST /api/manual_dip           {tic_id?, sector?, t_start, t_end}                   → manual dip characterisation
-POST /api/microlensing/fit                    {time[], flux[], flux_err[], window:{t_start,t_end}, t0_guess} → PSPL + flare + null fits, ΔBIC verdict, symmetry, notes
-POST /api/microlensing/coverage               multipart CSV (event_id,ra,dec,t0,tE) + ?margin_te=<float>  → per-event TESS sector coverage table + bulge-blind-zone flag
-POST /api/microlensing/lightcurve_by_coords   {ra, dec, sector?, radius_arcsec?}  → resolves RA/Dec → nearest TIC via MAST, walks available sectors newest-first, returns {time, flux, flux_err, tic_id, sector, resolved_ra, resolved_dec, separation_arcsec, provider, n_cadences} — powers the Module B → Module A autoload handoff
-POST /api/microlensing/lightcurve_by_tic      {tic_id, sector?}                    → fetch a TESS light curve directly by (TIC, sector), same UX as the transit tab's MAST mode; sector optional (newest LC-provider sector is auto-picked when omitted)
-POST /api/microlensing/report                 {result, metadata?, plot_png_base64?} → renders a PDF vetting report (verdict, observables, predicted planet parameters, model comparison, embedded plot) — no re-fit; ships back the bytes as application/pdf
-POST /api/microlensing/gaia_alert_lightcurve  {alert_id}                             → pulls a Gaia Alerts G-band CSV (e.g. Gaia23bra) and returns {time_jd, mag, mag_err, mag_err_reported, n_points, source_url} with Kruszyńska+2022-approximated errors
-GET  /api/microlensing/gaia_alerts_near       ?ra=&dec=&radius_arcsec=&microlensing_only= → cone-search the Gaia Alerts master index (cached), returns nearby published alerts with class + date + separation
-POST /api/microlensing/fit_joint              {tess_time, tess_flux, tess_flux_err, gaia_time_jd, gaia_mag, gaia_mag_err, window, t0_guess} → joint TESS + Gaia PSPL fit (shared t0/tE/u0, per-band f_s/f_b), returns per-band χ², combined BIC, and observables/planet_predictions from the joint fit — the Harris et al. 2026 workflow
-POST /api/microlensing/ffi_cutout             {ra, dec, sector?, tic_id?, size_px?, gaia_mag_limit?, gaia_max_sources?} → TESScut FFI median-stack cutout + Gaia DR3 catalog overlay inset (sources sized by G-band magnitude, target crosshair, source_id + separation table) — auto-fetches in the Classifier when target coords + sector are known
-GET  /api/health                                                                    → {"status":"ok"}
-GET  /docs                                                                          → Swagger UI
-```
-
-### Project layout
-
-```
-vetstar/
-├── app.py                      ← single-command launcher
-├── backend/                    ← web server only
-│   ├── app/
-│   │   ├── main.py             Creates the FastAPI app, CORS, health, includes the routers, SPA mount
-│   │   ├── cache.py            Light-curve + FFI cutout caches (bounded, keyed by TIC and sector)
-│   │   ├── common.py           Request validation helpers
-│   │   ├── prefetch.py         Vet-job slots, prefetch pool, stored PDF reports
-│   │   └── routers/
-│   │       ├── transit.py      Upload analyze/report, ExoMiner, FFI cutout, manual dip
-│   │       ├── mast.py         MAST sectors/analyze, SSE progress jobs, vet + PDF jobs, reports, FITS download
-│   │       ├── habitability.py HCI, planet-radius resolution, PDF report extras
-│   │       ├── multisector.py  Multi-sector vetting + representative sector
-│   │       ├── observables.py  POE + radial-velocity mass function
-│   │       └── microlensing.py Classifier, joint TESS + Gaia fit, light-curve fetchers, coverage, PDF
-│   └── requirements.txt (+ requirements-dev.txt for tests)
-├── vetstar_core/               ← science shared by the site and the Pi (Python 3.9+)
-│   ├── pipeline/               BLS / LS vetting pipeline, split by job:
-│   │   ├── models.py          Data containers + match tolerances
-│   │   ├── catalogs.py        Gaia DR3 / SIMBAD / NASA Exoplanet Archive / exoplanets.org cross-match, known-object override
-│   │   ├── detection.py       Cleaning, Lomb-Scargle, BLS (blind + known-period), adaptive event detection
-│   │   ├── verdict.py         Centroid, odd/even, secondary eclipse, shape, physics, final verdict
-│   │   ├── plots.py           Pipeline figures as base64 PNGs; rolling-median + time-bin helpers for the plot view
-│   │   ├── vetting.py         run_full_vetting, the single-sector driver
-│   │   └── multisector.py     run_multisector_analysis
-│   ├── detrend.py                       Optional sinusoid + first-harmonic regression detrender (pre-BLS)
-│   ├── dvt_fetch.py                     SPOC DVT fetch + parse (fitted a/R★, b, phase-fold)
-│   ├── exofop.py                        ExoFOP-TESS + TIC catalog querier
-│   ├── exominer.py                      ExoMiner feature/view extraction
-│   ├── ffi_cutout.py                    TESScut FFI cutout fetch + render (astrocut-style stretch)
-│   ├── gaia_catalog.py                  Gaia DR3 stellar-parameter backfill (Vizier cone search)
-│   ├── gaia_photometry.py               Gaia Alerts CSV fetcher + cone search + Kruszyńska+2022 error inflation (powers the joint TESS+Gaia fit)
-│   ├── habitability.py                  STEHM-based HCI scoring engine
-│   ├── hci_image.py                     HCI summary image (metrics + weightings + observables + TLCM)
-│   ├── locks.py                         PLOT_LOCK, the shared matplotlib lock
-│   ├── mast_fetch.py                    Multi-strategy MAST downloader with retry
-│   ├── microlensing.py                  (Module A) PSPL + Davenport-2014 flare + null fits, BIC selection, symmetry score
-│   ├── microlensing_coverage.py         (Module B) CSV parse + tess-point sector lookup + observability logic + bulge-blind-zone flag
-│   ├── microlensing_ffi.py              TESScut FFI cutout + Gaia DR3 catalog overlay (for source-blending diagnosis in 21″ pixels)
-│   ├── microlensing_report.py           PDF vetting report builder (reportlab) — verdict, observables, planet predictions, model comparison, embedded plot
-│   ├── observables.py                   POE forward-modelled observables + ExoFOP TOI parameter mapping
-│   ├── parsers.py                       FITS + ExoFOP JSON readers
-│   ├── pdf_fonts.py                     DejaVu font registration for the reportlab PDFs
-│   ├── progress.py                      ProgressReporter + JobRegistry backing the SSE progress stream
-│   ├── report.py                        Clean single- & multi-sector PDF builder (running header/footer, unified tables, ExoFOP table)
-│   ├── rv_fetch.py                      Archive-first radial-velocity lookup
-│   ├── tess_sector_dates.py             Static TESS sector-window lookup (calendar for S1–26, nominal ~27.4-day cadence beyond)
-│   ├── tic_catalog.py                   TIC v8 catalog helper
-│   ├── timeouts.py                      run_with_timeout and friends on one shared worker pool
-│   └── tlcm_geometry.py                 Transit geometry + absolute masses (TLCM)
-├── frontend/
-│   ├── src/
-│   │   ├── App.tsx             Top-level Transit/Microlensing tab split, upload/MAST form, scope toggle, job state
-│   │   ├── transit/            Transit-tab components split out of App.tsx: ResultsView, PlotsSection, SensitivityPanel, ObservablesPanel, HabitabilityPanel, MultisectorPanel, DvtPanel, RVPanel, GlossaryPanel, VetProgress, TabButtons, ui (KV, Tip, CopyField), loadingMessages
-│   │   ├── MicrolensingPanel.tsx        Microlensing pipeline container (Classifier / Coverage sub-tabs + handoff)
-│   │   ├── MicrolensingClassifier.tsx   Module A UI — state, drag-select and the 3-model overlay plot
-│   │   ├── microlensing/                Module A parts: DataLoader, ResultsPanel, DerivedPanels, GaiaPanels, ExportToolbar, PrefillBanner, plot, lightCurve, format, types
-│   │   ├── MicrolensingCoverage.tsx     Module B UI — CSV upload, sortable/observable-only table, sector pills, Analyze handoff
-│   │   ├── microlensingExport.ts        SVG→PNG rasteriser + ExoFOP-package ZIP builder (summary CSV, LC CSV, JSON, notes.md, plot.png)
-│   │   ├── ExoMinerPanel.tsx   ExoMiner views + scalar diagnostics panel
-│   │   ├── ExofopBulkPanel.tsx Reusable ExoFOP-TESS bulk-upload ZIP builder (single + multi-sector)
-│   │   ├── FfiCutoutPanel.tsx   TESScut FFI cutout panel (auto-loads under results)
-│   │   ├── ManualDipSelector.tsx  Drag-to-mark manual dip tool (Transit tab)
-│   │   ├── ShareButton.tsx     ImgBB plot-sharing buttons
-│   │   ├── imgbb.ts            ImgBB upload client
-│   │   ├── glossary.ts         Term tooltips
-│   │   ├── zip.ts              In-repo store-only ZIP writer (ExoFOP bulk archives)
-│   │   ├── api.ts              API client
-│   │   └── types.ts            Shared TypeScript types
-│   ├── index.html
-│   └── package.json
-├── pios/                       Raspberry Pi front end + release-bundle tooling (see below)
-├── Dockerfile                  Multi-stage build with context validation
-├── render.yaml                 Render Blueprint
-└── .github/workflows/
-    ├── ci-deploy.yml           CI + auto-deploy to Render
-    ├── build.yml               Cross-platform exe builder
-    └── pi-bundle.yml           Pi release bundle: build, Python 3.9 import check, attach to releases
-```
-
-### Deploy your own copy
-
-**Render**: push to GitHub, sign up at <https://render.com>, New →
-Blueprint → connect your repo. Render reads `render.yaml` and provisions
-automatically. Free tier sleeps after 15 min idle.
-
-Auto-deploy on push: set the `RENDER_DEPLOY_HOOK` repo
-secret in GitHub; the CI workflow handles the rest.
-
-### Shared cache on Supabase (optional)
-
-The site keeps cleaned light curves and FFI cutouts in memory so ExoMiner,
-the manual-dip tool and the PDF do not download them again. Memory is lost
-when the free instance sleeps. Set `SUPABASE_DB_URL` and the same entries
-are also kept in a Supabase Postgres table, so they survive a restart.
-Without the variable nothing changes: the cache is memory only.
-
-Set it up once:
-
-```bash
-supabase login
-supabase init
-supabase link --project-ref <your-project-ref>
-supabase db push
-```
-
-`supabase db push` creates the `vetstar_cache` table from
-`supabase/migrations/`. Then copy the **Transaction pooler** connection
-string from the Supabase dashboard (Connect → Connection string) and set it
-as `SUPABASE_DB_URL` in the Render service's environment. It holds the
-database password, so keep it out of the repo.
-
-| Variable | Default | Meaning |
+| System | File | How to start |
 |---|---|---|
-| `SUPABASE_DB_URL` | unset | Postgres connection string. Unset = memory only. |
-| `VETSTAR_CACHE_MAX_MB` | `300` | Size limit of the table; oldest entries are deleted first. |
-| `VETSTAR_PERSIST_UPLOADS` | unset | Set to `1` to also store uploads that have no TIC (for 1 day). |
+| Windows 10/11 (64-bit) | `Vetstar-<version>-windows-portable.exe` | Double-click it. Nothing to install. |
+| Ubuntu 22.04+, Debian 12+ (64-bit PC) | `vetstar_<version>_amd64.deb` | `sudo apt install ./vetstar_<version>_amd64.deb`, then **Vetstar** in the menu or `vetstar` |
+| Raspberry Pi OS 64-bit (Bookworm), Pi 4/5 | `vetstar_<version>_arm64.deb` | Same as above |
 
-What is stored: MAST light curves by (TIC, sector) for 7 days, and FFI
-cutouts for 30 days. Both are public data. An uploaded file with no TIC
-stays in memory by default, and only the browser that uploaded it can reach
-it, through a random `lc_token` returned with the result. If the database
-is slow or down, the site skips it for a minute and carries on.
+Good to know:
 
-### Build a standalone executable
+- The first start takes a little longer while the app unpacks.
+- Windows may warn that the file is from an unknown publisher, because the
+  exe is not code-signed. Click **More info → Run anyway**.
+- Downloads and caches go to `%LOCALAPPDATA%\Vetstar` (Windows) or
+  `~/.local/share/vetstar` (Linux).
+- NEMESIS jobs wait in the same queue as the site.
+- If port 8000 is busy, the app picks the next free one and prints the
+  address in its window.
 
-```bash
-python build_exe.py
-```
+**Older or 32-bit Raspberry Pi OS** (Pi Zero 2 W, Pi 3): use the lighter
+[VetStar Pi](pios/README.md) app instead. It covers the Quick check
+pipeline, but not NEMESIS or the OGLE GUI.
 
-PyInstaller bundles everything into one binary (~180–230 MB). Double-click
-to launch; a browser opens to the app automatically.
-
-### References
+## References
 
 For a full mathematical walkthrough of each stage of the pipeline,
 adaptive detection, BLS / Lomb-Scargle, transit geometry (TLCM),
@@ -1306,6 +918,6 @@ Habitability and geometry:
 - Kite, E. S. & Barnett, M. N. (2020). *Exoplanet secondary atmospheres.*
   PNAS 117, 18264.
 
-### License
+## License
 
 CC0-1.0. See `LICENSE`.

@@ -72,7 +72,7 @@ export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; 
     <section className="card p-5 space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-lg font-bold">Step 1: automatic OGLE event search</h3>
+          <h3 className="text-lg font-bold">Automatic OGLE event search</h3>
           <p className="text-sm text-muted max-w-2xl">
             Scans the whole light curve with the OGLE-IV event selection, the same cuts OGLE used to pick 8,000
             bulge events. No need to mark a window.
