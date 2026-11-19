@@ -434,9 +434,10 @@ def api_microlensing_fit(req: MicrolensingFitRequest):
 
 
 class OgleSearchRequest(BaseModel):
-    time: list[float]
-    flux: list[float]
-    flux_err: list[float]
+    # Gaps arrive as null (JSON has no NaN). They are dropped, not rejected.
+    time: list[Optional[float]]
+    flux: list[Optional[float]]
+    flux_err: list[Optional[float]]
     window_d: float = 6.0
 
 
@@ -460,7 +461,11 @@ def api_microlensing_ogle_search(req: OgleSearchRequest):
     try:
         # Clean first (slow stellar variability), then run OGLE unchanged.
         from vetstar_core.lc_clean import clean_for_event_search
-        tc, fc, ec, cleaning = clean_for_event_search(req.time, req.flux, req.flux_err)
+        nan = float("nan")
+        tc, fc, ec, cleaning = clean_for_event_search(
+            [nan if v is None else v for v in req.time],
+            [nan if v is None else v for v in req.flux],
+            [nan if v is None else v for v in req.flux_err])
         report = ogle_search(tc, fc, ec, window_d=req.window_d)
         report["cleaning"] = cleaning
         # Draw the light curve OGLE analysed, in its units (baseline = 1).

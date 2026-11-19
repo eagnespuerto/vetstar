@@ -78,3 +78,23 @@ def test_long_event_in_short_light_curve_passes():
     rep = ogle_search(t, f, np.full(len(t), 3e-4))
     assert rep["verdict"] == "ogle_event", rep["summary"]
     assert _cut(rep, "chi2_out_max")["value"] < 2.0
+
+
+def test_endpoint_drops_null_gaps_and_explains_too_few_points():
+    c = TestClient(app)
+    t = np.linspace(0, 27, 200).tolist()
+    flux = [1.0] * 20 + [None] * 180   # gaps arrive as JSON null
+    r = c.post("/api/microlensing/ogle_search", json={"time": t, "flux": flux, "flux_err": [0.001] * 200})
+    assert r.status_code == 400
+    assert "30 good points" in r.json()["detail"] and "got 20" in r.json()["detail"]
+
+
+def test_endpoint_accepts_light_curve_with_some_gaps():
+    c = TestClient(app)
+    f, e = _noisy(pspl_flux(T, 13.0, 2.5, 0.15, 1.0, 0.0))
+    flux = f.tolist()
+    for i in range(0, len(flux), 50):
+        flux[i] = None
+    r = c.post("/api/microlensing/ogle_search", json={"time": T.tolist(), "flux": flux, "flux_err": e.tolist()})
+    assert r.status_code == 200 and r.json()["verdict"] == "ogle_event"
+
