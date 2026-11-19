@@ -2,16 +2,11 @@
  * Automatic OGLE-IV event search (Mróz et al. 2019, ApJS 244, 29) on the
  * loaded light curve. No window needed; each cut is shown with its OGLE value.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE } from "../api";
 import type { LC } from "./types";
-import { W, PAD, makeGeom, pspFluxLocal, denseCurve, Axes, DataDots, ModelPolyline, _MODEL_COLORS } from "./plot";
 import ExofopBulkPanel, { IdentityFields, useExofopIdentity, type ExofopImage } from "../ExofopBulkPanel";
-import { svgToPng } from "../microlensingExport";
 import { _buildRawFitsImages } from "./ExportToolbar";
-
-const H_LC = 260;
-const H_RES = 110;
 
 export interface OgleExportMeta {
   tic_id: number | null;
@@ -29,8 +24,8 @@ interface OgleReport {
   cuts: Cut[];
   fit: null | { t0: number; u0: number; tE: number; f_s: number; F_s: number; F_b: number; chi2_dof: number; tE_longer_than_data: boolean };
   bumps: { t_start: number; t_end: number; t_peak: number; chi2_3plus: number }[];
-  /** The light curve OGLE analysed (cleaned if needed), baseline = 1. */
-  analysed?: { time: number[]; flux: number[] };
+  /** Matplotlib PNG (base64): analysed light curve, bumps, event window, PSPL fit, residuals. */
+  figure?: string;
   event_window?: { t_start: number; t_end: number };
   paper: { citation: string; ads: string; builds_on: string[] };
 }
@@ -44,16 +39,8 @@ const LABELS: Record<string, string> = {
 
 const fmt = (v: number | null) => (v == null ? "—" : Math.abs(v) >= 100 ? v.toFixed(0) : v.toPrecision(3));
 
-function b64ToBytes(b64: string): Uint8Array {
-  const s = atob(b64);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
-}
-
 export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; ffiPng: string | null }) {
   const [rep, setRep] = useState<OgleReport | null>(null);
-  const plotRef = useRef<SVGSVGElement | null>(null);
   const identity = useExofopIdentity();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -72,28 +59,9 @@ export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; 
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
 
-  // Data, PSPL model and residuals, all in the units OGLE analysed.
-  const view = useMemo(() => {
-    const a = rep?.analysed;
-    if (!a || !a.time.length) return null;
-    const fit = rep?.fit;
-    const model = fit ? (tt: number) => pspFluxLocal(tt, fit.t0, fit.tE, fit.u0, fit.F_s, fit.F_b) : null;
-    const resid = model ? a.flux.map((f, i) => f - model(a.time[i])) : null;
-    return {
-      a, model, resid,
-      g: makeGeom(a.time, a.flux, H_LC),
-      gr: resid ? makeGeom(a.time, resid, H_RES) : null,
-      curve: model ? denseCurve(a.time[0], a.time[a.time.length - 1], model) : null,
-    };
-  }, [rep]);
-
   const zipImages: ExofopImage[] = rep ? [
-    { key: "ogle-gui-search", label: `OGLE GUI event search: light curve${rep.fit ? ", PSPL fit and residuals" : ""}`,
-      b64: "", ext: "png", code: "L",
-      fetchBytes: async () => {
-        if (!plotRef.current) throw new Error("plot not ready");
-        return b64ToBytes(await svgToPng(plotRef.current));
-      } },
+    ...(rep.figure ? [{ key: "ogle-gui-search", label: `OGLE GUI event search: light curve${rep.fit ? ", PSPL fit and residuals" : ""}`,
+      b64: rep.figure, code: "L" }] : []),
     ...(ffiPng ? [{ key: "ffi-gaia-cutout", label: "TESScut FFI + Gaia DR3 overlay", b64: ffiPng, code: "O" }] : []),
   ] : [];
 
@@ -122,38 +90,17 @@ export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; 
             <p className="text-sm">{rep.summary}</p>
             {rep.cleaning && <p className="text-xs mt-1 opacity-80">Light curve cleaned first: {rep.cleaning.note}</p>}
           </div>
-          {view?.g && (
-            <svg ref={plotRef} viewBox={`0 0 ${W} ${H_LC + (view.gr ? H_RES : 0)}`}
-                 className="w-full border rounded bg-white" role="img"
-                 aria-label="Light curve analysed by the OGLE search, with the PSPL fit and residuals">
-              <rect x={0} y={0} width={W} height={H_LC + (view.gr ? H_RES : 0)} fill="#ffffff" />
-              <Axes geom={view.g} height={H_LC} />
-              {rep.event_window && (
-                <rect x={view.g.xOf(Math.max(rep.event_window.t_start, view.g.tMin))} y={PAD.t}
-                      width={Math.max(0, view.g.xOf(Math.min(rep.event_window.t_end, view.g.tMax)) - view.g.xOf(Math.max(rep.event_window.t_start, view.g.tMin)))}
-                      height={H_LC - PAD.t - PAD.b} fill="#6D67E4" opacity={0.1} />
-              )}
-              <DataDots t={view.a.time} f={view.a.flux} geom={view.g} />
-              {rep.bumps.filter((b) => b.chi2_3plus >= 32).map((b) => (
-                <text key={b.t_peak} x={view.g!.xOf(b.t_peak)} y={PAD.t + 10} textAnchor="middle" fontSize={11} fill="#FF6000">▼</text>
-              ))}
-              {view.curve && <ModelPolyline data={view.curve} geom={view.g} color={_MODEL_COLORS.pspl} />}
-              {view.gr && view.resid && (
-                <g transform={`translate(0 ${H_LC})`}>
-                  <Axes geom={view.gr} height={H_RES} />
-                  <line x1={PAD.l} x2={W - PAD.r} y1={view.gr.yOf(0)} y2={view.gr.yOf(0)} stroke="#94a3b8" strokeDasharray="4 3" />
-                  <DataDots t={view.a.time} f={view.resid} geom={view.gr} />
-                </g>
-              )}
-            </svg>
-          )}
-          {view?.g && (
-            <p className="text-xs text-muted">
-              Dots: the light curve OGLE analysed{rep.cleaning ? " (slow variability removed)" : ""}, baseline 1.
-              <span style={{ color: "#FF6000" }}> ▼</span> brightenings strong enough to count (χ²₃₊ ≥ 32).
-              {rep.event_window ? " Shaded: the event window." : ""}
-              {rep.fit ? " Line: the PSPL fit. Lower panel: data minus fit." : ""}
-            </p>
+          {rep.figure && (
+            <figure className="space-y-1">
+              <img src={`data:image/png;base64,${rep.figure}`} className="w-full rounded border border-line bg-white"
+                   alt="Light curve analysed by the OGLE search, with strong bumps, the event window, the PSPL fit and residuals" />
+              <figcaption className="text-xs text-muted">
+                Black: each cadence of the light curve OGLE analysed{rep.cleaning ? " (slow variability removed)" : ""}.
+                Red points: 30-minute bins. ▼ marks brightenings strong enough to count (χ²₃₊ ≥ 32).
+                {rep.event_window ? " Shaded: the event window." : ""}
+                {rep.fit ? " Orange line: the PSPL fit. Lower panel: data minus fit." : ""}
+              </figcaption>
+            </figure>
           )}
           {rep.fit && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
