@@ -575,7 +575,23 @@ to the BLS-derived geometry.
 
 ## Example output
 
-A few representative outputs (illustrative, generated from a TESS-like
+**NEMESIS result for TOI-1235 (TIC 103633434, Sector 20).** The verdict from
+LEO-Vetter, the key numbers, and each plot with a plain note on how to read
+it. These match the NEMESIS II paper: period 3.448 d, depth 0.77 ppt,
+1.9 R⊕.
+
+![Vetstar NEMESIS result for TIC 103633434 Sector 20: planet candidate verdict, period, depth, duration and size, and the light curve with notes](docs/images/v2_nemesis_verdict.png)
+
+![NEMESIS plots for TIC 103633434: the detrended light curve and the TLS period search, each with how-to-read notes](docs/images/v2_nemesis_plots.png)
+
+**OGLE GUI result for TIC 279614617, Sector 9.** The star varies slowly, so
+the light curve was cleaned first. OGLE finds three sharp brightenings and
+rejects them as not microlensing (more than one bump, poor PSPL fit). They
+look like flares. Below the cuts are the two ExoFOP-TESS zips.
+
+![Vetstar OGLE GUI result for TIC 279614617 Sector 9: verdict, matplotlib figure with bumps, event window, PSPL fit and residuals, the OGLE cuts table and the ExoFOP export](docs/images/v2_ogle_gui.png)
+
+Outputs from the Quick check pipeline (illustrative, from a TESS-like
 target):
 
 **FFI cutout of the target field.** The target sits at the centre (red +),
