@@ -41,7 +41,8 @@ def main():
     # 2. Build the frontend fresh (a committed frontend/dist may be stale).
     npm = shutil.which("npm")  # npm.cmd on Windows: call it by its full path
     if npm:
-        run([npm, "ci", "--no-audit", "--no-fund"], cwd=FRONTEND)
+        # npm install, like the site's Dockerfile (the lock file lags package.json).
+        run([npm, "install", "--no-audit", "--no-fund"], cwd=FRONTEND)
         run([npm, "run", "build"], cwd=FRONTEND)
     elif (DIST / "index.html").is_file():
         print(f"npm not found; using the existing frontend bundle at {DIST}")
