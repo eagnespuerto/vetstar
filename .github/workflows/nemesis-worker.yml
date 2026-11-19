@@ -26,6 +26,9 @@ jobs:
           cache-dependency-path: nemesis_worker/requirements.txt
       - name: Install the worker's stack
         run: pip install -r nemesis_worker/requirements.txt pytest httpx
+      - name: Imaging extras (centroid overlay)
+        run: |
+          python -c "import numpy, photutils, reproject; from photutils.centroids import centroid_quadratic; print('photutils', photutils.__version__, 'reproject', reproject.__version__, 'numpy', numpy.__version__)"
       - name: Tests
         working-directory: nemesis_worker
         run: python -m pytest -q tests
