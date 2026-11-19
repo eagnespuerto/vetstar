@@ -1,0 +1,44 @@
+name: NEMESIS upstream check
+
+# Weekly: compare the NEMESIS commit pinned in nemesis_worker/requirements.txt
+# with the latest commit on daxfeliz/NEMESIS. If they differ, open an issue
+# (one per upstream commit) so the bump can be tested before the worker and
+# the Hugging Face Space move to it. It never changes the pin or the Space.
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'    # Mondays 01:00 UTC (09:00 PHT)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare pin with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pin=$(grep -oE 'NEMESIS\.git@[0-9a-f]{40}' nemesis_worker/requirements.txt | cut -d@ -f2)
+          head=$(git ls-remote https://github.com/daxfeliz/NEMESIS HEAD | cut -f1)
+          echo "pinned:   $pin"
+          echo "upstream: $head"
+          if [ -z "$pin" ] || [ -z "$head" ]; then echo "could not read a commit"; exit 1; fi
+          if [ "$pin" = "$head" ]; then echo "up to date"; exit 0; fi
+          title="NEMESIS update available: ${head:0:7}"
+          if gh issue list --state all --search "\"$title\" in:title" --json number -q '.[0].number' | grep -q .; then
+            echo "issue already exists for ${head:0:7}"; exit 0
+          fi
+          body=$(printf '%s\n' \
+            "daxfeliz/NEMESIS has new commits." \
+            "" \
+            "- Pinned in \`nemesis_worker/requirements.txt\`: \`${pin}\`" \
+            "- Upstream HEAD: \`${head}\`" \
+            "- Changes: https://github.com/daxfeliz/NEMESIS/compare/${pin}...${head}" \
+            "" \
+            "To update: bump the pin in a PR (the NEMESIS worker CI checks LEO-Vetter test order, the AWS cutout and the TIC fallback), merge, then point \`nemesis_worker/hf_space/Dockerfile\` at the new commit and re-upload it to the Space.")
+          gh issue create --title "$title" --body "$body"
