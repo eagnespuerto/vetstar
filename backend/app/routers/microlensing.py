@@ -463,6 +463,12 @@ def api_microlensing_ogle_search(req: OgleSearchRequest):
         tc, fc, ec, cleaning = clean_for_event_search(req.time, req.flux, req.flux_err)
         report = ogle_search(tc, fc, ec, window_d=req.window_d)
         report["cleaning"] = cleaning
+        # The light curve OGLE analysed, in its units (baseline = 1), so the
+        # panel can draw the data, the PSPL fit and the residuals together.
+        from vetstar_core.microlensing_ogle import robust_baseline
+        med, _ = robust_baseline(np.asarray(fc, float))
+        report["analysed"] = {"time": np.asarray(tc, float).tolist(),
+                              "flux": (np.asarray(fc, float) / med).tolist()}
         return report
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
