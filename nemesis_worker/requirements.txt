@@ -9,5 +9,5 @@ uvicorn[standard]==0.34.2
 astrocut>=1.5,<2
 s3fs
 # TIC fallback from the AWS HATS copy when MAST is down (worker/tic_fallback.py).
-pyarrow
-astropy-healpix
+pyarrow>=17,<22   # 22+ needs NumPy 2; NEMESIS pins 1.26
+astropy-healpix>=1.0,<1.2
