@@ -151,7 +151,7 @@ export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; 
           </div>
           <ExofopBulkPanel identity={identity} tagDescription="Vetstar-OGLE-GUI"
             ticId={meta.tic_id} sector={meta.sector ?? undefined} images={zipImages}
-            title="⬇ Build ExoFOP-TESS ZIP: OGLE plot and FFI cutout" />
+            title={ffiPng ? "⬇ Build ExoFOP-TESS ZIP: OGLE plot and FFI cutout" : "⬇ Build ExoFOP-TESS ZIP: OGLE plot"} />
           {meta.sector != null && (
             <ExofopBulkPanel identity={identity} tagDescription="Vetstar-OGLE-GUI" defaultCounter="002"
               ticId={meta.tic_id} sector={meta.sector}
