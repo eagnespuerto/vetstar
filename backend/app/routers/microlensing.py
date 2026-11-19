@@ -463,6 +463,13 @@ def api_microlensing_ogle_search(req: OgleSearchRequest):
         tc, fc, ec, cleaning = clean_for_event_search(req.time, req.flux, req.flux_err)
         report = ogle_search(tc, fc, ec, window_d=req.window_d)
         report["cleaning"] = cleaning
+        # Draw the light curve OGLE analysed, in its units (baseline = 1).
+        from vetstar_core.microlensing_ogle import robust_baseline
+        med, _ = robust_baseline(np.asarray(fc, float))
+        f_an = np.asarray(fc, float) / med
+        # Matplotlib figure in the transit plots' style (data, fit, residuals).
+        from vetstar_core.ogle_figure import make_ogle_figure
+        report["figure"] = make_ogle_figure(tc, f_an, report)
         return report
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

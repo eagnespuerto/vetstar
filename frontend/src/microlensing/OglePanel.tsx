@@ -5,6 +5,14 @@
 import { useEffect, useState } from "react";
 import { API_BASE } from "../api";
 import type { LC } from "./types";
+import ExofopBulkPanel, { IdentityFields, useExofopIdentity, type ExofopImage } from "../ExofopBulkPanel";
+import { _buildRawFitsImages } from "./ExportToolbar";
+
+export interface OgleExportMeta {
+  tic_id: number | null;
+  sector: number | null;
+  provider: string | null;
+}
 
 interface Cut { name: string; value: number | null; passed: boolean | null; rule: string; ogle: number | null; why: string | null }
 interface OgleReport {
@@ -14,7 +22,10 @@ interface OgleReport {
   /** Set when slow stellar variability was removed before the (unchanged) OGLE search. */
   cleaning?: { note: string; window_d: number } | null;
   cuts: Cut[];
-  fit: null | { t0: number; u0: number; tE: number; f_s: number; chi2_dof: number; tE_longer_than_data: boolean };
+  fit: null | { t0: number; u0: number; tE: number; f_s: number; F_s: number; F_b: number; chi2_dof: number; tE_longer_than_data: boolean };
+  bumps: { t_start: number; t_end: number; t_peak: number; chi2_3plus: number }[];
+  /** Matplotlib PNG (base64): analysed light curve, bumps, event window, PSPL fit, residuals. */
+  figure?: string;
   event_window?: { t_start: number; t_end: number };
   paper: { citation: string; ads: string; builds_on: string[] };
 }
@@ -28,8 +39,9 @@ const LABELS: Record<string, string> = {
 
 const fmt = (v: number | null) => (v == null ? "—" : Math.abs(v) >= 100 ? v.toFixed(0) : v.toPrecision(3));
 
-export function OglePanel({ lc, onUseWindow }: { lc: LC; onUseWindow: (a: number, b: number) => void }) {
+export function OglePanel({ lc, meta, ffiPng }: { lc: LC; meta: OgleExportMeta; ffiPng: string | null }) {
   const [rep, setRep] = useState<OgleReport | null>(null);
+  const identity = useExofopIdentity();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -46,6 +58,12 @@ export function OglePanel({ lc, onUseWindow }: { lc: LC; onUseWindow: (a: number
       setRep(await r.json());
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
+
+  const zipImages: ExofopImage[] = rep ? [
+    ...(rep.figure ? [{ key: "ogle-gui-search", label: `OGLE GUI event search: light curve${rep.fit ? ", PSPL fit and residuals" : ""}`,
+      b64: rep.figure, code: "L" }] : []),
+    ...(ffiPng ? [{ key: "ffi-gaia-cutout", label: "TESScut FFI + Gaia DR3 overlay", b64: ffiPng, code: "O" }] : []),
+  ] : [];
 
   const tone = rep?.verdict === "ogle_event" ? "bg-jade-100 text-jade-800 border-jade-300"
     : rep?.verdict === "no_event" ? "bg-ink-100 text-ink-700 border-ink-200" : "bg-apricot-100 text-apricot-800 border-apricot-300";
@@ -72,6 +90,18 @@ export function OglePanel({ lc, onUseWindow }: { lc: LC; onUseWindow: (a: number
             <p className="text-sm">{rep.summary}</p>
             {rep.cleaning && <p className="text-xs mt-1 opacity-80">Light curve cleaned first: {rep.cleaning.note}</p>}
           </div>
+          {rep.figure && (
+            <figure className="space-y-1">
+              <img src={`data:image/png;base64,${rep.figure}`} className="w-full rounded border border-line bg-white"
+                   alt="Light curve analysed by the OGLE search, with strong bumps, the event window, the PSPL fit and residuals" />
+              <figcaption className="text-xs text-muted">
+                Black: each cadence of the light curve OGLE analysed{rep.cleaning ? " (slow variability removed)" : ""}.
+                Red points: 30-minute bins. ▼ marks brightenings strong enough to count (χ²₃₊ ≥ 32).
+                {rep.event_window ? " Shaded: the event window." : ""}
+                {rep.fit ? " Orange line: the PSPL fit. Lower panel: data minus fit." : ""}
+              </figcaption>
+            </figure>
+          )}
           {rep.fit && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
               {[["t₀ (BTJD)", rep.fit.t0], ["tE (days)", rep.fit.tE], ["u₀", rep.fit.u0], ["χ²/dof", rep.fit.chi2_dof]].map(([k, v]) => (
@@ -109,12 +139,25 @@ export function OglePanel({ lc, onUseWindow }: { lc: LC; onUseWindow: (a: number
             <p className="text-xs text-muted">
               Method: <a href={rep.paper.ads} target="_blank" rel="noreferrer">{rep.paper.citation}</a>. Hover a row for how it was adapted to TESS.
             </p>
-            {rep.event_window && (
-              <button className="btn-primary text-sm" onClick={() => onUseWindow(rep.event_window!.t_start, rep.event_window!.t_end)}>
-                Step 2: compare PSPL vs flare on this event
-              </button>
-            )}
+
           </div>
+        </div>
+      )}
+      {rep && meta.tic_id != null && (
+        <div className="space-y-2 border-t border-line pt-3">
+          <h4 className="font-semibold">Save for ExoFOP</h4>
+          <div className="flex flex-wrap gap-2 items-end text-xs">
+            <IdentityFields identity={identity} />
+          </div>
+          <ExofopBulkPanel identity={identity} tagDescription="Vetstar-OGLE-GUI"
+            ticId={meta.tic_id} sector={meta.sector ?? undefined} images={zipImages}
+            title="⬇ Build ExoFOP-TESS ZIP: OGLE plot and FFI cutout" />
+          {meta.sector != null && (
+            <ExofopBulkPanel identity={identity} tagDescription="Vetstar-OGLE-GUI" defaultCounter="002"
+              ticId={meta.tic_id} sector={meta.sector}
+              images={_buildRawFitsImages(meta.tic_id, meta.sector, meta.provider)}
+              title="⬇ Build ExoFOP-TESS ZIP of the raw light-curve FITS" />
+          )}
         </div>
       )}
     </section>

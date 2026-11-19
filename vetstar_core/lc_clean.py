@@ -22,7 +22,7 @@ import numpy as np
 # and leaves no such dip, however long or bright it is; spots and pulsations
 # do. A plain scatter test would call a quiet star with a big event variable.
 VARIABLE_FACTOR = 5.0
-WINDOW_D = 1.0
+WINDOW_D = 0.5  # follows spot/pulsation slopes; bumps are masked so events survive
 BUMP_SIGMA = 3.0
 
 
@@ -51,17 +51,21 @@ def running_median(t: np.ndarray, f: np.ndarray, width_d: float,
     if step_d and t.size > 2 and (t[-1] - t[0]) / step_d < t.size:
         keep = np.unique(np.searchsorted(t, np.arange(t[0], t[-1] + step_d, step_d)).clip(0, t.size - 1))
         t = t[keep]
+    # Enough points for a trustworthy window: half of what a full window
+    # holds at this cadence (at least 5).
+    dt = float(np.median(np.diff(tu))) if tu.size > 1 else width_d
+    need = max(5, int(0.5 * width_d / max(dt, 1e-6)))
     lo = np.searchsorted(tu, t - width_d / 2)
     hi = np.searchsorted(tu, t + width_d / 2, side="right")
     # Median about the local slope, so the trend does not lag on a steep rise
     # or fall (most visible at the ends of the data, where the window is one-sided).
     out = np.full(t.size, np.nan)
     for k, (a, b) in enumerate(zip(lo, hi)):
-        if b - a < 3:
-            if b > a:
-                out[k] = np.median(fu[a:b])
-            continue
         x, y = tu[a:b] - t[k], fu[a:b]
+        # Too little left (mostly masked): leave it to the gap fill below. A
+        # slope from a few clustered points would extrapolate wildly.
+        if b - a < need or x.max() - x.min() < width_d / 3:
+            continue
         if not slope:
             out[k] = np.median(y)
             continue
@@ -76,11 +80,22 @@ def running_median(t: np.ndarray, f: np.ndarray, width_d: float,
         idx = np.flatnonzero(bad)
         for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
             a, b = t[run[0]], t[run[-1]]
-            near = ~bad & (t >= a - width_d) & (t <= b + width_d)
-            sides = (t[near] < a).any() and (t[near] > b).any()
-            if near.sum() >= 6:
+            # Fit the unmasked *data* on each side (the trend values next to a
+            # masked stretch are biased by half-masked windows).
+            near = (tu >= a - width_d) & (tu <= b + width_d)
+            sides = (tu[near] < a).any() and (tu[near] > b).any()
+            if near.sum() >= need:
                 # Both sides: quadratic. Edge of the data: a line from one side.
-                out[run] = np.polyval(np.polyfit(t[near] - a, out[near], 2 if sides else 1), t[run] - a)
+                c = np.polyfit(tu[near] - a, fu[near], 2 if sides else 1)
+                fill = np.polyval(c, t[run] - a)
+                # A quadratic can shoot off across a long gap; keep it within
+                # the data range on either side.
+                # (Interior gaps only: at the data edge the line has to go
+                # beyond the data it was fitted to.)
+                if sides:
+                    lo_, hi_ = np.percentile(fu[near], [1, 99])
+                    fill = np.clip(fill, lo_, hi_)
+                out[run] = fill
             else:
                 out[run] = np.interp(t[run], t[~bad], out[~bad])
     return out if t.size == t_all.size else np.interp(t_all, t, out)
@@ -123,6 +138,14 @@ def clean_for_event_search(time, flux, flux_err, window_d: float = WINDOW_D
         for run in (np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if idx.size else []):
             if run.size >= 3:
                 new |= (t >= t[run[0]] - window_d / 2) & (t <= t[run[-1]] + window_d / 2)
+        # A sliver of data between a mask and the start or end is too short to
+        # fit; mask it too, so the edge is filled from the side with data.
+        if new.any():
+            first, last = np.flatnonzero(new)[[0, -1]]
+            if t[first] - t[0] < window_d:
+                new[:first] = True
+            if t[-1] - t[last] < window_d:
+                new[last:] = True
         if new.sum() == near.sum() or new.mean() > 0.5:
             break
         near = new
